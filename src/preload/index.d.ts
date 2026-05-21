@@ -1,9 +1,19 @@
+export interface SetupProgress {
+  step: string
+  progress: number
+  status: 'working' | 'done' | 'error'
+  message: string
+}
+
 export interface VelodyAPI {
   openFileDialog: () => Promise<string | null>
   startSeparation: (songPath: string) => Promise<string[]>
-  onSeparationProgress: (callback: (progress: number) => void) => void
-  onSeparationComplete: (callback: (stems: string[]) => void) => void
-  onSeparationError: (callback: (error: string) => void) => void
+  readAudioFile: (filePath: string) => Promise<Uint8Array>
+  getSetupStatus: () => Promise<{ complete: boolean }>
+  startSetup: () => Promise<{ success: boolean; error?: string }>
+  getPythonPath: () => Promise<string>
+  getFfmpegPath: () => Promise<string>
+  onSetupProgress: (callback: (progress: SetupProgress) => void) => void
 }
 
 declare global {

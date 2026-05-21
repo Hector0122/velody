@@ -197,6 +197,29 @@ Responsibilities:
 - Handle FFmpeg operations
 - Return processing results
 
+## Status
+
+⚠️ **Simulation mode active.** Los stems son archivos WAV generados con tonos puros (sine waves) para testing:
+
+| Stem | Frecuencia | Sonido |
+|---|---|---|
+| Vocals | 440 Hz | Nota A4 |
+| Drums | 180 Hz | Grave rítmico |
+| Bass | 110 Hz | Subgrave (A2) |
+| Other | 660 Hz | Agudo (E5) |
+
+Para activar Demucs real: cambiar `useRealDemucs = false` a `true` en `src/main/ipc/handlers.ts`.
+
+### Auto-setup
+En el primer arranque, `SetupManager` (src/main/setup/index.ts) detecta las dependencias y si falta algo:
+1. Verifica Python 3
+2. Crea un venv en `userData/velody/venv`
+3. Instala Demucs + PyTorch automáticamente (`pip install`)
+4. Descarga FFmpeg portable si no está en el sistema
+
+El flag `useRealDemucs` en `src/main/ipc/handlers.ts` controla si usa simulación o Demucs real.
+En simulación, el setup se salta y la app arranca directo.
+
 ---
 
 # Example Workflow

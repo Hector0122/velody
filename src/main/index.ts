@@ -1,11 +1,16 @@
-import { app, shell, BrowserWindow } from 'electron'
+import { app, shell, BrowserWindow, ipcMain } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
-import { registerIpcHandlers } from './ipc/handlers'
+import { registerIpcHandlers, setSetupManager } from './ipc/handlers'
+import { SetupManager } from './setup'
+import { registerAudioProtocol } from './protocol'
 import icon from '../../resources/icon.png?asset'
 
+let mainWindow: BrowserWindow | null = null
+let setupManager: SetupManager | null = null
+
 function createWindow(): void {
-  const mainWindow = new BrowserWindow({
+  mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
     minWidth: 900,
@@ -20,7 +25,7 @@ function createWindow(): void {
   })
 
   mainWindow.on('ready-to-show', () => {
-    mainWindow.show()
+    mainWindow?.show()
   })
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
@@ -36,10 +41,47 @@ function createWindow(): void {
 }
 
 app.whenReady().then(() => {
-  electronApp.setAppUserModelId('com.electron')
+  registerAudioProtocol()
+  electronApp.setAppUserModelId('com.velody')
 
   app.on('browser-window-created', (_, window) => {
     optimizer.watchWindowShortcuts(window)
+  })
+
+  setupManager = new SetupManager(true)
+  setSetupManager(setupManager)
+
+  ipcMain.handle('setup:status', () => {
+    return {
+      complete: setupManager?.isSetupComplete() ?? true
+    }
+  })
+
+  ipcMain.handle('setup:start', async () => {
+    if (!setupManager || !mainWindow) return { success: false, error: 'Not ready' }
+    setupManager.setProgressCallback((progress) => {
+      mainWindow?.webContents.send('setup:progress', progress)
+    })
+    try {
+      await setupManager.run()
+      return { success: true }
+    } catch (err) {
+      return { success: false, error: err instanceof Error ? err.message : 'Setup failed' }
+    }
+  })
+
+  ipcMain.handle('audio:readFile', async (_event, filePath: string) => {
+    const { readFile } = await import('fs/promises')
+    const buffer = await readFile(filePath)
+    return buffer
+  })
+
+  ipcMain.handle('setup:pythonPath', () => {
+    return setupManager?.getPythonPath() ?? 'python3'
+  })
+
+  ipcMain.handle('setup:ffmpegPath', () => {
+    return setupManager?.getFfmpegPath() ?? 'ffmpeg'
   })
 
   registerIpcHandlers()

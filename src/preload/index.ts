@@ -3,14 +3,13 @@ import { contextBridge, ipcRenderer } from 'electron'
 const api = {
   openFileDialog: () => ipcRenderer.invoke('dialog:openFile'),
   startSeparation: (songPath: string) => ipcRenderer.invoke('separation:start', songPath),
-  onSeparationProgress: (callback: (progress: number) => void) => {
-    ipcRenderer.on('separation:progress', (_event, progress: number) => callback(progress))
-  },
-  onSeparationComplete: (callback: (stems: string[]) => void) => {
-    ipcRenderer.on('separation:complete', (_event, stems: string[]) => callback(stems))
-  },
-  onSeparationError: (callback: (error: string) => void) => {
-    ipcRenderer.on('separation:error', (_event, error: string) => callback(error))
+  readAudioFile: (filePath: string) => ipcRenderer.invoke('audio:readFile', filePath),
+  getSetupStatus: () => ipcRenderer.invoke('setup:status'),
+  startSetup: () => ipcRenderer.invoke('setup:start'),
+  getPythonPath: () => ipcRenderer.invoke('setup:pythonPath'),
+  getFfmpegPath: () => ipcRenderer.invoke('setup:ffmpegPath'),
+  onSetupProgress: (callback: (progress: unknown) => void) => {
+    ipcRenderer.on('setup:progress', (_event, progress) => callback(progress))
   }
 }
 
