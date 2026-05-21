@@ -32,3 +32,6 @@ output/stems/
 .env
 .env.local
 .env.*.local
+
+
+/canciones

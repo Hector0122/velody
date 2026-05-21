@@ -11,6 +11,7 @@ interface VelodyAPI {
   openFileDialog: () => Promise<string | null>
   startSeparation: (songPath: string) => Promise<string[]>
   readAudioFile: (filePath: string) => Promise<Uint8Array>
+  getAudioUrl: (filePath: string) => Promise<string>
   getSetupStatus: () => Promise<{ complete: boolean }>
   startSetup: () => Promise<{ success: boolean; error?: string }>
   getPythonPath: () => Promise<string>

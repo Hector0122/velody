@@ -3,7 +3,7 @@ import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { registerIpcHandlers, setSetupManager } from './ipc/handlers'
 import { SetupManager } from './setup'
-import { registerAudioProtocol } from './protocol'
+import { startAudioServer, stopAudioServer, audioUrl } from './audio-server'
 import icon from '../../resources/icon.png?asset'
 
 let mainWindow: BrowserWindow | null = null
@@ -40,15 +40,16 @@ function createWindow(): void {
   }
 }
 
-app.whenReady().then(() => {
-  registerAudioProtocol()
+app.whenReady().then(async () => {
   electronApp.setAppUserModelId('com.velody')
+
+  await startAudioServer()
 
   app.on('browser-window-created', (_, window) => {
     optimizer.watchWindowShortcuts(window)
   })
 
-  setupManager = new SetupManager(true)
+  setupManager = new SetupManager(false)
   setSetupManager(setupManager)
 
   ipcMain.handle('setup:status', () => {
@@ -70,10 +71,8 @@ app.whenReady().then(() => {
     }
   })
 
-  ipcMain.handle('audio:readFile', async (_event, filePath: string) => {
-    const { readFile } = await import('fs/promises')
-    const buffer = await readFile(filePath)
-    return buffer
+  ipcMain.handle('audio:url', (_event, filePath: string) => {
+    return audioUrl(filePath)
   })
 
   ipcMain.handle('setup:pythonPath', () => {
@@ -92,8 +91,13 @@ app.whenReady().then(() => {
   })
 })
 
+app.on('before-quit', () => {
+  stopAudioServer()
+})
+
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
+    stopAudioServer()
     app.quit()
   }
 })
