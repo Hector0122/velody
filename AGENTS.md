@@ -116,6 +116,7 @@ velody/
 │
 ├── python-worker/
 │   ├── separate.py            ← Demucs script
+│   ├── detect_key.py          ← Key detection (numpy FFT + Krumhansl-Schmuckler)
 │   ├── requirements.txt
 │   └── utils/
 │
@@ -150,10 +151,12 @@ Initial stems:
 - Drums
 - Bass
 - Other
+- Piano
+- Guitar
 
 Using:
 
-- Demucs
+- Demucs (htdemucs_6s)
 
 ---
 
@@ -178,9 +181,41 @@ Using:
 
 Allow exporting:
 
-- Individual stems
-- ZIP package
-- WAV format
+- Individual stems (WAV/MP3)
+- Mix export (select which stems, with optional metronome click track)
+- WAV/MP3 format toggle
+- Export All (opens directory picker, exports all stems)
+
+---
+
+# Key Detection
+
+## How It Works
+
+`python-worker/detect_key.py` detecta la tonalidad usando numpy FFT + Krumhansl-Schmuckler:
+
+1. Decodifica el stem de bajo con FFmpeg (solo bajo — más confiable que el mix completo)
+2. FFT de 32768 puntos (resolución ~1.35 Hz/bin, separa semitonos incluso a 40 Hz)
+3. Chroma vector (12 notas) en rango 40–2000 Hz
+4. Krumhansl-Schmuckler: correlaciona el chroma contra 24 perfiles (12 mayores + 12 menores)
+5. Si KS tiene poca certeza (gap < 5% entre 1° y 2°) Y el bajo tiene una nota claramente dominante (>10% de margen), overridea con la nota más fuerte del bajo
+
+## Caché
+- Resultado guardado en `.velody` (sidecar JSON) con versión
+- Al cargar una canción, se muestra la key de caché instantáneamente y Python la corrige si es necesario
+
+---
+
+# Jam Zone
+
+Botón en el panel lateral que despliega las escalas para improvisar sobre la canción:
+
+| Tonalidad | Escalas mostradas |
+|---|---|
+| **Mayor** | Major (Ionian), Lydian, Mixolydian, Major Pentatonic, Blues |
+| **Menor** | Natural Minor (Aeolian), Dorian, Phrygian, Harmonic Minor, Melodic Minor, Minor Pentatonic, Blues |
+
+Cada escala muestra las notas como chips de colores. Ideal para improvisar o aprender la escala correcta para cada canción.
 
 ---
 
@@ -199,26 +234,15 @@ Responsibilities:
 
 ## Status
 
-⚠️ **Simulation mode active.** Los stems son archivos WAV generados con tonos puros (sine waves) para testing:
-
-| Stem | Frecuencia | Sonido |
-|---|---|---|
-| Vocals | 440 Hz | Nota A4 |
-| Drums | 180 Hz | Grave rítmico |
-| Bass | 110 Hz | Subgrave (A2) |
-| Other | 660 Hz | Agudo (E5) |
-
-Para activar Demucs real: cambiar `useRealDemucs = false` a `true` en `src/main/ipc/handlers.ts`.
+El flag `useRealDemucs` en `src/main/ipc/handlers.ts` (controlado por `SetupManager.canUseRealDemucs()`) determina si usa Demucs real o simulación.
+En simulación, los stems son tonos senoidales. Si el venv con Demucs está configurado, usa Demucs real automáticamente.
 
 ### Auto-setup
 En el primer arranque, `SetupManager` (src/main/setup/index.ts) detecta las dependencias y si falta algo:
 1. Verifica Python 3
-2. Crea un venv en `userData/velody/venv`
+2. Crea un venv en `~/.local/share/velody/venv`
 3. Instala Demucs + PyTorch automáticamente (`pip install`)
 4. Descarga FFmpeg portable si no está en el sistema
-
-El flag `useRealDemucs` en `src/main/ipc/handlers.ts` controla si usa simulación o Demucs real.
-En simulación, el setup se salta y la app arranca directo.
 
 ---
 
@@ -313,11 +337,24 @@ Update UI
 
 ## Phase 2
 
-- BPM detection
+- Monitoreo interno con baja latencia (AudioContext + AudioWorklet)
+- Loop / count-in para grabación
+- Input selection (elegir dispositivo de entrada)
+- Efectos en vivo (compresor, reverb, EQ) sobre monitor de entrada
+- Quantize / corrección rítmica
+- Undo / reemplazar takes
+- Waveform visualization de recordings
 - Pitch shifting
 - Loop sections
 - Karaoke mode
 - Practice mode
+
+## Phase 2 (próximo)
+
+- **Manual key override**: permitir al usuario cambiar la tonalidad detectada si el algoritmo falla
+- **Key-aware Jam Zone**: que las escalas cambien en tiempo real si el usuario sobreescribe la key
+- **Detección de acordes**: analizar los stems para mostrar los acordes que suenan en cada compás
+- **Tempo tap**: permitir al usuario tocar el tempo manualmente si la detección automática falla
 
 ---
 
@@ -411,6 +448,42 @@ The initial MVP focuses ONLY on:
 Avoid overengineering early.
 
 ---
+
+# Recording Over Stems
+
+## Feature: Record Over
+
+El usuario puede grabar su propio instrumento sobre cualquier stem original.
+
+### Flujo
+1. Click **REC** en un stem (e.g., Guitar)
+2. El stem original se mutea automáticamente
+3. Cuenta regresiva: 3... 2... 1...
+4. `getUserMedia({ audio: true })` captura la entrada del mic/instrumento
+5. `MediaRecorder` graba en `audio/webm` mientras los otros stems suenan
+6. Al hacer **Stop**: modal de confirmación con duración y stem name
+7. **Save** → backend convierte webm → WAV/MP3 con FFmpeg → se guarda en `output/stems/<song>/Recording <Label> <N>.wav`
+8. Aparece como un stem nuevo en la grilla ("Recording Guitar 1", "Recording Guitar 2"...)
+9. **Discard** → se descarta el blob, el stem original vuelve a la normalidad
+
+### Backend IPC
+- `record:save(songDir, data, name, format)` → escribe temp webm, FFmpeg lo convierte a WAV/MP3, devuelve path
+
+### Frontend State
+- `recording`: `'idle' | 'countdown' | 'recording' | 'confirming'`
+- `recordingKey`: qué stem se está grabando
+- `recordedStems: string[]` — paths de stems grabados, se agregan a la grilla
+- `monitorVolume`: slider para volumen de monitoreo (solo UI, el monitoreo real es por el direct monitoring de la interfaz)
+- `recordingFormat`: `'wav' | 'mp3'`
+
+### Pendientes / Fase 2
+- **Monitoreo interno con baja latencia**: migrar playback de `<audio>` elements a `AudioContext` + `AudioWorklet` para mezclar el input del mic con los stems en tiempo real. Esto permite que el usuario se escuche sin depender del monitor directo de la interfaz.
+- **Loop / count-in**: que el usuario pueda elegir un intro de 1 compás antes de grabar, o que la canción loopee para grabar múltiples capas.
+- **Input selection**: elegir qué dispositivo de entrada usar (mic 1, interfaz, etc.) via `deviceId` en `getUserMedia`.
+- **Efectos en vivo**: compresor, reverb, EQ sobre el monitor de entrada.
+- **Quantize / corrección rítmica**: ajustar la grabación al tempo detectado.
+- **Undo / reemplazar take**: poder borrar un take grabado o reemplazar el stem original por el recording.
+- **Visualización de forma de onda** del recording al terminar.
 
 ---
 

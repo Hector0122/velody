@@ -12,33 +12,15 @@ interface SetupProgress {
   message: string
 }
 
-interface AnalysisChord {
-  start: number
-  end: number
-  chord: string
-}
-
-interface BassTabNote {
-  time: number
-  midi: number
-  string: number
-  fret: number
-}
-
-interface AnalysisData {
-  key_root: number
-  key_mode: 'major' | 'minor'
-  key_name: string
-  bass_tab: BassTabNote[]
-  chords: AnalysisChord[]
+interface ExportResult {
+  success: boolean
+  error?: string
 }
 
 interface VelodyAPI {
   openFileDialog: () => Promise<string | null>
   startSeparation: (songPath: string) => Promise<string[]>
   listSongs: () => Promise<SongItem[]>
-  analyzeSong: (songDir: string) => Promise<AnalysisData | { error: string }>
-  loadAnalysis: (songDir: string) => Promise<AnalysisData | null>
   deleteSong: (songName: string) => Promise<{ success: boolean; error?: string }>
   readAudioFile: (filePath: string) => Promise<Uint8Array>
   getAudioUrl: (filePath: string) => Promise<string>
@@ -46,7 +28,16 @@ interface VelodyAPI {
   startSetup: () => Promise<{ success: boolean; error?: string }>
   getPythonPath: () => Promise<string>
   getFfmpegPath: () => Promise<string>
+  saveFileDialog: (defaultName: string, filters?: { name: string; extensions: string[] }[]) => Promise<string | null>
+  openDirectoryDialog: () => Promise<string | null>
+  exportMix: (filePaths: string[], outputPath: string, options?: { bpm?: number }) => Promise<ExportResult>
+  exportSingle: (filePath: string, outputPath: string) => Promise<ExportResult>
+  saveRecording: (songDir: string, data: number[], name: string, format: string) => Promise<ExportResult & { path?: string }>
+  transposeStems: (stemPaths: string[], semitones: number) => Promise<string[]>
   onSetupProgress: (callback: (progress: SetupProgress) => void) => void
+  saveMeta: (songDir: string, meta: Record<string, unknown>) => Promise<{ success: boolean }>
+  loadMeta: (songDir: string) => Promise<Record<string, unknown> | null>
+  detectKey: (songDir: string, stemPaths: string[]) => Promise<string | null>
 }
 
 interface Window {

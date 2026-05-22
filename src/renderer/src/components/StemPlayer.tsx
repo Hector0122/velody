@@ -1,33 +1,27 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import WaveSurfer from 'wavesurfer.js'
 
+const CACHE_VERSION = 9
 interface StemPlayerProps {
   stems: string[]
   songName: string
-  onReset: () => void
-  analysisData?: AnalysisData | null
+  onExportAll: () => Promise<void>
 }
 
-const NOTE_NAMES = ['A', 'A#', 'B', 'C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#']
-
-const STEM_META: Record<string, { color: string; icon: string; label: string }> = {
-  vocals: { color: '#22c55e', icon: '🎤', label: 'Vocals' },
-  drums: { color: '#3b82f6', icon: '🥁', label: 'Drums' },
-  bass: { color: '#f97316', icon: '🎸', label: 'Bass' },
-  other: { color: '#a855f7', icon: '🎹', label: 'Other' },
-  piano: { color: '#f43f5e', icon: '🎹', label: 'Piano' },
-  guitar: { color: '#eab308', icon: '🎸', label: 'Guitar' }
+const STEM_META: Record<string, { color: string; label: string }> = {
+  vocals: { color: '#22c55e', label: 'Vocals' },
+  drums: { color: '#3b82f6', label: 'Drums' },
+  bass: { color: '#f97316', label: 'Bass' },
+  other: { color: '#a855f7', label: 'Other' },
+  piano: { color: '#f43f5e', label: 'Piano' },
+  guitar: { color: '#eab308', label: 'Guitar' }
 }
 
 function stemNameFromPath(path: string): string {
   return path.split(/[/\\]/).pop()?.replace(/\.[^.]+$/, '') || path
 }
 
-const TAB_PX_PER_SEC = 60
-const TAB_STRING_HEIGHT = 48
-const TAB_STRING_NAMES = ['G', 'D', 'A', 'E']
-
-function StemPlayer({ stems, songName, onReset, analysisData }: StemPlayerProps): React.JSX.Element {
+function StemPlayer({ stems, songName, onExportAll }: StemPlayerProps): React.JSX.Element {
   const [progress, setProgress] = useState(0)
   const [duration, setDuration] = useState(0)
   const [masterVolume, setMasterVolume] = useState(1)
@@ -35,6 +29,39 @@ function StemPlayer({ stems, songName, onReset, analysisData }: StemPlayerProps)
   const [active, setActive] = useState<Record<string, boolean>>({})
   const [solo, setSolo] = useState<Record<string, boolean>>({})
   const [urls, setUrls] = useState<Record<string, string>>({})
+
+  // Export
+  const [showExportModal, setShowExportModal] = useState(false)
+  const [exportSelection, setExportSelection] = useState<Record<string, boolean>>({})
+  const [exportFormat, setExportFormat] = useState<'wav' | 'mp3'>('wav')
+  const [exportWithMetronome, setExportWithMetronome] = useState(false)
+  const [exporting, setExporting] = useState(false)
+
+  // Recording
+  const [recording, setRecording] = useState<'idle' | 'countdown' | 'recording' | 'confirming'>('idle')
+  const [recordingKey, setRecordingKey] = useState<string | null>(null)
+  const [recordingCount, setRecordingCount] = useState(3)
+  const [recordingElapsed, setRecordingElapsed] = useState(0)
+  const [recordingBlob, setRecordingBlob] = useState<Blob | null>(null)
+  const [monitorVolume, setMonitorVolume] = useState(0.5)
+  const [recordingFormat, setRecordingFormat] = useState<'wav' | 'mp3'>('wav')
+  const [recordedStems, setRecordedStems] = useState<string[]>([])
+  const [recordingTake, setRecordingTake] = useState(1)
+
+  // Key & Pitch
+  const [detectedKey, setDetectedKey] = useState<string | null>(null)
+  const [pitchShift, setPitchShift] = useState(0)
+  const [shiftedPaths, setShiftedPaths] = useState<Record<string, string>>({})
+  const [transposing, setTransposing] = useState(false)
+  const [showJamZone, setShowJamZone] = useState(false)
+
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null)
+  const mediaStreamRef = useRef<MediaStream | null>(null)
+  const recordingChunksRef = useRef<Blob[]>([])
+  const recordingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const recordingStartTimeRef = useRef(0)
+
+  const allStems = useMemo(() => [...stems, ...recordedStems], [stems, recordedStems])
 
   // Metronome
   const [metronomeOn, setMetronomeOn] = useState(false)
@@ -49,11 +76,10 @@ function StemPlayer({ stems, songName, onReset, analysisData }: StemPlayerProps)
   const audioTimeAtStartRef = useRef(0)
   const mixedAudioRef = useRef<Float32Array | null>(null)
   const mixedSampleRateRef = useRef(44100)
-  const harmonicAudioRef = useRef<Float32Array | null>(null)
   const activeRef = useRef<Record<string, boolean>>({})
   const onAudioTimeRef = useRef<(time: number) => void>(() => {})
-  const stemsRef = useRef(stems)
-  stemsRef.current = stems
+  const stemsRef = useRef<string[]>([])
+  stemsRef.current = allStems
   const lastSeekRef = useRef(0)
 
   // Metronome refs
@@ -73,32 +99,52 @@ function StemPlayer({ stems, songName, onReset, analysisData }: StemPlayerProps)
   masterPlayingRef.current = masterPlaying
   playbackRateRef.current = masterPlaying ? bpm / originalBpmRef.current : 1
 
-  const stemItems = useMemo(() => stems.map((path) => ({
+  const stemItems = useMemo(() => allStems.map((path) => ({
     key: stemNameFromPath(path),
+    isRecording: recordedStems.includes(path),
     meta: STEM_META[stemNameFromPath(path)] || { color: '#6b7280', icon: '🎵', label: stemNameFromPath(path) }
-  })), [stems])
+  })), [allStems, recordedStems])
 
-  // Load audio URLs
+  // Load audio URLs (use shifted paths if transposed)
   useEffect(() => {
     let cancelled = false
     const load = async (): Promise<void> => {
       if (!window.api) return
       const result: Record<string, string> = {}
-      for (const stem of stems) {
-        result[stemNameFromPath(stem)] = await window.api.getAudioUrl(stem)
+      for (const stem of allStems) {
+        const key = stemNameFromPath(stem)
+        const actualPath = shiftedPaths[key] ?? stem
+        result[key] = await window.api.getAudioUrl(actualPath)
       }
       if (!cancelled) setUrls(result)
     }
     load()
     return () => { cancelled = true }
-  }, [stems])
+  }, [allStems, shiftedPaths])
 
-  // Reset on new stems
+  // Reset on new stems (but preserve recorded stems)
   useEffect(() => {
     setActive({})
     setSolo({})
     setMasterPlaying(false)
+    setRecordedStems([])
+    setPitchShift(0)
+    setShiftedPaths({})
   }, [stems])
+
+  // Auto-mute newly recorded stems
+  useEffect(() => {
+    if (recordedStems.length > 0) {
+      setActive((prev) => {
+        const next = { ...prev }
+        for (const rs of recordedStems) {
+          const k = stemNameFromPath(rs)
+          if (!(k in prev)) next[k] = false
+        }
+        return next
+      })
+    }
+  }, [recordedStems])
 
   // Assign audio src
   useEffect(() => {
@@ -109,11 +155,36 @@ function StemPlayer({ stems, songName, onReset, analysisData }: StemPlayerProps)
     }
   }, [urls])
 
-  // Auto-detect BPM — mix all stems for a full-song analysis
+  // Auto-detect BPM — cache results to avoid re-processing
   useEffect(() => {
     const allUrls = Object.values(urls)
-    if (allUrls.length === 0) return
+    if (allUrls.length === 0 || stems.length === 0) return
+    const songDir = stems[0].replace(/[/\\][^/\\]+$/, '')
+
+    // Key detection via Python — always runs, independent of BPM cache
+    const runKeyDetection = (bpm: number) => {
+      if (window.api) {
+        window.api.detectKey(songDir, stems).then((key) => {
+          if (key) {
+            setDetectedKey(key)
+            window.api.saveMeta(songDir, { bpm, key, _version: CACHE_VERSION })
+          }
+        })
+      }
+    }
+
     ;(async (): Promise<void> => {
+      // Check BPM cache
+      if (window.api) {
+        const cached = await window.api.loadMeta(songDir) as { bpm?: number; key?: string; _version?: number } | null
+        if (cached && cached.bpm && cached._version === CACHE_VERSION) {
+          originalBpmRef.current = cached.bpm
+          setBpm(cached.bpm)
+          if (cached.key) setDetectedKey(cached.key)
+          runKeyDetection(cached.bpm)
+          return
+        }
+      }
       try {
         // 1. Fetch and decode all stems (tracked by stem key)
         const bufferMap: Record<string, Float32Array> = {}
@@ -129,7 +200,7 @@ function StemPlayer({ stems, songName, onReset, analysisData }: StemPlayerProps)
           sampleRate = decoded.sampleRate
           if (ch.length > maxLen) maxLen = ch.length
         }
-        // 2. Full mix (all stems — for BPM)
+        // 2. Full mix (all stems — for BPM, drums help with rhythm)
         const mixed = new Float32Array(maxLen)
         for (const ch of Object.values(bufferMap)) {
           for (let i = 0; i < ch.length; i++) mixed[i] += ch[i]
@@ -140,22 +211,8 @@ function StemPlayer({ stems, songName, onReset, analysisData }: StemPlayerProps)
         mixedAudioRef.current = mixed
         mixedSampleRateRef.current = sampleRate
 
-        // 3. Harmonic-only mix (bass + other/guitar/piano — no drums/vocals)
-        const harmonic = new Float32Array(maxLen)
-        const harmonicKeys = ['bass', 'other', 'guitar', 'piano']
-        for (const [key, ch] of Object.entries(bufferMap)) {
-          if (harmonicKeys.includes(key)) {
-            const w = key === 'bass' ? 1.5 : 1.0
-            for (let i = 0; i < ch.length; i++) harmonic[i] += ch[i] * w
-          }
-        }
-        let hPeak = 0
-        for (let i = 0; i < harmonic.length; i++) { const a = Math.abs(harmonic[i]); if (a > hPeak) hPeak = a }
-        if (hPeak > 1) for (let i = 0; i < harmonic.length; i++) harmonic[i] /= hPeak
-        harmonicAudioRef.current = harmonic
-
         // 4. BPM detection
-        // (chord timeline comes from analysisData, not JS DSP)
+        
         const sr = sampleRate
         const hop = Math.floor(sr * 0.02)
         const frames = Math.floor(Math.min(mixed.length, sr * 60) / hop)
@@ -211,6 +268,8 @@ function StemPlayer({ stems, songName, onReset, analysisData }: StemPlayerProps)
 
         originalBpmRef.current = bestBpm
         setBpm(bestBpm)
+        runKeyDetection(bestBpm)
+        mixedAudioRef.current = null
       } catch { /* detection failed */ }
     })()
   }, [urls])
@@ -232,8 +291,8 @@ function StemPlayer({ stems, songName, onReset, analysisData }: StemPlayerProps)
         waveColor: meta.color + '30',
         progressColor: meta.color,
         cursorColor: 'transparent',
-        barWidth: 2,
-        barGap: 1,
+        barWidth: 1,
+        barGap: 0,
         height: 32,
         normalize: true,
         interact: false
@@ -289,111 +348,17 @@ function StemPlayer({ stems, songName, onReset, analysisData }: StemPlayerProps)
     }
   }, [bpm, masterPlaying])
 
-  // --- Note / Chord display ---
-  const [showNotes, setShowNotes] = useState(false)
-  const [currentChord, setCurrentChord] = useState('')
-  const [liveChroma, setLiveChroma] = useState<number[]>(new Array(12).fill(0))
-  const chromaRef = useRef<number[]>(new Array(12).fill(0))
-  const chordRef = useRef('')
-
-  // FFT chroma for animated bars (same as before)
-  const fftAt = (data: Float32Array, sr: number, pos: number, fftSize: number): Float32Array => {
-    const st = Math.max(0, Math.min(data.length - fftSize, Math.floor(pos * sr)))
-    const w = new Float32Array(fftSize)
-    for (let i = 0; i < fftSize; i++) w[i] = data[st + i] * (0.54 - 0.46 * Math.cos(2 * Math.PI * i / fftSize))
-    const real = new Float32Array(w); const imag = new Float32Array(fftSize)
-    const bits = Math.log2(fftSize)
-    for (let i = 0; i < fftSize; i++) {
-      let j = 0; for (let b = 0; b < bits; b++) if (i & (1 << b)) j |= (1 << (bits - 1 - b))
-      if (j > i) { [real[i], real[j]] = [real[j], real[i]]; [imag[i], imag[j]] = [imag[j], imag[i]] }
-    }
-    for (let s = 1; s <= bits; s++) {
-      const m = 1 << s; const mH = m >> 1
-      for (let k = 0; k < fftSize; k += m) for (let j = 0; j < mH; j++) {
-        const wr = Math.cos(-2 * Math.PI * j / m); const wi = Math.sin(-2 * Math.PI * j / m)
-        const tr = real[k + j + mH] * wr - imag[k + j + mH] * wi
-        const ti = real[k + j + mH] * wi + imag[k + j + mH] * wr
-        real[k + j + mH] = real[k + j] - tr; imag[k + j + mH] = imag[k + j] - ti
-        real[k + j] += tr; imag[k + j] += ti
+  // Clean up unused audio elements on stem change
+  useEffect(() => {
+    const validKeys = new Set(allStems.map(stemNameFromPath))
+    for (const key of Object.keys(audioEls.current)) {
+      if (!validKeys.has(key)) {
+        const el = audioEls.current[key]
+        if (el) { el.pause(); el.src = '' }
+        delete audioEls.current[key]
       }
     }
-    const mags = new Float32Array(fftSize / 2)
-    for (let bin = 0; bin < fftSize / 2; bin++) mags[bin] = Math.sqrt(real[bin] * real[bin] + imag[bin] * imag[bin])
-    const wHalf = 3
-    for (let bin = 0; bin < fftSize / 2; bin++) {
-      let avg = 0, c = 0
-      for (let j = Math.max(0, bin - wHalf); j <= Math.min(fftSize / 2 - 1, bin + wHalf); j++) { avg += mags[j]; c++ }
-      avg /= c
-      if (avg > 0 && mags[bin] > 0) mags[bin] = Math.min(mags[bin] / avg, 3)
-      else mags[bin] = 0
-    }
-    const chroma = new Float32Array(12)
-    for (let bin = 0; bin < fftSize / 2; bin++) {
-      const freq = bin * sr / fftSize; if (freq < 55 || freq > 2500) continue
-      let weight = 1
-      if (freq >= 60 && freq <= 400) weight = 3
-      else if (freq > 400 && freq <= 2000) weight = 2
-      chroma[((Math.round(69 + 12 * Math.log2(freq / 440)) % 12) + 12) % 12] += mags[bin] * weight
-    }
-    let m = 0; for (let i = 0; i < 12; i++) if (chroma[i] > m) m = chroma[i]
-    if (m > 0) for (let i = 0; i < 12; i++) chroma[i] /= m
-    return chroma
-  }
-
-  const computeLiveChroma = (data: Float32Array, sr: number, pos: number): number[] => {
-    const raw = fftAt(data, sr, pos, 2048)
-    const prev = chromaRef.current
-    for (let i = 0; i < 12; i++) raw[i] = raw[i] * 0.4 + prev[i] * 0.6
-    const out = Array.from(raw); chromaRef.current = out
-    return out
-  }
-
-  // Chord timeline populated from analysisData (set by Python/essentia analysis)
-  const chordTimelineRef = useRef<{ start: number; end: number; chord: string }[]>([])
-
-  useEffect(() => {
-    if (!analysisData?.chords?.length) return
-    chordTimelineRef.current = analysisData.chords
-    setCurrentChord(analysisData.chords[0]?.chord ?? '')
-  }, [analysisData])
-
-  // rAF: chord timeline lookup (always runs)
-  const animRef = useRef(0)
-  const frameCountRef = useRef(0)
-  useEffect(() => {
-    const tick = (): void => {
-      frameCountRef.current++
-      const harmBuf = harmonicAudioRef.current; const sr = mixedSampleRateRef.current
-      const playing = masterPlayingRef.current
-
-      if (showNotes && harmBuf && playing && frameCountRef.current % 4 === 0) {
-        setLiveChroma(computeLiveChroma(harmBuf, sr, positionRef.current))
-      }
-      if (playing) {
-        const pos = positionRef.current; const segs = chordTimelineRef.current
-        let chord = ''
-        for (let i = segs.length - 1; i >= 0; i--) { if (pos >= segs[i].start) { chord = segs[i].chord; break } }
-        if (chord && chord !== chordRef.current) { chordRef.current = chord; setCurrentChord(chord) }
-      }
-      animRef.current = requestAnimationFrame(tick)
-    }
-    animRef.current = requestAnimationFrame(tick)
-    return () => cancelAnimationFrame(animRef.current)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
-
-  // --- Bass Tablature ---
-  const [tabModalOpen, setTabModalOpen] = useState(false)
-  const tabScrollRef = useRef<HTMLDivElement>(null)
-
-  // Auto-scroll tab timeline to keep playhead in view
-  useEffect(() => {
-    if (!tabModalOpen || !tabScrollRef.current) return
-    const el = tabScrollRef.current
-    el.scrollLeft = Math.max(0, progress * TAB_PX_PER_SEC - el.clientWidth * 0.3)
-  }, [progress, tabModalOpen])
-
-  // --- BPM detection ---
+  }, [allStems])
 
   // --- Metronome (lookahead scheduler) ---
   const LOOKAHEAD = 0.3
@@ -451,17 +416,19 @@ function StemPlayer({ stems, songName, onReset, analysisData }: StemPlayerProps)
       const id = window.setInterval(schedulerTick, 25)
       return () => clearInterval(id)
     }
+    return
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [metronomeOn, masterPlaying])
 
   // Audio timeupdate → update counter + WaveSurfer cursors
   const onAudioTime = useCallback((time: number): void => {
     positionRef.current = time
-    setProgress(time)
 
     const now = Date.now()
     if (now - lastSeekRef.current < 16) return
     lastSeekRef.current = now
+
+    setProgress(time)
 
     const d = duration || 1
     for (const sw of Object.values(stemWaves.current)) {
@@ -524,6 +491,17 @@ function StemPlayer({ stems, songName, onReset, analysisData }: StemPlayerProps)
     }
   }, [masterPlaying])
 
+  const handleRestart = useCallback((): void => {
+    positionRef.current = 0
+    setProgress(0)
+    for (const el of Object.values(audioEls.current)) {
+      el.currentTime = 0
+    }
+    for (const sw of Object.values(stemWaves.current)) {
+      sw.seekTo(0)
+    }
+  }, [])
+
   // Solo: only one stem at a time, toggle on/off
   const toggleSolo = useCallback((key: string): void => {
     setSolo((prev) => {
@@ -531,6 +509,168 @@ function StemPlayer({ stems, songName, onReset, analysisData }: StemPlayerProps)
       return { [key]: true } // solo this one, clear others
     })
   }, [])
+
+  const extForFormat = (fmt: string): string => (fmt === 'mp3' ? '.mp3' : '.wav')
+  const formatFilter = (fmt: string): { name: string; extensions: string[] } =>
+    fmt === 'mp3' ? { name: 'MP3 Audio', extensions: ['mp3'] } : { name: 'WAV Audio', extensions: ['wav'] }
+
+  const handleExportSingle = async (key: string): Promise<void> => {
+    if (!window.api) return
+    const stemPath = allStems.find((p) => stemNameFromPath(p) === key)
+    if (!stemPath) return
+    const stemLabel = STEM_META[key]?.label ?? key
+    const outPath = await window.api.saveFileDialog(
+      `${songName} - ${stemLabel}${extForFormat(exportFormat)}`,
+      [formatFilter(exportFormat)]
+    )
+    if (!outPath) return
+    setExporting(true)
+    await window.api.exportSingle(stemPath, outPath)
+    setExporting(false)
+  }
+
+  const handleExportMix = async (): Promise<void> => {
+    if (!window.api) return
+    const selected = Object.entries(exportSelection).filter(([, v]) => v).map(([k]) => k)
+    if (selected.length === 0) return
+    const stemPaths = selected
+      .map((k) => allStems.find((p) => stemNameFromPath(p) === k))
+      .filter((p): p is string => !!p)
+    const outPath = await window.api.saveFileDialog(
+      `${songName} - Mix${extForFormat(exportFormat)}`,
+      [formatFilter(exportFormat)]
+    )
+    if (!outPath) return
+    setExporting(true)
+    await window.api.exportMix(stemPaths, outPath, exportWithMetronome ? { bpm } : undefined)
+    setExporting(false)
+  }
+
+  const handlePitchShift = async (delta: number): Promise<void> => {
+    if (!window.api) return
+    const newShift = pitchShift + delta
+    if (newShift < -12 || newShift > 12) return
+    if (newShift === 0) {
+      setPitchShift(0)
+      setShiftedPaths({})
+      return
+    }
+    setTransposing(true)
+    try {
+      const paths = await window.api.transposeStems(allStems, newShift)
+      const map: Record<string, string> = {}
+      for (const p of paths) map[stemNameFromPath(p)] = p
+      setShiftedPaths(map)
+      setPitchShift(newShift)
+    } catch { /* transpose failed */ }
+    setTransposing(false)
+  }
+
+  const toggleExportSelection = (key: string): void => {
+    setExportSelection((prev) => ({ ...prev, [key]: !prev[key] }))
+  }
+
+  const handleStartRecording = async (key: string): Promise<void> => {
+    if (!window.api) return
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      mediaStreamRef.current = stream
+      setRecordingKey(key)
+      setRecording('countdown')
+      setRecordingCount(3)
+
+      recordingChunksRef.current = []
+
+      // Countdown: 3... 2... 1...
+      const cd = setInterval(() => {
+        setRecordingCount((prev) => {
+          if (prev <= 1) {
+            clearInterval(cd)
+            beginCapture(stream, key)
+            return 0
+          }
+          return prev - 1
+        })
+      }, 1000)
+    } catch {
+      // Permission denied or no mic
+    }
+  }
+
+  const beginCapture = (stream: MediaStream, _key: string): void => {
+    const mr = new MediaRecorder(stream, { mimeType: 'audio/webm' })
+    mediaRecorderRef.current = mr
+    recordingChunksRef.current = []
+
+    mr.ondataavailable = (e) => {
+      if (e.data.size > 0) recordingChunksRef.current.push(e.data)
+    }
+
+    mr.onstop = () => {
+      const blob = new Blob(recordingChunksRef.current, { type: 'audio/webm' })
+      setRecordingBlob(blob)
+      setRecordingElapsed(Math.floor((Date.now() - recordingStartTimeRef.current) / 1000))
+      setRecording('confirming')
+    }
+
+    recordingStartTimeRef.current = Date.now()
+    mr.start()
+
+    setRecording('recording')
+    setRecordingElapsed(0)
+
+    recordingTimerRef.current = setInterval(() => {
+      setRecordingElapsed(Math.floor((Date.now() - recordingStartTimeRef.current) / 1000))
+    }, 200)
+  }
+
+  const handleStopRecording = (): void => {
+    if (recordingTimerRef.current) {
+      clearInterval(recordingTimerRef.current)
+      recordingTimerRef.current = null
+    }
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      mediaRecorderRef.current.stop()
+    }
+    if (mediaStreamRef.current) {
+      mediaStreamRef.current.getTracks().forEach((t) => t.stop())
+      mediaStreamRef.current = null
+    }
+  }
+
+  const handleDiscardRecording = (): void => {
+    setRecording('idle')
+    setRecordingKey(null)
+    setRecordingBlob(null)
+    setRecordingElapsed(0)
+    setRecordingCount(3)
+    setRecordingTake(1)
+    recordingChunksRef.current = []
+  }
+
+  const handleSaveRecording = async (): Promise<void> => {
+    if (!window.api || !recordingBlob || !recordingKey) return
+    const songDir = stems.length > 0 ? stems[0].replace(/[/\\][^/\\]+$/, '') : ''
+    if (!songDir) return
+
+    const label = STEM_META[recordingKey]?.label ?? recordingKey
+    const take = recordingTake
+    const name = `Recording ${label} ${take}`
+    const arrayBuf = await recordingBlob.arrayBuffer()
+
+    const result = await window.api.saveRecording(songDir, Array.from(new Uint8Array(arrayBuf)), name, recordingFormat)
+    if (result.success && result.path) {
+      setRecordedStems((prev) => [...prev, result.path!])
+      setRecordingTake((prev) => prev + 1)
+    }
+
+    setRecording('idle')
+    setRecordingKey(null)
+    setRecordingBlob(null)
+    setRecordingElapsed(0)
+    setRecordingCount(3)
+    recordingChunksRef.current = []
+  }
 
   const handleMasterVolume = useCallback((e: React.ChangeEvent<HTMLInputElement>): void => {
     setMasterVolume(parseFloat(e.target.value))
@@ -549,18 +689,17 @@ function StemPlayer({ stems, songName, onReset, analysisData }: StemPlayerProps)
           <div className="flex items-center justify-between">
             <h2 className="text-xl font-bold text-white">{songName}</h2>
             <button
-              onClick={onReset}
-              className="px-4 py-2 text-sm text-neutral-400 hover:text-white border border-neutral-700 rounded-lg hover:border-neutral-500 transition-colors"
+              onClick={onExportAll}
+              className="px-4 py-2 text-sm font-semibold bg-green-600 hover:bg-green-500 text-white rounded-lg transition-colors"
             >
-              New separation
+              Export All
             </button>
           </div>
         </div>
 
         <div className="grid grid-cols-2 gap-4">
-          {stemItems.map(({ key, meta }) => {
+          {stemItems.map(({ key, meta, isRecording }) => {
             const isAudible = masterPlaying && active[key]
-            const isSoloed = solo[key]
             const isInactive = !active[key] && !masterPlaying
             return (
               <div
@@ -570,18 +709,18 @@ function StemPlayer({ stems, songName, onReset, analysisData }: StemPlayerProps)
                 }`}
                 style={{ borderColor: isInactive ? undefined : meta.color + '40' }}
               >
-                <audio
+                  <audio
                   ref={(el) => {
                     if (el) {
                       audioEls.current[key] = el
-                      el.preload = 'auto'
+                      el.preload = 'none'
                       el.ontimeupdate = () => onAudioTimeRef.current(el.currentTime)
                     }
                   }}
                 />
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
-                    <span className="text-xl">{meta.icon}</span>
+                    <span className="text-xl" style={{ color: meta.color }}>&#9679;</span>
                     <span className="font-semibold capitalize" style={{ color: meta.color }}>{meta.label}</span>
                   </div>
                   {isAudible && (
@@ -609,9 +748,9 @@ function StemPlayer({ stems, songName, onReset, analysisData }: StemPlayerProps)
                     }`}
                   >
                     {active[key] ? (
-                      <span className="text-green-400 text-sm">⏸</span>
+                      <span className="text-green-400 text-sm font-bold">| |</span>
                     ) : (
-                      <span className="text-white text-sm ml-0.5">▶</span>
+                      <span className="text-white text-sm ml-0.5">&#9654;</span>
                     )}
                   </button>
                   <button
@@ -620,13 +759,36 @@ function StemPlayer({ stems, songName, onReset, analysisData }: StemPlayerProps)
                       solo[key] ? 'bg-yellow-600 text-white' : 'bg-neutral-800 text-neutral-400 hover:text-white'
                     }`}
                   >S</button>
-                  {key === 'bass' && (
+                  <button
+                    onClick={() => handleExportSingle(key)}
+                    disabled={exporting}
+                    className="px-3 py-1 rounded-lg text-xs font-medium bg-neutral-800 text-neutral-400 hover:text-white hover:bg-neutral-700 transition-colors disabled:opacity-40"
+                  >
+                    {exporting ? '...' : 'Export'}
+                  </button>
+                  {recording === 'idle' && !isRecording && (
                     <button
-                      onClick={() => setTabModalOpen(true)}
-                      className="px-3 py-1 rounded-lg text-xs font-medium bg-neutral-800 text-neutral-400 hover:text-white hover:bg-neutral-700 transition-colors"
-                    >Tab</button>
+                      onClick={() => handleStartRecording(key)}
+                      className="px-3 py-1 rounded-lg text-xs font-medium bg-red-900/40 text-red-400 hover:text-red-300 hover:bg-red-800/50 transition-colors"
+                    >
+                      REC
+                    </button>
                   )}
                 </div>
+                {recordingKey === key && recording === 'recording' && (
+                  <div className="flex items-center justify-between bg-red-900/20 rounded-lg px-3 py-2 -mt-1">
+                    <div className="flex items-center gap-2">
+                      <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
+                      <span className="text-red-400 text-xs font-mono">{formatTime(recordingElapsed)}</span>
+                    </div>
+                    <button
+                      onClick={handleStopRecording}
+                      className="px-3 py-1 rounded-lg text-xs font-medium bg-red-600 text-white hover:bg-red-500 transition-colors"
+                    >
+                      ⏹ Stop
+                    </button>
+                  </div>
+                )}
               </div>
             )
           })}
@@ -635,16 +797,28 @@ function StemPlayer({ stems, songName, onReset, analysisData }: StemPlayerProps)
 
       <div className="w-44 shrink-0 bg-neutral-900/80 rounded-xl border border-neutral-800 p-4 flex flex-col items-center gap-5 self-start order-1">
         <h3 className="text-sm font-semibold text-neutral-400 uppercase tracking-wide">Master</h3>
-        <button
-          onClick={toggleMasterPlay}
-          className="w-14 h-14 rounded-full flex items-center justify-center bg-blue-600/20 hover:bg-blue-600/30 transition-colors"
-        >
+        <div className="flex items-center gap-2">
+          <button
+            onClick={toggleMasterPlay}
+            className="w-12 h-12 rounded-full flex items-center justify-center bg-blue-600/20 hover:bg-blue-600/30 transition-colors"
+          >
           {masterPlaying ? (
-            <span className="text-blue-400 text-lg">⏸</span>
+            <span className="text-blue-400 text-base font-bold">| |</span>
           ) : (
-            <span className="text-blue-400 text-lg ml-1">▶</span>
+            <span className="text-blue-400 text-base ml-0.5">&#9654;</span>
           )}
-        </button>
+          </button>
+          <button
+            onClick={handleRestart}
+            className="w-10 h-10 rounded-full flex items-center justify-center bg-neutral-800 hover:bg-neutral-700 transition-colors text-neutral-400 hover:text-white"
+            title="Restart"
+          >
+            &#9664;&#9664;
+          </button>
+        </div>
+        <span className="text-[10px] font-mono text-neutral-500 -mt-2">
+          {formatTime(progress)} / {formatTime(duration)}
+        </span>
         <div className="flex flex-col items-center gap-2 w-full">
           <span className="text-xs text-neutral-500">Volume</span>
           <input
@@ -656,39 +830,111 @@ function StemPlayer({ stems, songName, onReset, analysisData }: StemPlayerProps)
           <span className="text-xs text-neutral-500">{Math.round(masterVolume * 100)}%</span>
         </div>
 
-        <div className="border-t border-neutral-800 pt-4 w-full flex flex-col items-center gap-3">
-          <h3 className="text-sm font-semibold text-neutral-400 uppercase tracking-wide">Notes</h3>
-          <div className="flex items-center gap-3 w-full justify-between">
-            <button
-              onClick={() => setShowNotes(prev => !prev)}
-              className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors ${
-                showNotes ? 'bg-purple-600 text-white' : 'bg-neutral-800 text-neutral-400 hover:text-white'
-              }`}
-            >
-              {showNotes ? 'ON' : 'OFF'}
-            </button>
+        <div className="border-t border-neutral-800 pt-4 w-full flex flex-col gap-3">
+          <h3 className="text-sm font-semibold text-neutral-400 uppercase tracking-wide text-center">Record</h3>
+          <div className="flex flex-col gap-2 w-full">
+            <span className="text-[10px] text-neutral-500 text-center">Monitor volume</span>
+            <input
+              type="range" min="0" max="1" step="0.01" value={monitorVolume}
+              onChange={(e) => setMonitorVolume(parseFloat(e.target.value))}
+              className="accent-red-500 cursor-pointer w-full"
+            />
           </div>
-          {showNotes && (
-            <>
-              <div className="flex gap-0.5 w-full justify-center items-end h-8">
-                {liveChroma.map((v, i) => (
-                  <div key={i} className="flex flex-col items-center gap-0.5 flex-1">
-                    <div
-                      className="w-full rounded-sm transition-all duration-75"
-                      style={{
-                        height: Math.max(2, v * 28),
-                        backgroundColor: v > 0.5 ? `hsl(${i * 30}, 80%, 60%)` : '#333'
-                      }}
-                    />
-                    <span className="text-[5px] text-neutral-600">{NOTE_NAMES[i]}</span>
+          <div className="flex items-center justify-center gap-2">
+            <button
+              onClick={() => setRecordingFormat('wav')}
+              className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors ${
+                recordingFormat === 'wav' ? 'bg-red-600 text-white' : 'bg-neutral-800 text-neutral-400'
+              }`}
+            >WAV</button>
+            <button
+              onClick={() => setRecordingFormat('mp3')}
+              className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors ${
+                recordingFormat === 'mp3' ? 'bg-red-600 text-white' : 'bg-neutral-800 text-neutral-400'
+              }`}
+            >MP3</button>
+          </div>
+        </div>
+
+          <div className="border-t border-neutral-800 pt-3 w-full">
+          <button
+            onClick={() => setShowExportModal(true)}
+            className="w-full px-2 py-1.5 rounded text-[10px] font-semibold bg-blue-600 hover:bg-blue-500 text-white transition-colors"
+          >
+            Export Mix...
+          </button>
+        </div>
+
+        <div className="border-t border-neutral-800 pt-4 w-full flex flex-col gap-3">
+          <h3 className="text-sm font-semibold text-neutral-400 uppercase tracking-wide text-center">Key</h3>
+          <div className="text-center">
+            <span className="text-lg font-bold text-white">
+              {detectedKey || '...'}
+            </span>
+          </div>
+          <div className="flex items-center justify-center gap-1.5">
+            <button
+              onClick={() => handlePitchShift(-1)}
+              disabled={transposing || pitchShift <= -12}
+              className="w-8 h-8 rounded bg-neutral-800 text-neutral-400 hover:text-white disabled:text-neutral-600 disabled:cursor-not-allowed text-sm flex items-center justify-center"
+            >−</button>
+            <span className="w-14 text-center text-sm font-mono text-orange-400">
+              {pitchShift === 0 ? '±0' : pitchShift > 0 ? `+${pitchShift}` : `${pitchShift}`}
+            </span>
+            <button
+              onClick={() => handlePitchShift(1)}
+              disabled={transposing || pitchShift >= 12}
+              className="w-8 h-8 rounded bg-neutral-800 text-neutral-400 hover:text-white disabled:text-neutral-600 disabled:cursor-not-allowed text-sm flex items-center justify-center"
+            >+</button>
+          </div>
+          <span className="text-[10px] text-neutral-500 text-center">
+            {transposing ? 'Transposing...' : 'semitone steps'}
+          </span>
+        </div>
+
+        <div className="border-t border-neutral-800 pt-3 w-full flex flex-col gap-2">
+          <button
+            onClick={() => setShowJamZone(!showJamZone)}
+            className="w-full text-sm font-semibold text-neutral-400 hover:text-white uppercase tracking-wide py-1"
+          >Jam Zone {showJamZone ? '▲' : '▼'}</button>
+          {showJamZone && detectedKey && (() => {
+            const NOTE = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B']
+            const parts = detectedKey.split(' ')
+            const tonicIdx = NOTE.indexOf(parts[0])
+            const isMajor = parts[1] === 'Major'
+            const scales = isMajor ? [
+              { name: 'Major (Ionian)', pattern: [0,2,4,5,7,9,11] },
+              { name: 'Lydian', pattern: [0,2,4,6,7,9,11] },
+              { name: 'Mixolydian', pattern: [0,2,4,5,7,9,10] },
+              { name: 'Major Pentatonic', pattern: [0,2,4,7,9] },
+              { name: 'Blues', pattern: [0,3,5,6,7,10] },
+            ] : [
+              { name: 'Natural Minor', pattern: [0,2,3,5,7,8,10] },
+              { name: 'Dorian', pattern: [0,2,3,5,7,9,10] },
+              { name: 'Phrygian', pattern: [0,1,3,5,7,8,10] },
+              { name: 'Harmonic Minor', pattern: [0,2,3,5,7,8,11] },
+              { name: 'Melodic Minor', pattern: [0,2,3,5,7,9,11] },
+              { name: 'Minor Pentatonic', pattern: [0,3,5,7,10] },
+              { name: 'Blues', pattern: [0,3,5,6,7,10] },
+            ]
+            const toNote = (s: number) => NOTE[(tonicIdx + s) % 12]
+            return (
+              <div className="flex flex-col gap-1.5 max-h-48 overflow-y-auto">
+                {scales.map(({ name, pattern }) => (
+                  <div key={name} className="flex flex-col gap-0.5">
+                    <span className="text-[10px] text-neutral-500 uppercase tracking-wide">{name}</span>
+                    <div className="flex flex-wrap gap-1">
+                      {pattern.map((s, i) => (
+                        <span key={i} className="w-6 h-6 rounded bg-neutral-800 text-neutral-300 text-[10px] font-mono flex items-center justify-center">
+                          {toNote(s)}
+                        </span>
+                      ))}
+                    </div>
                   </div>
                 ))}
               </div>
-              {currentChord && (
-                <span className="text-white text-sm font-bold tracking-wide">{currentChord}</span>
-              )}
-            </>
-          )}
+            )
+          })()}
         </div>
 
         <div className="border-t border-neutral-800 pt-4 w-full flex flex-col gap-3">
@@ -738,96 +984,110 @@ function StemPlayer({ stems, songName, onReset, analysisData }: StemPlayerProps)
         </div>
       </div>
     </div>
-    {tabModalOpen && (
-      <div className="fixed inset-0 z-50 flex flex-col bg-neutral-950">
-        <div className="flex items-center justify-between px-5 py-3 border-b border-neutral-800 shrink-0">
-          <h3 className="text-sm font-semibold text-neutral-400 uppercase tracking-wide">Bass Tab — {songName}</h3>
-          <div className="flex items-center gap-4">
-            <span className="text-xs font-mono text-neutral-500">{formatTime(progress)} / {formatTime(duration)}</span>
+
+    {/* Countdown overlay */}
+    {recording === 'countdown' && (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70">
+        <span className="text-8xl font-bold text-white animate-pulse drop-shadow-2xl">
+          {recordingCount > 0 ? recordingCount : ''}
+        </span>
+      </div>
+    )}
+
+    {/* Confirmation modal */}
+    {recording === 'confirming' && (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+        <div className="bg-neutral-900 border border-neutral-700 rounded-2xl p-6 w-72 shadow-2xl flex flex-col items-center gap-4">
+          <h3 className="text-sm font-semibold text-neutral-400 uppercase tracking-wide">Save recording?</h3>
+          <div className="flex flex-col items-center gap-1">
+            <span className="text-2xl font-bold text-white">{formatTime(recordingElapsed)}</span>
+            <span className="text-xs text-neutral-500">
+              {recordingKey ? (STEM_META[recordingKey]?.label ?? recordingKey) : ''}
+            </span>
+          </div>
+          <div className="flex gap-3 w-full">
             <button
-              onClick={() => setTabModalOpen(false)}
+              onClick={handleDiscardRecording}
+              className="flex-1 px-4 py-2 rounded-lg text-xs font-medium bg-neutral-800 text-neutral-400 hover:text-white transition-colors"
+            >
+              Discard
+            </button>
+            <button
+              onClick={handleSaveRecording}
+              className="flex-1 px-4 py-2 rounded-lg text-xs font-semibold bg-red-600 hover:bg-red-500 text-white transition-colors"
+            >
+              Save
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+
+    {/* Export Mix modal */}
+    {showExportModal && (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+        <div className="bg-neutral-900 border border-neutral-700 rounded-2xl p-5 w-72 shadow-2xl flex flex-col gap-4">
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-semibold text-neutral-400 uppercase tracking-wide">Export Mix</h3>
+            <button
+              onClick={() => setShowExportModal(false)}
               className="text-neutral-500 hover:text-white text-lg leading-none"
             >✕</button>
           </div>
-        </div>
-        {!analysisData?.bass_tab?.length ? (
-          <div className="flex-1 flex items-center justify-center text-neutral-500 text-sm">
-            Bass tab not available — analysis hasn&apos;t completed yet.
+
+          <div className="flex flex-col gap-1.5">
+            <span className="text-[10px] text-neutral-500 uppercase tracking-wide">Stems</span>
+            {stemItems.map(({ key, meta }) => (
+              <label key={key} className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={!!exportSelection[key]}
+                  onChange={() => toggleExportSelection(key)}
+                  className="accent-blue-500"
+                />
+                <span className="text-xs text-neutral-300">{meta.label}</span>
+              </label>
+            ))}
           </div>
-        ) : (
-          <div className="flex-1 flex flex-col justify-center overflow-hidden px-2 py-4">
-            <div className="flex">
-              {/* Fixed string labels */}
-              <div className="shrink-0 flex flex-col" style={{ width: 36 }}>
-                {TAB_STRING_NAMES.map((name) => (
-                  <div
-                    key={name}
-                    className="flex items-center justify-center text-xs font-mono font-bold text-neutral-400"
-                    style={{ height: TAB_STRING_HEIGHT }}
-                  >
-                    {name}
-                  </div>
-                ))}
-              </div>
-              {/* Scrollable tab area */}
-              <div
-                ref={tabScrollRef}
-                className="flex-1 overflow-x-auto overflow-y-hidden"
-                style={{ scrollBehavior: 'auto' }}
-              >
-                <div
-                  className="relative"
-                  style={{
-                    width: Math.max((duration + 4) * TAB_PX_PER_SEC, 800),
-                    height: TAB_STRING_NAMES.length * TAB_STRING_HEIGHT,
-                  }}
-                >
-                  {/* Horizontal string lines */}
-                  {TAB_STRING_NAMES.map((_, idx) => (
-                    <div
-                      key={idx}
-                      className="absolute left-0 bg-neutral-700"
-                      style={{
-                        top: idx * TAB_STRING_HEIGHT + TAB_STRING_HEIGHT / 2,
-                        height: 1,
-                        width: Math.max((duration + 4) * TAB_PX_PER_SEC, 800),
-                      }}
-                    />
-                  ))}
-                  {/* Note markers */}
-                  {(analysisData?.bass_tab ?? []).map((note, idx) => (
-                    <div
-                      key={idx}
-                      className="absolute flex items-center justify-center rounded text-xs font-bold font-mono bg-orange-500 text-white"
-                      style={{
-                        left: note.time * TAB_PX_PER_SEC - 11,
-                        top: note.string * TAB_STRING_HEIGHT + TAB_STRING_HEIGHT / 2 - 11,
-                        width: 22,
-                        height: 22,
-                        zIndex: 2,
-                      }}
-                    >
-                      {note.fret}
-                    </div>
-                  ))}
-                  {/* Playhead */}
-                  <div
-                    className="absolute top-0 pointer-events-none"
-                    style={{
-                      left: progress * TAB_PX_PER_SEC,
-                      width: 2,
-                      height: TAB_STRING_NAMES.length * TAB_STRING_HEIGHT,
-                      backgroundColor: 'rgba(255,255,255,0.85)',
-                      zIndex: 3,
-                    }}
-                  />
-                </div>
-              </div>
+
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] text-neutral-500 uppercase tracking-wide">Format</span>
+            <div className="flex gap-1">
+              <button
+                onClick={() => setExportFormat('wav')}
+                className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors ${
+                  exportFormat === 'wav' ? 'bg-blue-600 text-white' : 'bg-neutral-800 text-neutral-400'
+                }`}
+              >WAV</button>
+              <button
+                onClick={() => setExportFormat('mp3')}
+                className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors ${
+                  exportFormat === 'mp3' ? 'bg-blue-600 text-white' : 'bg-neutral-800 text-neutral-400'
+                }`}
+              >MP3</button>
             </div>
           </div>
-        )}
+
+          <label className="flex items-center gap-2 text-xs text-neutral-400 cursor-pointer">
+            <input
+              type="checkbox" checked={exportWithMetronome}
+              onChange={(e) => setExportWithMetronome(e.target.checked)}
+              className="accent-blue-500"
+            />
+            Include metronome ({bpm} BPM)
+          </label>
+
+          <button
+            onClick={() => { setShowExportModal(false); handleExportMix() }}
+            disabled={exporting || Object.values(exportSelection).filter(Boolean).length === 0}
+            className="w-full px-3 py-2 rounded-lg text-xs font-semibold bg-blue-600 hover:bg-blue-500 disabled:bg-neutral-700 disabled:text-neutral-500 text-white transition-colors"
+          >
+            {exporting ? 'Exporting...' : 'Export'}
+          </button>
+        </div>
       </div>
-    )}</>
+    )}
+</>
   )
 }
 
