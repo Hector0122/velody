@@ -1,8 +1,17 @@
-import { ipcMain, dialog } from 'electron'
+import { ipcMain, dialog, shell } from 'electron'
 import { spawn, execSync, execFileSync } from 'child_process'
 import { join } from 'path'
 import { tmpdir } from 'os'
-import { mkdirSync, writeFileSync, existsSync, readdirSync, statSync, rmSync, mkdtempSync, readFileSync } from 'fs'
+import {
+  mkdirSync,
+  writeFileSync,
+  existsSync,
+  readdirSync,
+  statSync,
+  rmSync,
+  mkdtempSync,
+  readFileSync
+} from 'fs'
 import { SetupManager } from '../setup'
 
 const STEM_NAMES = ['vocals', 'drums', 'bass', 'other', 'piano', 'guitar']
@@ -117,6 +126,8 @@ export interface SongItem {
 }
 
 export function registerIpcHandlers(): void {
+  ipcMain.handle('shell:openExternal', (_event, url: string) => shell.openExternal(url))
+
   ipcMain.handle('songs:list', (): SongItem[] => {
     const root = getStemsRootDir()
     if (!existsSync(root)) return []
@@ -160,26 +171,33 @@ export function registerIpcHandlers(): void {
   ipcMain.handle('song:loadMeta', (_event, songDir: string) => {
     const metaPath = join(songDir, '.velody')
     if (!existsSync(metaPath)) return null
-    try { return JSON.parse(readFileSync(metaPath, 'utf-8')) } catch { return null }
-  })
-
-  ipcMain.handle('song:detectKey', async (_event, songDir: string, stemPaths: string[]): Promise<string | null> => {
-    const pythonPath = setupManager?.getPythonPath() ?? 'python3'
-    const scriptPath = join(__dirname, '../../python-worker/detect_key.py')
     try {
-      const out = execFileSync(pythonPath, [scriptPath, songDir, ...stemPaths], {
-        cwd: join(__dirname, '../../python-worker'),
-        encoding: 'utf-8'
-      })
-      const result = JSON.parse(out.trim())
-      if (result.key) return result.key
-      console.error('detect_key error:', result.error)
-      return null
-    } catch (err) {
-      console.error('detect_key failed:', err)
+      return JSON.parse(readFileSync(metaPath, 'utf-8'))
+    } catch {
       return null
     }
   })
+
+  ipcMain.handle(
+    'song:detectKey',
+    async (_event, songDir: string, stemPaths: string[]): Promise<string | null> => {
+      const pythonPath = setupManager?.getPythonPath() ?? 'python3'
+      const scriptPath = join(__dirname, '../../python-worker/detect_key.py')
+      try {
+        const out = execFileSync(pythonPath, [scriptPath, songDir, ...stemPaths], {
+          cwd: join(__dirname, '../../python-worker'),
+          encoding: 'utf-8'
+        })
+        const result = JSON.parse(out.trim())
+        if (result.key) return result.key
+        console.error('detect_key error:', result.error)
+        return null
+      } catch (err) {
+        console.error('detect_key failed:', err)
+        return null
+      }
+    }
+  )
 
   ipcMain.handle('separation:start', async (_event, songPath: string) => {
     const useRealDemucs = setupManager?.canUseRealDemucs() ?? false
@@ -234,16 +252,27 @@ export function registerIpcHandlers(): void {
     return result.filePaths[0]
   })
 
-  ipcMain.handle('dialog:saveFile', async (_event, defaultName: string, filters: { name: string; extensions: string[] }[]) => {
-    const result = await dialog.showSaveDialog({
-      defaultPath: defaultName,
-      filters: filters.length > 0 ? filters : [{ name: 'Audio Files', extensions: ['wav', 'mp3', 'flac'] }]
-    })
-    if (result.canceled || !result.filePath) return null
-    return result.filePath
-  })
+  ipcMain.handle(
+    'dialog:saveFile',
+    async (_event, defaultName: string, filters: { name: string; extensions: string[] }[]) => {
+      const result = await dialog.showSaveDialog({
+        defaultPath: defaultName,
+        filters:
+          filters.length > 0
+            ? filters
+            : [{ name: 'Audio Files', extensions: ['wav', 'mp3', 'flac'] }]
+      })
+      if (result.canceled || !result.filePath) return null
+      return result.filePath
+    }
+  )
 
-  function generateClickTrackWav(filePath: string, bpm: number, durationSec: number, sampleRate = 44100): void {
+  function generateClickTrackWav(
+    filePath: string,
+    bpm: number,
+    durationSec: number,
+    sampleRate = 44100
+  ): void {
     const totalSamples = Math.floor(sampleRate * durationSec)
     const buf = Buffer.alloc(44 + totalSamples * 2)
 
@@ -290,93 +319,109 @@ export function registerIpcHandlers(): void {
         )
         const d = parseFloat(out.trim())
         if (d > maxDur) maxDur = d
-      } catch { /* skip */ }
+      } catch {
+        /* skip */
+      }
     }
     return maxDur || 60
   }
 
-  ipcMain.handle('export:mix', async (_event, filePaths: string[], outputPath: string, options?: { bpm?: number }) => {
-    const ffmpeg = setupManager?.getFfmpegPath() ?? 'ffmpeg'
-    let allPaths = [...filePaths]
+  ipcMain.handle(
+    'export:mix',
+    async (_event, filePaths: string[], outputPath: string, options?: { bpm?: number }) => {
+      const ffmpeg = setupManager?.getFfmpegPath() ?? 'ffmpeg'
+      const allPaths = [...filePaths]
 
-    if (options?.bpm) {
-      const dur = getLongestDuration(filePaths)
-      const tmpDir = mkdtempSync(join(tmpdir(), 'velody-click-'))
-      const clickPath = join(tmpDir, 'click.wav')
-      generateClickTrackWav(clickPath, options.bpm, Math.ceil(dur))
-      allPaths.push(clickPath)
+      if (options?.bpm) {
+        const dur = getLongestDuration(filePaths)
+        const tmpDir = mkdtempSync(join(tmpdir(), 'velody-click-'))
+        const clickPath = join(tmpDir, 'click.wav')
+        generateClickTrackWav(clickPath, options.bpm, Math.ceil(dur))
+        allPaths.push(clickPath)
+      }
+
+      const count = allPaths.length
+      if (count === 0) return { success: false, error: 'No files to mix' }
+
+      const args: string[] = []
+      for (const fp of allPaths) args.push('-i', fp)
+
+      const inputs = allPaths.map((_, i) => `[${i}:a]`).join('')
+      args.push(
+        '-filter_complex',
+        `${inputs}amix=inputs=${count}:duration=longest`,
+        '-y',
+        outputPath
+      )
+
+      return new Promise<{ success: boolean; error?: string }>((resolve) => {
+        const proc = spawn(ffmpeg, args)
+        let stderr = ''
+        proc.stderr.on('data', (data: Buffer) => {
+          stderr += data.toString()
+        })
+        proc.on('close', (code) => {
+          if (options?.bpm) {
+            const tmpDir = join(allPaths[allPaths.length - 1], '..')
+            rmSync(tmpDir, { recursive: true, force: true })
+          }
+          if (code === 0) resolve({ success: true })
+          else resolve({ success: false, error: stderr.slice(0, 500) })
+        })
+        proc.on('error', (err) => {
+          if (options?.bpm) {
+            const tmpDir = join(allPaths[allPaths.length - 1], '..')
+            try {
+              rmSync(tmpDir, { recursive: true, force: true })
+            } catch {
+              /* ignore */
+            }
+          }
+          resolve({ success: false, error: err.message })
+        })
+      })
     }
+  )
 
-    const count = allPaths.length
-    if (count === 0) return { success: false, error: 'No files to mix' }
+  ipcMain.handle(
+    'record:save',
+    async (_event, songDir: string, data: number[], name: string, format: string) => {
+      const isMp3 = format === 'mp3'
+      const ext = isMp3 ? '.mp3' : '.wav'
+      const fileName = `${name}${ext}`
+      const destPath = join(songDir, fileName)
+      const tempPath = join(songDir, `_tmp_rec.wav`)
+      writeFileSync(tempPath, Buffer.from(data))
 
-    const args: string[] = []
-    for (const fp of allPaths) args.push('-i', fp)
+      const ffmpeg = setupManager?.getFfmpegPath() ?? 'ffmpeg'
+      const convArgs = isMp3
+        ? ['-i', tempPath, '-c:a', 'libmp3lame', '-y', destPath]
+        : ['-i', tempPath, '-y', destPath]
 
-    const inputs = allPaths.map((_, i) => `[${i}:a]`).join('')
-    args.push(
-      '-filter_complex',
-      `${inputs}amix=inputs=${count}:duration=longest`,
-      '-y',
-      outputPath
-    )
-
-    return new Promise<{ success: boolean; error?: string }>((resolve) => {
-      const proc = spawn(ffmpeg, args)
-      let stderr = ''
-      proc.stderr.on('data', (data: Buffer) => { stderr += data.toString() })
-      proc.on('close', (code) => {
-        if (options?.bpm) {
-          const tmpDir = join(allPaths[allPaths.length - 1], '..')
-          rmSync(tmpDir, { recursive: true, force: true })
-        }
-        if (code === 0) resolve({ success: true })
-        else resolve({ success: false, error: stderr.slice(0, 500) })
+      return new Promise<{ success: boolean; path?: string; error?: string }>((resolve) => {
+        const proc = spawn(ffmpeg, convArgs)
+        proc.stderr.on('data', () => {})
+        proc.on('close', (code) => {
+          rmSync(tempPath, { force: true })
+          if (code === 0) resolve({ success: true, path: destPath })
+          else resolve({ success: false, error: 'Conversion failed' })
+        })
+        proc.on('error', (err) => {
+          rmSync(tempPath, { force: true })
+          resolve({ success: false, error: err.message })
+        })
       })
-      proc.on('error', (err) => {
-        if (options?.bpm) {
-          const tmpDir = join(allPaths[allPaths.length - 1], '..')
-          try { rmSync(tmpDir, { recursive: true, force: true }) } catch { /* ignore */ }
-        }
-        resolve({ success: false, error: err.message })
-      })
-    })
-  })
-
-  ipcMain.handle('record:save', async (_event, songDir: string, data: number[], name: string, format: string) => {
-    const isMp3 = format === 'mp3'
-    const ext = isMp3 ? '.mp3' : '.wav'
-    const fileName = `${name}${ext}`
-    const destPath = join(songDir, fileName)
-    const tempPath = join(songDir, `_tmp_rec.wav`)
-    writeFileSync(tempPath, Buffer.from(data))
-
-    const ffmpeg = setupManager?.getFfmpegPath() ?? 'ffmpeg'
-    const convArgs = isMp3
-      ? ['-i', tempPath, '-c:a', 'libmp3lame', '-y', destPath]
-      : ['-i', tempPath, '-y', destPath]
-
-    return new Promise<{ success: boolean; path?: string; error?: string }>((resolve) => {
-      const proc = spawn(ffmpeg, convArgs)
-      proc.stderr.on('data', () => {})
-      proc.on('close', (code) => {
-        rmSync(tempPath, { force: true })
-        if (code === 0) resolve({ success: true, path: destPath })
-        else resolve({ success: false, error: 'Conversion failed' })
-      })
-      proc.on('error', (err) => {
-        rmSync(tempPath, { force: true })
-        resolve({ success: false, error: err.message })
-      })
-    })
-  })
+    }
+  )
 
   ipcMain.handle('export:single', async (_event, filePath: string, outputPath: string) => {
     const ffmpeg = setupManager?.getFfmpegPath() ?? 'ffmpeg'
     return new Promise<{ success: boolean; error?: string }>((resolve) => {
       const proc = spawn(ffmpeg, ['-i', filePath, '-y', outputPath])
       let stderr = ''
-      proc.stderr.on('data', (data: Buffer) => { stderr += data.toString() })
+      proc.stderr.on('data', (data: Buffer) => {
+        stderr += data.toString()
+      })
       proc.on('close', (code) => {
         if (code === 0) resolve({ success: true })
         else resolve({ success: false, error: stderr.slice(0, 500) })
@@ -402,13 +447,19 @@ export function registerIpcHandlers(): void {
 
       await new Promise<void>((resolve, reject) => {
         const proc = spawn(ffmpeg, [
-          '-i', stemPath,
-          '-af', `asetrate=44100*${pitchFactor},atempo=${1/pitchFactor}`,
-          '-ar', '44100',
-          '-y', outPath
+          '-i',
+          stemPath,
+          '-af',
+          `asetrate=44100*${pitchFactor},atempo=${1 / pitchFactor}`,
+          '-ar',
+          '44100',
+          '-y',
+          outPath
         ])
         proc.stderr.on('data', () => {})
-        proc.on('close', (code) => code === 0 ? resolve() : reject(new Error(`FFmpeg exit code ${code}`)))
+        proc.on('close', (code) =>
+          code === 0 ? resolve() : reject(new Error(`FFmpeg exit code ${code}`))
+        )
         proc.on('error', reject)
       })
     }

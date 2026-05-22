@@ -115,7 +115,11 @@ function Home(): React.JSX.Element {
     if (!dir) return
     const ext = '.wav'
     for (const stemPath of stems) {
-      const name = stemPath.split(/[/\\]/).pop()?.replace(/\.[^.]+$/, '') || 'stem'
+      const name =
+        stemPath
+          .split(/[/\\]/)
+          .pop()
+          ?.replace(/\.[^.]+$/, '') || 'stem'
       const outPath = `${dir}/${songName} - ${name}${ext}`
       try {
         await window.api.exportSingle(stemPath, outPath)
@@ -180,11 +184,7 @@ function Home(): React.JSX.Element {
         {view === 'processing' ? (
           <ProcessingScreen songName={songName} />
         ) : view === 'results' && stems.length > 0 ? (
-          <StemPlayer
-            stems={stems}
-            songName={songName}
-            onExportAll={handleExportAll}
-          />
+          <StemPlayer stems={stems} songName={songName} onExportAll={handleExportAll} />
         ) : (
           <div className="flex-1 flex items-center justify-center">
             <div className="text-center max-w-md">
@@ -214,7 +214,9 @@ function Home(): React.JSX.Element {
             <div
               key={t.id}
               className={`px-4 py-3 rounded-xl text-sm font-medium shadow-lg animate-[slideUp_0.3s_ease-out] ${
-                t.type === 'error' ? 'bg-red-900/90 text-red-300 border border-red-700' : 'bg-green-900/90 text-green-300 border border-green-700'
+                t.type === 'error'
+                  ? 'bg-red-900/90 text-red-300 border border-red-700'
+                  : 'bg-green-900/90 text-green-300 border border-green-700'
               }`}
             >
               {t.message}

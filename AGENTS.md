@@ -1,17 +1,16 @@
-# Velody — Audio Stem Separation App
+# Velody — Herramienta de Práctica Musical
 
 ## Overview
 
-Velody is a desktop application focused on AI-powered audio stem separation for musicians, producers, and learners.
+Velody es una aplicación de escritorio para la separación de stems con IA, diseñada como **herramienta sencilla para que el músico practique**.
 
-The first MVP goal is simple:
+El flujo principal:
 
-- Import a song
-- Separate stems using AI
-- Play isolated tracks
-- Export stems
-
-The app will run locally on the user's machine to avoid expensive cloud GPU infrastructure.
+- Importar una canción
+- Separar stems con Demucs
+- Tocar sobre los stems aislados
+- Usar herramientas visuales (escalas, diapasón, marcadores) para aprender y practicar
+- Exportar stems
 
 ---
 
@@ -69,16 +68,16 @@ UI Playback
 
 # Recommended Tech Stack
 
-| Layer | Technology |
-|---|---|
-| Desktop App | Electron |
-| Frontend | React + TypeScript |
-| Styling | TailwindCSS |
-| Audio Waveforms | WaveSurfer.js |
-| AI Separation | Demucs |
-| Audio Processing | FFmpeg |
-| AI Runtime | Python + PyTorch |
-| Packaging | Electron Builder |
+| Layer            | Technology         |
+| ---------------- | ------------------ |
+| Desktop App      | Electron           |
+| Frontend         | React + TypeScript |
+| Styling          | TailwindCSS        |
+| Audio Waveforms  | WaveSurfer.js      |
+| AI Separation    | Demucs             |
+| Audio Processing | FFmpeg             |
+| AI Runtime       | Python + PyTorch   |
+| Packaging        | Electron Builder   |
 
 ---
 
@@ -201,6 +200,7 @@ Allow exporting:
 5. Si KS tiene poca certeza (gap < 5% entre 1° y 2°) Y el bajo tiene una nota claramente dominante (>10% de margen), overridea con la nota más fuerte del bajo
 
 ## Caché
+
 - Resultado guardado en `.velody` (sidecar JSON) con versión
 - Al cargar una canción, se muestra la key de caché instantáneamente y Python la corrige si es necesario
 
@@ -210,9 +210,9 @@ Allow exporting:
 
 Botón en el panel lateral que despliega las escalas para improvisar sobre la canción:
 
-| Tonalidad | Escalas mostradas |
-|---|---|
-| **Mayor** | Major (Ionian), Lydian, Mixolydian, Major Pentatonic, Blues |
+| Tonalidad | Escalas mostradas                                                                                 |
+| --------- | ------------------------------------------------------------------------------------------------- |
+| **Mayor** | Major (Ionian), Lydian, Mixolydian, Major Pentatonic, Blues                                       |
 | **Menor** | Natural Minor (Aeolian), Dorian, Phrygian, Harmonic Minor, Melodic Minor, Minor Pentatonic, Blues |
 
 Cada escala muestra las notas como chips de colores. Ideal para improvisar o aprender la escala correcta para cada canción.
@@ -238,7 +238,9 @@ El flag `useRealDemucs` en `src/main/ipc/handlers.ts` (controlado por `SetupMana
 En simulación, los stems son tonos senoidales. Si el venv con Demucs está configurado, usa Demucs real automáticamente.
 
 ### Auto-setup
+
 En el primer arranque, `SetupManager` (src/main/setup/index.ts) detecta las dependencias y si falta algo:
+
 1. Verifica Python 3
 2. Crea un venv en `~/.local/share/velody/venv`
 3. Instala Demucs + PyTorch automáticamente (`pip install`)
@@ -335,35 +337,42 @@ Update UI
 
 # Future Features
 
-## Phase 2
+## Phase 2 — Navegación
 
-- Monitoreo interno con baja latencia (AudioContext + AudioWorklet)
-- Loop / count-in para grabación
-- Input selection (elegir dispositivo de entrada)
-- Efectos en vivo (compresor, reverb, EQ) sobre monitor de entrada
-- Quantize / corrección rítmica
-- Undo / reemplazar takes
-- Waveform visualization de recordings
-- Pitch shifting
-- Loop sections
-- Karaoke mode
-- Practice mode
+Features para navegar y practicar secciones específicas de la canción:
 
-## Phase 2 (próximo)
+- **Timeline interactivo**: waveform clickeable con zoom, seek y arrastre, reemplazando el seek básico actual
+- **Marcadores secciones**: markers editables sobre el timeline (verso, coro, puente, etc.)
+- **Loops secciones**: loop A/B y loop de sección usando los marcadores, para repetir pasajes difíciles
 
+## Phase 2 — Grabación simple
+
+Herramientas mínimas para que el músico se grabe practicando:
+
+- **Count-in para grabación**: elegir un intro de 1, 2 o 4 compases con clics de metrónomo antes de grabar ✅
+- **Loop para multi-take**: loop A/B para grabar múltiples capas sobre la misma sección
+- **Waveform visualization de recordings**: mostrar forma de onda de la grabación al terminar ✅
+
+## Phase 2 — Herramientas de práctica
+
+- **Tempo tap**: tocar el tempo manualmente con un botón si la detección automática falla
 - **Manual key override**: permitir al usuario cambiar la tonalidad detectada si el algoritmo falla
 - **Key-aware Jam Zone**: que las escalas cambien en tiempo real si el usuario sobreescribe la key
-- **Detección de acordes**: analizar los stems para mostrar los acordes que suenan en cada compás
-- **Tempo tap**: permitir al usuario tocar el tempo manualmente si la detección automática falla
+- **Jam Zone visual**: reemplazar los chips de notas por un teclado de piano visual interactivo
+- **Diapasón interactivo**: mostrar el mástil de guitarra/bajo con las notas de la escala resaltadas
+- **🔗 Tab Finder**: botón por stem que busca tabs en Ultimate Guitar (se abre en el navegador predeterminado)
+
+## Phase 2 — Visualización
+
+- **Jam Zone visual**: reemplazar los chips de notas por un diapasón interactivo de guitarra/bajo
+- **Diapasón interactivo**: mostrar el mástil de guitarra/bajo con las notas de la escala resaltadas, notas raíz en naranja, toggle guitarra/bajo
 
 ---
 
 ## Phase 3
 
-- AI chord detection
-- Lyrics sync
-- MIDI extraction
-- Smart EQ isolation
+- Practice mode como contenedor de todas las herramientas anteriores
+- (por definir)
 
 ---
 
@@ -431,21 +440,22 @@ Cloud may later handle:
 
 # Long-Term Vision
 
-Velody can evolve into:
+Velody es una herramienta de práctica musical:
 
-- AI music practice platform
-- Stem remixing tool
-- Karaoke platform
-- Music learning assistant
-- Producer workflow tool
+- Separar canciones para aislar instrumentos
+- Tocar encima con tu propio instrumento
+- Ver escalas, notas en el diapasón, tabs
+- Practicar secciones específicas con loop
+- Aprender canciones escuchando stems individuales
 
-The initial MVP focuses ONLY on:
-- stability
-- stem quality
-- good UX
-- local processing
+El MVP se enfoca en:
 
-Avoid overengineering early.
+- estabilidad
+- buena UX
+- procesamiento local
+- cero features de producción
+
+Evitar overengineering.
 
 ---
 
@@ -456,6 +466,7 @@ Avoid overengineering early.
 El usuario puede grabar su propio instrumento sobre cualquier stem original.
 
 ### Flujo
+
 1. Click **REC** en un stem (e.g., Guitar)
 2. El stem original se mutea automáticamente
 3. Cuenta regresiva: 3... 2... 1...
@@ -467,9 +478,11 @@ El usuario puede grabar su propio instrumento sobre cualquier stem original.
 9. **Discard** → se descarta el blob, el stem original vuelve a la normalidad
 
 ### Backend IPC
+
 - `record:save(songDir, data, name, format)` → escribe temp webm, FFmpeg lo convierte a WAV/MP3, devuelve path
 
 ### Frontend State
+
 - `recording`: `'idle' | 'countdown' | 'recording' | 'confirming'`
 - `recordingKey`: qué stem se está grabando
 - `recordedStems: string[]` — paths de stems grabados, se agregan a la grilla
@@ -477,13 +490,8 @@ El usuario puede grabar su propio instrumento sobre cualquier stem original.
 - `recordingFormat`: `'wav' | 'mp3'`
 
 ### Pendientes / Fase 2
-- **Monitoreo interno con baja latencia**: migrar playback de `<audio>` elements a `AudioContext` + `AudioWorklet` para mezclar el input del mic con los stems en tiempo real. Esto permite que el usuario se escuche sin depender del monitor directo de la interfaz.
-- **Loop / count-in**: que el usuario pueda elegir un intro de 1 compás antes de grabar, o que la canción loopee para grabar múltiples capas.
-- **Input selection**: elegir qué dispositivo de entrada usar (mic 1, interfaz, etc.) via `deviceId` en `getUserMedia`.
-- **Efectos en vivo**: compresor, reverb, EQ sobre el monitor de entrada.
-- **Quantize / corrección rítmica**: ajustar la grabación al tempo detectado.
-- **Undo / reemplazar take**: poder borrar un take grabado o reemplazar el stem original por el recording.
-- **Visualización de forma de onda** del recording al terminar.
+
+- **Loop para multi-take**: que la canción loopee la sección A/B durante la grabación para grabar múltiples capas.
 
 ---
 
@@ -491,14 +499,14 @@ El usuario puede grabar su propio instrumento sobre cualquier stem original.
 
 These services exist and can be used when the app needs cloud features:
 
-| Service | Account | Potential Use | Phase |
-|---|---|---|---|
-| **Supabase** | Existing user/DBs | Auth, user DB, project storage | Phase 3+ |
-| **Cloudflare R2** | Existing, more buckets possible | Backup/sync stems, share sessions | Phase 3+ |
-| **Firebase (Workers)** | Existing project | Push notifications, messaging | Phase 3+ |
-| **Mailgun** | Experienced user | Transactional emails (welcome, recovery) | Phase 3+ |
-| **Railway** | Used for other projects | Backend API deployment if needed | Phase 3+ |
-| **GitHub** | Active account | Repository hosting, CI/CD | Now |
+| Service                | Account                         | Potential Use                            | Phase    |
+| ---------------------- | ------------------------------- | ---------------------------------------- | -------- |
+| **Supabase**           | Existing user/DBs               | Auth, user DB, project storage           | Phase 3+ |
+| **Cloudflare R2**      | Existing, more buckets possible | Backup/sync stems, share sessions        | Phase 3+ |
+| **Firebase (Workers)** | Existing project                | Push notifications, messaging            | Phase 3+ |
+| **Mailgun**            | Experienced user                | Transactional emails (welcome, recovery) | Phase 3+ |
+| **Railway**            | Used for other projects         | Backend API deployment if needed         | Phase 3+ |
+| **GitHub**             | Active account                  | Repository hosting, CI/CD                | Now      |
 
 ---
 
@@ -507,12 +515,14 @@ These services exist and can be used when the app needs cloud features:
 Build a powerful local-first music tool before investing in cloud infrastructure.
 
 Focus on:
+
 - UX
 - speed
 - reliability
 - workflow
 
 NOT on:
+
 - microservices
 - Kubernetes
 - expensive GPU infrastructure

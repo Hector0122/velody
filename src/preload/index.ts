@@ -29,7 +29,8 @@ const api = {
     ipcRenderer.invoke('song:saveMeta', songDir, meta),
   loadMeta: (songDir: string) => ipcRenderer.invoke('song:loadMeta', songDir),
   detectKey: (songDir: string, stemPaths: string[]) =>
-    ipcRenderer.invoke('song:detectKey', songDir, stemPaths)
+    ipcRenderer.invoke('song:detectKey', songDir, stemPaths),
+  openExternal: (url: string) => ipcRenderer.invoke('shell:openExternal', url)
 }
 
 if (process.contextIsolated) {

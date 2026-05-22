@@ -5,6 +5,7 @@ import { registerIpcHandlers, setSetupManager } from './ipc/handlers'
 import { SetupManager } from './setup'
 import { startAudioServer, stopAudioServer, audioUrl } from './audio-server'
 import icon from '../../resources/icon.png?asset'
+import { exec } from 'child_process'
 
 let mainWindow: BrowserWindow | null = null
 let setupManager: SetupManager | null = null
@@ -29,7 +30,9 @@ function createWindow(): void {
   })
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
-    shell.openExternal(details.url)
+    exec(`sensible-browser "${details.url}"`, (err) => {
+      if (err) shell.openExternal(details.url)
+    })
     return { action: 'deny' }
   })
 

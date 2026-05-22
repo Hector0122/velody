@@ -2,17 +2,17 @@
 
 ## Estados por stem
 
-| Estado | Tipo | Descripción |
-|---|---|---|
+| Estado   | Tipo                      | Descripción                                          |
+| -------- | ------------------------- | ---------------------------------------------------- |
 | `active` | `Record<string, boolean>` | Stem habilitado (▶ verde) o deshabilitado (▶ blanco) |
-| `solo` | `Record<string, boolean>` | Stem en solo (máximo 1 a la vez) |
+| `solo`   | `Record<string, boolean>` | Stem en solo (máximo 1 a la vez)                     |
 
 ## Estado global
 
-| Estado | Tipo | Descripción |
-|---|---|---|
+| Estado          | Tipo      | Descripción                     |
+| --------------- | --------- | ------------------------------- |
 | `masterPlaying` | `boolean` | Master reproduciendo o detenido |
-| `masterVolume` | `number` | Volumen global (0–1) |
+| `masterVolume`  | `number`  | Volumen global (0–1)            |
 
 ## Volumen final por stem
 
@@ -26,11 +26,13 @@ si no                          → masterVolume
 ## Comportamiento
 
 ### 1. Estado inicial
+
 - `masterPlaying = false`
 - `active = {}` (ningún stem activo)
 - `solo = {}` (ningún solo)
 
 ### 2. Master Play
+
 - Si `masterPlaying = false`:
   - `active = { todos: true }`
   - Inicia reproducción en todos los `<audio>`
@@ -41,6 +43,7 @@ si no                          → masterVolume
   - `masterPlaying = false`
 
 ### 3. Click en stem individual (▶)
+
 - Si `masterPlaying = false`:
   - Si el stem estaba inactivo: `active = { key: true }` (solo este), inicia reproducción
   - Si el stem estaba activo: nada (no tiene sentido apagar el único que iba a sonar)
@@ -49,6 +52,7 @@ si no                          → masterVolume
   - Si el stem estaba activo: `active[key] = false` (se silencia, los demás siguen)
 
 ### 4. Solo (S)
+
 - Al hacer clic en S de un stem:
   - Si ese stem ya está en solo: `solo = {}` (quita solo)
   - Si otro stem estaba en solo: `solo = { key: true }` (mueve el solo)
@@ -57,6 +61,7 @@ si no                          → masterVolume
 - `active` no se modifica. Al quitar solo, los stems activos vuelven a sonar.
 
 ### 5. Mute (M)
+
 - **Eliminado**. Es redundante porque desactivar un stem (▶) ya hace eso. Si se necesita silencio temporal sin cambiar el estado activo, se usa solo en otra pista o se baja el volumen.
 
 ## Diagrama de flujo

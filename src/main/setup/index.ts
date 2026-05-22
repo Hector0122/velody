@@ -18,12 +18,9 @@ const PYTHON = isWin ? 'python' : 'python3'
 const VENV_PYTHON = join(VENV_DIR, isWin ? 'Scripts' : 'bin', isWin ? 'python.exe' : PYTHON)
 
 const HELP: Record<string, string> = {
-  python:
-    'Install Python 3:\n  sudo apt install python3 python3-pip python3-venv',
-  demucs:
-    `Create venv and install Demucs:\n  python3 -m venv ${VENV_DIR}\n  ${VENV_DIR}/bin/pip install demucs torch torchaudio`,
-  ffmpeg:
-    'Install FFmpeg:\n  sudo apt install ffmpeg'
+  python: 'Install Python 3:\n  sudo apt install python3 python3-pip python3-venv',
+  demucs: `Create venv and install Demucs:\n  python3 -m venv ${VENV_DIR}\n  ${VENV_DIR}/bin/pip install demucs torch torchaudio`,
+  ffmpeg: 'Install FFmpeg:\n  sudo apt install ffmpeg'
 }
 
 export class SetupManager {

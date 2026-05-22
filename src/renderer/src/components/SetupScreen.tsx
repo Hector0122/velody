@@ -35,7 +35,8 @@ function SetupScreen(): React.JSX.Element {
   }
 
   const currentStepIdx = STEP_ORDER.findIndex((s) => steps[s]?.status === 'working')
-  const overallProgress = currentStepIdx >= 0 ? Math.round((currentStepIdx / STEP_ORDER.length) * 100) : 0
+  const overallProgress =
+    currentStepIdx >= 0 ? Math.round((currentStepIdx / STEP_ORDER.length) * 100) : 0
 
   return (
     <div className="min-h-screen bg-neutral-950 flex items-center justify-center p-8">
