@@ -1,15 +1,19 @@
 import { ipcMain, dialog } from 'electron'
 import { spawn } from 'child_process'
 import { join } from 'path'
-import { mkdirSync, writeFileSync, existsSync } from 'fs'
+import { mkdirSync, writeFileSync, existsSync, readdirSync, statSync, readFileSync, rmSync } from 'fs'
 import { SetupManager } from '../setup'
 
-const STEM_NAMES = ['vocals', 'drums', 'bass', 'other']
+const STEM_NAMES = ['vocals', 'drums', 'bass', 'other', 'piano', 'guitar']
 
 let setupManager: SetupManager | null = null
 
 export function setSetupManager(mgr: SetupManager): void {
   setupManager = mgr
+}
+
+function getStemsRootDir(): string {
+  return join(__dirname, '../../output/stems')
 }
 
 function getOutputDir(songPath: string): string {
@@ -18,7 +22,7 @@ function getOutputDir(songPath: string): string {
       .split(/[/\\]/)
       .pop()
       ?.replace(/\.[^.]+$/, '') || 'untitled'
-  return join(__dirname, '../../output/stems', songName)
+  return join(getStemsRootDir(), songName)
 }
 
 function generateWav(
@@ -83,9 +87,15 @@ function findExistingStem(outDir: string, name: string): string | null {
   return null
 }
 
+function saveOrigin(outDir: string, songPath: string): void {
+  writeFileSync(join(outDir, '.origin'), songPath, 'utf-8')
+}
+
 function simulateSeparation(songPath: string): string[] {
   const outDir = getOutputDir(songPath)
   mkdirSync(outDir, { recursive: true })
+
+  saveOrigin(outDir, songPath)
 
   return STEM_NAMES.map((name) => {
     // Reuse real stems if they already exist (from a previous demucs run)
@@ -100,7 +110,28 @@ function simulateSeparation(songPath: string): string[] {
   })
 }
 
+export interface SongItem {
+  name: string
+  stems: string[]
+}
+
 export function registerIpcHandlers(): void {
+  ipcMain.handle('songs:list', (): SongItem[] => {
+    const root = getStemsRootDir()
+    if (!existsSync(root)) return []
+    return readdirSync(root)
+      .filter((entry) => statSync(join(root, entry)).isDirectory())
+      .map((name) => {
+        const dir = join(root, name)
+        const stems = readdirSync(dir)
+          .filter((f) => STEM_NAMES.some((s) => f.startsWith(s)))
+          .map((f) => join(dir, f))
+        return { name, stems }
+      })
+      .filter((s) => s.stems.length > 0)
+      .sort((a, b) => b.name.localeCompare(a.name))
+  })
+
   ipcMain.handle('dialog:openFile', async () => {
     const result = await dialog.showOpenDialog({
       properties: ['openFile'],
@@ -110,6 +141,54 @@ export function registerIpcHandlers(): void {
       return null
     }
     return result.filePaths[0]
+  })
+
+  ipcMain.handle('song:analyze', async (_event, songDir: string) => {
+    const pythonPath = setupManager?.getPythonPath() ?? 'python3'
+    const pythonScript = join(__dirname, '../../python-worker/analyze.py')
+
+    return new Promise<Record<string, unknown>>((resolve, reject) => {
+      const proc = spawn(pythonPath, [pythonScript, songDir], {
+        cwd: join(__dirname, '../../python-worker')
+      })
+      let output = ''
+      proc.stdout.on('data', (data: Buffer) => {
+        output += data.toString().trim()
+      })
+      proc.stderr.on('data', (data: Buffer) => {
+        console.error(`[analyze] ${data}`)
+      })
+      proc.on('close', (code) => {
+        if (code === 0) {
+          try {
+            resolve(JSON.parse(output))
+          } catch {
+            reject(new Error('Failed to parse analyze output'))
+          }
+        } else {
+          reject(new Error(`Analyze process exited with code ${code}`))
+        }
+      })
+      proc.on('error', reject)
+    })
+  })
+
+  ipcMain.handle('analysis:load', async (_event, songDir: string) => {
+    try {
+      const analysisPath = join(songDir, 'analysis.json')
+      if (!existsSync(analysisPath)) return null
+      const raw = readFileSync(analysisPath, 'utf-8')
+      return JSON.parse(raw)
+    } catch {
+      return null
+    }
+  })
+
+  ipcMain.handle('song:delete', (_event, songName: string) => {
+    const dir = join(getStemsRootDir(), songName)
+    if (!existsSync(dir)) return { success: false, error: 'Song not found' }
+    rmSync(dir, { recursive: true, force: true })
+    return { success: true }
   })
 
   ipcMain.handle('separation:start', async (_event, songPath: string) => {
@@ -137,6 +216,8 @@ export function registerIpcHandlers(): void {
           if (code === 0) {
             try {
               const stems = JSON.parse(output) as string[]
+              const outDir = getOutputDir(songPath)
+              saveOrigin(outDir, songPath)
               resolve(stems)
             } catch {
               reject(new Error('Failed to parse Python output'))

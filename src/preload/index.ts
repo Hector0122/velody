@@ -3,6 +3,10 @@ import { contextBridge, ipcRenderer } from 'electron'
 const api = {
   openFileDialog: () => ipcRenderer.invoke('dialog:openFile'),
   startSeparation: (songPath: string) => ipcRenderer.invoke('separation:start', songPath),
+  listSongs: () => ipcRenderer.invoke('songs:list'),
+  analyzeSong: (songDir: string) => ipcRenderer.invoke('song:analyze', songDir),
+  loadAnalysis: (songDir: string) => ipcRenderer.invoke('analysis:load', songDir),
+  deleteSong: (songName: string) => ipcRenderer.invoke('song:delete', songName),
   readAudioFile: (filePath: string) => ipcRenderer.invoke('audio:readFile', filePath),
   getAudioUrl: (filePath: string) => ipcRenderer.invoke('audio:url', filePath),
   getSetupStatus: () => ipcRenderer.invoke('setup:status'),
