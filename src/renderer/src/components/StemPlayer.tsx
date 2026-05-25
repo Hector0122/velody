@@ -98,6 +98,7 @@ function StemPlayer({ stems, songName, onExportAll }: StemPlayerProps): React.JS
   const recordingChunksRef = useRef<Blob[]>([])
   const recordingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const recordingStartTimeRef = useRef(0)
+  const recordingOffsetRef = useRef(0)
 
   const allStems = useMemo(() => [...stems, ...recordedStems], [stems, recordedStems])
 
@@ -119,8 +120,6 @@ function StemPlayer({ stems, songName, onExportAll }: StemPlayerProps): React.JS
   const [metronomeOn, setMetronomeOn] = useState(false)
   const [bpm, setBpm] = useState(120)
   const [metroVolume, setMetroVolume] = useState(0.5)
-  const tapTimesRef = useRef<number[]>([])
-  const [tapBpm, setTapBpm] = useState<number | null>(null)
 
   const audioEls = useRef<Record<string, HTMLAudioElement>>({})
   const stemWaves = useRef<Record<string, WaveSurfer>>({})
@@ -828,37 +827,6 @@ function StemPlayer({ stems, songName, onExportAll }: StemPlayerProps): React.JS
     setTransposing(false)
   }
 
-  const handleTap = useCallback((): void => {
-    const now = Date.now()
-    const taps = tapTimesRef.current
-    taps.push(now)
-
-    // Keep last 8 taps
-    if (taps.length > 8) taps.shift()
-
-    if (taps.length < 2) return
-
-    // Calculate intervals between consecutive taps
-    const intervals: number[] = []
-    for (let i = 1; i < taps.length; i++) {
-      intervals.push(taps[i] - taps[i - 1])
-    }
-
-    // Filter out intervals that are too short (< 200ms = >300 BPM) or too long (> 1500ms = <40 BPM)
-    const valid = intervals.filter((v) => v >= 200 && v <= 1500)
-    if (valid.length === 0) return
-
-    const avg = valid.reduce((a, b) => a + b, 0) / valid.length
-    const detected = Math.round(60000 / avg)
-    const clamped = Math.max(40, Math.min(280, detected))
-    setBpm(clamped)
-    setTapBpm(clamped)
-    lastScheduledBeatRef.current = -1
-
-    // Clear tap indicator after 1.5s
-    setTimeout(() => setTapBpm(null), 1500)
-  }, [])
-
   const handleOpenTab = useCallback(
     (stemKey: string): void => {
       if (!window.api) return
@@ -947,6 +915,7 @@ function StemPlayer({ stems, songName, onExportAll }: StemPlayerProps): React.JS
     const mr = new MediaRecorder(stream, { mimeType: 'audio/webm' })
     mediaRecorderRef.current = mr
     recordingChunksRef.current = []
+    recordingOffsetRef.current = positionRef.current
 
     mr.ondataavailable = (e) => {
       if (e.data.size > 0) recordingChunksRef.current.push(e.data)
@@ -1008,7 +977,8 @@ function StemPlayer({ stems, songName, onExportAll }: StemPlayerProps): React.JS
       songDir,
       Array.from(new Uint8Array(arrayBuf)),
       name,
-      recordingFormat
+      recordingFormat,
+      recordingOffsetRef.current
     )
     if (result.success && result.path) {
       setRecordedStems((prev) => [...prev, result.path!])
@@ -1021,6 +991,31 @@ function StemPlayer({ stems, songName, onExportAll }: StemPlayerProps): React.JS
     setRecordingElapsed(0)
     setRecordingCount(3)
     recordingChunksRef.current = []
+  }
+
+  const handleDeleteRecording = async (path: string): Promise<void> => {
+    const key = stemNameFromPath(path)
+    const el = audioEls.current[key]
+    if (el) {
+      el.pause()
+      el.src = ''
+      el.onerror = null
+      delete audioEls.current[key]
+    }
+    if (stemWaves.current[key]) {
+      stemWaves.current[key].destroy()
+      delete stemWaves.current[key]
+      delete waveUrlsRef.current[key]
+    }
+    setRecordedStems((prev) => prev.filter((p) => p !== path))
+    setActive((prev) => {
+      const next = { ...prev }
+      delete next[key]
+      return next
+    })
+    if (window.api) {
+      window.api.deleteFile(path)
+    }
   }
 
   const handleMasterVolume = useCallback((e: React.ChangeEvent<HTMLInputElement>): void => {
@@ -1264,7 +1259,9 @@ function StemPlayer({ stems, songName, onExportAll }: StemPlayerProps): React.JS
                       if (el) {
                         audioEls.current[key] = el
                         el.preload = 'none'
-                        el.ontimeupdate = () => onAudioTimeRef.current(el.currentTime)
+                        if (!isRecording) {
+                          el.ontimeupdate = () => onAudioTimeRef.current(el.currentTime)
+                        }
                       }
                     }}
                   />
@@ -1277,7 +1274,19 @@ function StemPlayer({ stems, songName, onExportAll }: StemPlayerProps): React.JS
                         {meta.label}
                       </span>
                       {isRecording && (
-                        <span className="text-[9px] font-bold text-red-500 bg-red-500/10 px-1.5 py-0.5 rounded">REC</span>
+                        <div className="flex items-center gap-1">
+                          <span className="text-[9px] font-bold text-red-500 bg-red-500/10 px-1.5 py-0.5 rounded">REC</span>
+                          <button
+                            onClick={() => {
+                              const recPath = allStems.find((p) => stemNameFromPath(p) === key)
+                              if (recPath) handleDeleteRecording(recPath)
+                            }}
+                            className="text-[9px] text-neutral-600 hover:text-red-400 hover:bg-red-500/10 rounded px-1 py-0.5 transition-colors"
+                            title="Delete recording"
+                          >
+                            ✕
+                          </button>
+                        </div>
                       )}
                     </div>
                     {isAudible && (
@@ -1608,17 +1617,6 @@ function StemPlayer({ stems, songName, onExportAll }: StemPlayerProps): React.JS
                 className="w-6 h-6 rounded bg-neutral-800 text-neutral-400 hover:text-white text-xs flex items-center justify-center"
               >
                 +
-              </button>
-              <button
-                onClick={handleTap}
-                className={`ml-1 px-2 py-1 rounded text-[10px] font-semibold transition-colors ${
-                  tapBpm
-                    ? 'bg-orange-600 text-white'
-                    : 'bg-neutral-800 text-neutral-400 hover:text-white'
-                }`}
-                title="Tap to find BPM"
-              >
-                Tap
               </button>
             </div>
             {/* Row 2: ON/OFF + Volume */}

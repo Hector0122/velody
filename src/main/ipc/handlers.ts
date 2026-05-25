@@ -13,111 +13,23 @@ import {
   readFileSync
 } from 'fs'
 import { SetupManager } from '../setup'
+import { JobManager } from '../jobs/JobManager'
 
 const STEM_NAMES = ['vocals', 'drums', 'bass', 'other', 'piano', 'guitar']
 
 let setupManager: SetupManager | null = null
+let jobManager: JobManager | null = null
 
 export function setSetupManager(mgr: SetupManager): void {
   setupManager = mgr
 }
 
+export function setJobManager(mgr: JobManager): void {
+  jobManager = mgr
+}
+
 function getStemsRootDir(): string {
   return join(__dirname, '../../output/stems')
-}
-
-function getOutputDir(songPath: string): string {
-  const songName =
-    join(songPath)
-      .split(/[/\\]/)
-      .pop()
-      ?.replace(/\.[^.]+$/, '') || 'untitled'
-  return join(getStemsRootDir(), songName)
-}
-
-function generateWav(
-  filePath: string,
-  frequency: number,
-  durationSec: number,
-  sampleRate = 44100
-): void {
-  const numSamples = Math.floor(sampleRate * durationSec)
-  const buffer = Buffer.alloc(44 + numSamples * 2)
-
-  // RIFF header
-  buffer.write('RIFF', 0)
-  buffer.writeUInt32LE(36 + numSamples * 2, 4)
-  buffer.write('WAVE', 8)
-
-  // fmt subchunk
-  buffer.write('fmt ', 12)
-  buffer.writeUInt32LE(16, 16) // subchunk size
-  buffer.writeUInt16LE(1, 20) // PCM format
-  buffer.writeUInt16LE(1, 22) // mono
-  buffer.writeUInt32LE(sampleRate, 24)
-  buffer.writeUInt32LE(sampleRate * 2, 28) // byte rate
-  buffer.writeUInt16LE(2, 32) // block align
-  buffer.writeUInt16LE(16, 34) // bits per sample
-
-  // data subchunk
-  buffer.write('data', 36)
-  buffer.writeUInt32LE(numSamples * 2, 40)
-
-  // Write samples
-  for (let i = 0; i < numSamples; i++) {
-    const t = i / sampleRate
-    let sample = Math.sin(2 * Math.PI * frequency * t)
-
-    // Add harmonics for richer sound
-    sample += 0.3 * Math.sin(2 * Math.PI * frequency * 2 * t)
-    sample += 0.1 * Math.sin(2 * Math.PI * frequency * 3 * t)
-
-    // Normalize
-    sample *= 0.5
-
-    const intSample = Math.max(-32768, Math.min(32767, Math.floor(sample * 32767)))
-    buffer.writeInt16LE(intSample, 44 + i * 2)
-  }
-
-  writeFileSync(filePath, buffer)
-}
-
-const STEM_CONFIG: Record<string, { freq: number; duration: number }> = {
-  vocals: { freq: 440, duration: 60 },
-  drums: { freq: 180, duration: 60 },
-  bass: { freq: 110, duration: 60 },
-  other: { freq: 660, duration: 60 }
-}
-
-function findExistingStem(outDir: string, name: string): string | null {
-  for (const ext of ['.mp3', '.wav', '.flac', '.m4a']) {
-    const p = join(outDir, `${name}${ext}`)
-    if (existsSync(p)) return p
-  }
-  return null
-}
-
-function saveOrigin(outDir: string, songPath: string): void {
-  writeFileSync(join(outDir, '.origin'), songPath, 'utf-8')
-}
-
-function simulateSeparation(songPath: string): string[] {
-  const outDir = getOutputDir(songPath)
-  mkdirSync(outDir, { recursive: true })
-
-  saveOrigin(outDir, songPath)
-
-  return STEM_NAMES.map((name) => {
-    // Reuse real stems if they already exist (from a previous demucs run)
-    const existing = findExistingStem(outDir, name)
-    if (existing) return existing
-
-    // Fallback: generate a fake sine-wave stem
-    const config = STEM_CONFIG[name] || { freq: 440, duration: 15 }
-    const wavPath = join(outDir, `${name}.wav`)
-    generateWav(wavPath, config.freq, config.duration)
-    return wavPath
-  })
 }
 
 export interface SongItem {
@@ -199,49 +111,20 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle('separation:start', async (_event, songPath: string) => {
-    const useRealDemucs = setupManager?.canUseRealDemucs() ?? false
+  ipcMain.handle('separation:start', (_event, songPath: string) => {
+    if (!jobManager) return { error: 'Job manager not ready' }
+    const job = jobManager.enqueue(songPath)
+    return { jobId: job.id, songName: job.songName }
+  })
 
-    if (useRealDemucs) {
-      const pythonPath = setupManager?.getPythonPath() ?? 'python3'
-      const pythonScript = join(__dirname, '../../python-worker/separate.py')
-      const pythonProcess = spawn(pythonPath, [pythonScript, songPath], {
-        cwd: join(__dirname, '../../python-worker')
-      })
+  ipcMain.handle('separation:cancel', (_event, jobId: string) => {
+    if (!jobManager) return false
+    return jobManager.cancel(jobId)
+  })
 
-      return new Promise<string[]>((resolve, reject) => {
-        let output = ''
-
-        pythonProcess.stdout.on('data', (data: Buffer) => {
-          output += data.toString().trim()
-        })
-
-        pythonProcess.stderr.on('data', (data: Buffer) => {
-          console.error(`Python error: ${data}`)
-        })
-
-        pythonProcess.on('close', (code) => {
-          if (code === 0) {
-            try {
-              const stems = JSON.parse(output) as string[]
-              const outDir = getOutputDir(songPath)
-              saveOrigin(outDir, songPath)
-              resolve(stems)
-            } catch {
-              reject(new Error('Failed to parse Python output'))
-            }
-          } else {
-            reject(new Error(`Python process exited with code ${code}`))
-          }
-        })
-
-        pythonProcess.on('error', (err) => {
-          reject(err)
-        })
-      })
-    }
-
-    return simulateSeparation(songPath)
+  ipcMain.handle('separation:list', () => {
+    if (!jobManager) return []
+    return jobManager.getQueue()
   })
 
   ipcMain.handle('dialog:openDirectory', async () => {
@@ -385,7 +268,14 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle(
     'record:save',
-    async (_event, songDir: string, data: number[], name: string, format: string) => {
+    async (
+      _event,
+      songDir: string,
+      data: number[],
+      name: string,
+      format: string,
+      offset: number
+    ) => {
       const isMp3 = format === 'mp3'
       const ext = isMp3 ? '.mp3' : '.wav'
       const fileName = `${name}${ext}`
@@ -394,12 +284,32 @@ export function registerIpcHandlers(): void {
       writeFileSync(tempPath, Buffer.from(data))
 
       const ffmpeg = setupManager?.getFfmpegPath() ?? 'ffmpeg'
-      const convArgs = isMp3
-        ? ['-i', tempPath, '-c:a', 'libmp3lame', '-y', destPath]
-        : ['-i', tempPath, '-y', destPath]
+
+      let ffmpegArgs: string[]
+      if (offset > 0) {
+        // Prepend silence so the recording aligns with the song timeline
+        ffmpegArgs = [
+          '-f',
+          'lavfi',
+          '-i',
+          `anullsrc=r=44100:d=${offset}`,
+          '-i',
+          tempPath,
+          '-filter_complex',
+          '[0:a][1:a]concat=n=2:v=0:a=1',
+          '-y',
+          destPath
+        ]
+      } else {
+        ffmpegArgs = ['-i', tempPath, '-y', destPath]
+      }
+
+      if (isMp3) {
+        ffmpegArgs = [...ffmpegArgs.slice(0, -2), '-c:a', 'libmp3lame', ...ffmpegArgs.slice(-2)]
+      }
 
       return new Promise<{ success: boolean; path?: string; error?: string }>((resolve) => {
-        const proc = spawn(ffmpeg, convArgs)
+        const proc = spawn(ffmpeg, ffmpegArgs)
         proc.stderr.on('data', () => {})
         proc.on('close', (code) => {
           rmSync(tempPath, { force: true })
@@ -428,6 +338,14 @@ export function registerIpcHandlers(): void {
       })
       proc.on('error', (err) => resolve({ success: false, error: err.message }))
     })
+  })
+
+  ipcMain.handle('file:delete', (_event, filePath: string) => {
+    if (existsSync(filePath)) {
+      rmSync(filePath)
+      return { success: true }
+    }
+    return { success: false, error: 'File not found' }
   })
 
   ipcMain.handle('stems:transpose', async (_event, stemPaths: string[], semitones: number) => {

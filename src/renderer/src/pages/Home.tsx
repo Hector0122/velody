@@ -1,9 +1,6 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import AudioUploader from '../components/AudioUploader'
-import ProcessingScreen from '../components/ProcessingScreen'
 import StemPlayer from '../components/StemPlayer'
-
-type ViewState = 'upload' | 'processing' | 'results'
 
 interface RecentSong {
   name: string
@@ -16,17 +13,25 @@ interface Toast {
   type: 'error' | 'success'
 }
 
+interface PendingFile {
+  name: string
+  path: string
+}
+
 let toastCounter = 0
 
 function Home(): React.JSX.Element {
-  const [view, setView] = useState<ViewState>('upload')
-  const [selectedPath, setSelectedPath] = useState<string | null>(null)
-  const [selectedName, setSelectedName] = useState<string>('')
-  const [stems, setStems] = useState<string[]>([])
-  const [songName, setSongName] = useState('')
-  const [error, setError] = useState<string | null>(null)
+  const [currentSong, setCurrentSong] = useState<{
+    stems: string[]
+    songName: string
+  } | null>(null)
+  const [jobQueue, setJobQueue] = useState<SeparationJob[]>([])
+  const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([])
   const [recentSongs, setRecentSongs] = useState<RecentSong[]>([])
   const [toasts, setToasts] = useState<Toast[]>([])
+  const [error, setError] = useState<string | null>(null)
+  const jobQueueRef = useRef<SeparationJob[]>([])
+  jobQueueRef.current = jobQueue
 
   const addToast = useCallback((message: string, type: 'error' | 'success' = 'error') => {
     const id = ++toastCounter
@@ -34,9 +39,63 @@ function Home(): React.JSX.Element {
     setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 4000)
   }, [])
 
+  // Subscribe to backend events
+  useEffect(() => {
+    if (!window.api) return
+
+    const unsubProgress = window.api.onSeparationProgress((e) => {
+      setJobQueue((prev) =>
+        prev.map((j) => (j.id === e.jobId ? { ...j, progress: e.percent } : j))
+      )
+    })
+
+    const unsubComplete = window.api.onSeparationComplete((e) => {
+      setJobQueue((prev) =>
+        prev.map((j) =>
+          j.id === e.jobId
+            ? { ...j, status: 'completed', stems: e.stems, progress: 100 }
+            : j
+        )
+      )
+      window.api.listSongs().then(setRecentSongs)
+      const name = jobQueueRef.current.find((j) => j.id === e.jobId)?.songName ?? e.jobId
+      addToast(`\u2714 Ready: ${name}`, 'success')
+    })
+
+    const unsubFailed = window.api.onSeparationFailed((e) => {
+      setJobQueue((prev) =>
+        prev.map((j) =>
+          j.id === e.jobId ? { ...j, status: 'failed', error: e.error } : j
+        )
+      )
+      const name = jobQueueRef.current.find((j) => j.id === e.jobId)?.songName ?? e.jobId
+      addToast(`Failed: ${name}`, 'error')
+    })
+
+    const unsubCancelled = window.api.onSeparationCancelled((e) => {
+      setJobQueue((prev) =>
+        prev.map((j) => (j.id === e.jobId ? { ...j, status: 'cancelled' } : j))
+      )
+    })
+
+    const unsubChanged = window.api.onSeparationJobsChanged((jobs) => {
+      setJobQueue(jobs)
+    })
+
+    return () => {
+      unsubProgress()
+      unsubComplete()
+      unsubFailed()
+      unsubCancelled()
+      unsubChanged()
+    }
+  }, [addToast])
+
+  // Load recent songs and active jobs on mount
   useEffect(() => {
     if (!window.api) return
     window.api.listSongs().then(setRecentSongs)
+    window.api.listSeparationJobs().then(setJobQueue)
   }, [])
 
   const handleOpenFile = async (): Promise<void> => {
@@ -44,61 +103,56 @@ function Home(): React.JSX.Element {
     const path = await window.api.openFileDialog()
     if (!path) return
     const parts = path.split(/[/\\]/)
-    setSelectedPath(path)
-    setSelectedName(parts[parts.length - 1])
-
-    setView('processing')
-    setSongName(parts[parts.length - 1])
-    setError(null)
-
-    try {
-      const result = await window.api.startSeparation(path)
-      setStems(result)
-      setView('results')
-      const songs = await window.api.listSongs()
-      setRecentSongs(songs)
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Separation failed'
-      setError(msg)
-      addToast(msg, 'error')
-      setView('upload')
-    }
+    setPendingFiles((prev) => [...prev, { name: parts[parts.length - 1], path }])
   }
 
-  const handleSeparate = async (): Promise<void> => {
-    if (!selectedPath || !window.api) return
-
-    setView('processing')
-    setSongName(selectedName)
-    setError(null)
-
-    try {
-      const result = await window.api.startSeparation(selectedPath)
-      setStems(result)
-      setView('results')
-      const songs = await window.api.listSongs()
-      setRecentSongs(songs)
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Separation failed'
-      setError(msg)
-      addToast(msg, 'error')
-      setView('upload')
-    }
+  const handleFilesAdded = (paths: string[]): void => {
+    const newFiles = paths.map((p) => {
+      const parts = p.split(/[/\\]/)
+      return { name: parts[parts.length - 1], path: p }
+    })
+    setPendingFiles((prev) => [...prev, ...newFiles])
   }
 
-  const handleReset = (): void => {
-    setView('upload')
-    setSelectedPath(null)
-    setSelectedName('')
-    setStems([])
-    setSongName('')
-    setError(null)
+  const handleRemoveFile = (path: string): void => {
+    setPendingFiles((prev) => prev.filter((f) => f.path !== path))
+  }
+
+  const handleProcessAll = async (): Promise<void> => {
+    if (!window.api || pendingFiles.length === 0) return
+
+    const files = [...pendingFiles]
+    setPendingFiles([])
+
+    for (const file of files) {
+      try {
+        const result = await window.api.startSeparation(file.path)
+        setJobQueue((prev) => [
+          ...prev,
+          {
+            id: result.jobId,
+            songPath: file.path,
+            songName: result.songName,
+            status: 'queued',
+            progress: 0
+          }
+        ])
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Failed to queue'
+        setError(msg)
+        addToast(msg, 'error')
+      }
+    }
+    addToast(`${files.length} song(s) added to queue`, 'success')
   }
 
   const handleSelectRecent = (song: RecentSong): void => {
-    setSongName(song.name)
-    setStems(song.stems)
-    setView('results')
+    setCurrentSong({ stems: song.stems, songName: song.name })
+  }
+
+  const handleCancelJob = async (jobId: string): Promise<void> => {
+    if (!window.api) return
+    await window.api.cancelSeparation(jobId)
   }
 
   const handleDeleteSong = async (song: RecentSong, e: React.MouseEvent): Promise<void> => {
@@ -106,21 +160,21 @@ function Home(): React.JSX.Element {
     if (!window.api) return
     await window.api.deleteSong(song.name)
     setRecentSongs((prev) => prev.filter((s) => s.name !== song.name))
-    if (song.name === songName) handleReset()
+    if (currentSong?.songName === song.name) setCurrentSong(null)
   }
 
   const handleExportAll = async (): Promise<void> => {
-    if (!window.api) return
+    if (!window.api || !currentSong) return
     const dir = await window.api.openDirectoryDialog()
     if (!dir) return
     const ext = '.wav'
-    for (const stemPath of stems) {
+    for (const stemPath of currentSong.stems) {
       const name =
         stemPath
           .split(/[/\\]/)
           .pop()
           ?.replace(/\.[^.]+$/, '') || 'stem'
-      const outPath = `${dir}/${songName} - ${name}${ext}`
+      const outPath = `${dir}/${currentSong.songName} - ${name}${ext}`
       try {
         await window.api.exportSingle(stemPath, outPath)
       } catch {
@@ -130,6 +184,10 @@ function Home(): React.JSX.Element {
     }
     addToast(`All stems exported to ${dir}`, 'success')
   }
+
+  const queuedJobs = jobQueue.filter(
+    (j) => j.status === 'queued' || j.status === 'running'
+  )
 
   return (
     <div className="min-h-screen bg-neutral-950 flex">
@@ -148,13 +206,59 @@ function Home(): React.JSX.Element {
           + New Song
         </button>
 
+        {/* Queue */}
+        {queuedJobs.length > 0 && (
+          <div className="mt-3 mx-3">
+            <h3 className="text-[10px] font-semibold text-neutral-500 uppercase tracking-wide mb-1.5">
+              Queue
+            </h3>
+            <div className="space-y-1">
+              {queuedJobs.map((job) => (
+                <div
+                  key={job.id}
+                  className="rounded-lg bg-neutral-900 border border-neutral-800 p-2 flex flex-col gap-1"
+                >
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[10px] text-neutral-300 truncate flex-1">
+                      {job.songName}
+                    </span>
+                    <button
+                      onClick={() => handleCancelJob(job.id)}
+                      className="text-[9px] text-neutral-600 hover:text-red-400 transition-colors shrink-0"
+                      title="Cancel"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                  {job.status === 'running' && (
+                    <div className="w-full bg-neutral-800 rounded-full h-1.5 overflow-hidden">
+                      <div
+                        className="bg-blue-500 h-full rounded-full transition-all duration-300"
+                        style={{ width: `${job.progress}%` }}
+                      />
+                    </div>
+                  )}
+                  {job.status === 'queued' && (
+                    <span className="text-[9px] text-neutral-600">
+                      Waiting...
+                    </span>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         <div className="flex-1 overflow-y-auto px-3 mt-3 space-y-1">
+          <h3 className="text-[10px] font-semibold text-neutral-500 uppercase tracking-wide mb-1.5">
+            Recent Songs
+          </h3>
           {recentSongs.map((song) => (
             <div key={song.name} className="relative group">
               <button
                 onClick={() => handleSelectRecent(song)}
                 className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
-                  song.name === songName && view === 'results'
+                  currentSong?.songName === song.name
                     ? 'bg-blue-600/20 text-blue-300 border border-blue-600/30'
                     : 'text-neutral-400 hover:text-white hover:bg-neutral-800'
                 }`}
@@ -181,26 +285,21 @@ function Home(): React.JSX.Element {
           </div>
         )}
 
-        {view === 'processing' ? (
-          <ProcessingScreen songName={songName} />
-        ) : view === 'results' && stems.length > 0 ? (
-          <StemPlayer stems={stems} songName={songName} onExportAll={handleExportAll} />
+        {currentSong ? (
+          <StemPlayer
+            stems={currentSong.stems}
+            songName={currentSong.songName}
+            onExportAll={handleExportAll}
+          />
         ) : (
           <div className="flex-1 flex items-center justify-center">
             <div className="text-center max-w-md">
               <p className="text-neutral-500 mb-4">Import a song to get started</p>
               <AudioUploader
-                selectedFile={selectedPath ? { name: selectedName, path: selectedPath } : null}
-                onFileSelect={(path) => {
-                  const parts = path.split(/[/\\]/)
-                  setSelectedPath(path)
-                  setSelectedName(parts[parts.length - 1])
-                }}
-                onRemove={() => {
-                  setSelectedPath(null)
-                  setSelectedName('')
-                }}
-                onSeparate={handleSeparate}
+                files={pendingFiles}
+                onFilesAdded={handleFilesAdded}
+                onRemoveFile={handleRemoveFile}
+                onProcessAll={handleProcessAll}
               />
             </div>
           </div>

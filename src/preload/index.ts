@@ -1,8 +1,82 @@
 import { contextBridge, ipcRenderer } from 'electron'
 
+export interface SeparationProgressEvent {
+  jobId: string
+  percent: number
+}
+
+export interface SeparationCompleteEvent {
+  jobId: string
+  stems: string[]
+}
+
+export interface SeparationFailedEvent {
+  jobId: string
+  error: string
+}
+
+export interface SeparationCancelledEvent {
+  jobId: string
+}
+
+export interface SeparationJob {
+  id: string
+  songPath: string
+  songName: string
+  status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled'
+  progress: number
+  stems?: string[]
+  error?: string
+}
+
 const api = {
   openFileDialog: () => ipcRenderer.invoke('dialog:openFile'),
-  startSeparation: (songPath: string) => ipcRenderer.invoke('separation:start', songPath),
+  startSeparation: (songPath: string) =>
+    ipcRenderer.invoke('separation:start', songPath) as Promise<{
+      jobId: string
+      songName: string
+    }>,
+  cancelSeparation: (jobId: string) =>
+    ipcRenderer.invoke('separation:cancel', jobId) as Promise<boolean>,
+  listSeparationJobs: () =>
+    ipcRenderer.invoke('separation:list') as Promise<SeparationJob[]>,
+
+  onSeparationProgress: (callback: (e: SeparationProgressEvent) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, e: SeparationProgressEvent) => callback(e)
+    ipcRenderer.on('separation:progress', handler)
+    return () => {
+      ipcRenderer.removeListener('separation:progress', handler)
+    }
+  },
+  onSeparationComplete: (callback: (e: SeparationCompleteEvent) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, e: SeparationCompleteEvent) => callback(e)
+    ipcRenderer.on('separation:complete', handler)
+    return () => {
+      ipcRenderer.removeListener('separation:complete', handler)
+    }
+  },
+  onSeparationFailed: (callback: (e: SeparationFailedEvent) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, e: SeparationFailedEvent) => callback(e)
+    ipcRenderer.on('separation:failed', handler)
+    return () => {
+      ipcRenderer.removeListener('separation:failed', handler)
+    }
+  },
+  onSeparationCancelled: (callback: (e: SeparationCancelledEvent) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, e: SeparationCancelledEvent) => callback(e)
+    ipcRenderer.on('separation:cancelled', handler)
+    return () => {
+      ipcRenderer.removeListener('separation:cancelled', handler)
+    }
+  },
+  onSeparationJobsChanged: (callback: (jobs: SeparationJob[]) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, jobs: SeparationJob[]) => callback(jobs)
+    ipcRenderer.on('separation:jobs-changed', handler)
+    return () => {
+      ipcRenderer.removeListener('separation:jobs-changed', handler)
+    }
+  },
+
   listSongs: () => ipcRenderer.invoke('songs:list'),
   deleteSong: (songName: string) => ipcRenderer.invoke('song:delete', songName),
   readAudioFile: (filePath: string) => ipcRenderer.invoke('audio:readFile', filePath),
@@ -18,8 +92,8 @@ const api = {
     ipcRenderer.invoke('export:mix', filePaths, outputPath, options),
   exportSingle: (filePath: string, outputPath: string) =>
     ipcRenderer.invoke('export:single', filePath, outputPath),
-  saveRecording: (songDir: string, data: number[], name: string, format: string) =>
-    ipcRenderer.invoke('record:save', songDir, data, name, format),
+  saveRecording: (songDir: string, data: number[], name: string, format: string, offset: number) =>
+    ipcRenderer.invoke('record:save', songDir, data, name, format, offset),
   transposeStems: (stemPaths: string[], semitones: number) =>
     ipcRenderer.invoke('stems:transpose', stemPaths, semitones),
   onSetupProgress: (callback: (progress: unknown) => void) => {
@@ -30,7 +104,8 @@ const api = {
   loadMeta: (songDir: string) => ipcRenderer.invoke('song:loadMeta', songDir),
   detectKey: (songDir: string, stemPaths: string[]) =>
     ipcRenderer.invoke('song:detectKey', songDir, stemPaths),
-  openExternal: (url: string) => ipcRenderer.invoke('shell:openExternal', url)
+  openExternal: (url: string) => ipcRenderer.invoke('shell:openExternal', url),
+  deleteFile: (filePath: string) => ipcRenderer.invoke('file:delete', filePath)
 }
 
 if (process.contextIsolated) {

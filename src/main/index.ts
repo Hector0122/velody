@@ -1,14 +1,16 @@
 import { app, shell, BrowserWindow, ipcMain } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
-import { registerIpcHandlers, setSetupManager } from './ipc/handlers'
+import { registerIpcHandlers, setSetupManager, setJobManager } from './ipc/handlers'
 import { SetupManager } from './setup'
+import { JobManager } from './jobs/JobManager'
 import { startAudioServer, stopAudioServer, audioUrl } from './audio-server'
 import icon from '../../resources/icon.png?asset'
 import { exec } from 'child_process'
 
 let mainWindow: BrowserWindow | null = null
 let setupManager: SetupManager | null = null
+let jobManager: JobManager | null = null
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
@@ -55,6 +57,9 @@ app.whenReady().then(async () => {
   setupManager = new SetupManager(false)
   setSetupManager(setupManager)
 
+  jobManager = new JobManager(setupManager)
+  setJobManager(jobManager)
+
   ipcMain.handle('setup:status', () => {
     return {
       complete: setupManager?.isSetupComplete() ?? true
@@ -95,6 +100,7 @@ app.whenReady().then(async () => {
 })
 
 app.on('before-quit', () => {
+  jobManager?.cleanup()
   stopAudioServer()
 })
 
