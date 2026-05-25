@@ -84,7 +84,7 @@ def detect_key(stem_paths: list[str]) -> str:
             if sig is None:
                 sig = np.zeros_like(s)
             elif len(s) > len(sig):
-                sig = np.resize(sig, len(s))
+                sig = np.pad(sig, (0, len(s) - len(sig)))
             sig[:len(s)] += s
         if sig is None:
             return 'C Major'

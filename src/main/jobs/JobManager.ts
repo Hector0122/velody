@@ -16,7 +16,12 @@ export interface SeparationJob {
 }
 
 function songNameFromPath(path: string): string {
-  return path.split(/[/\\]/).pop()?.replace(/\.[^.]+$/, '') || 'untitled'
+  return (
+    path
+      .split(/[/\\]/)
+      .pop()
+      ?.replace(/\.[^.]+$/, '') || 'untitled'
+  )
 }
 
 export class JobManager {

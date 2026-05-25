@@ -31,14 +31,11 @@ function AudioUploader({
 }: AudioUploaderProps): React.JSX.Element {
   const [isDragging, setIsDragging] = useState(false)
 
-  const extractPaths = useCallback(
-    (fileList: FileList | File[]): string[] => {
-      return Array.from(fileList)
-        .filter((f) => AUDIO_MIME.includes(f.type) || /\.(wav|mp3|flac|m4a|ogg)$/i.test(f.name))
-        .map((f) => (f as { path?: string }).path || f.name)
-    },
-    []
-  )
+  const extractPaths = useCallback((fileList: FileList | File[]): string[] => {
+    return Array.from(fileList)
+      .filter((f) => AUDIO_MIME.includes(f.type) || /\.(wav|mp3|flac|m4a|ogg)$/i.test(f.name))
+      .map((f) => (f as { path?: string }).path || f.name)
+  }, [])
 
   const handleDragOver = useCallback((e: React.DragEvent): void => {
     e.preventDefault()

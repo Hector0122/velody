@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, useLayoutEffect } from 'react'
 import AudioUploader from '../components/AudioUploader'
 import StemPlayer from '../components/StemPlayer'
 
@@ -31,7 +31,10 @@ function Home(): React.JSX.Element {
   const [toasts, setToasts] = useState<Toast[]>([])
   const [error, setError] = useState<string | null>(null)
   const jobQueueRef = useRef<SeparationJob[]>([])
-  jobQueueRef.current = jobQueue
+
+  useLayoutEffect(() => {
+    jobQueueRef.current = jobQueue
+  })
 
   const addToast = useCallback((message: string, type: 'error' | 'success' = 'error') => {
     const id = ++toastCounter
@@ -44,17 +47,13 @@ function Home(): React.JSX.Element {
     if (!window.api) return
 
     const unsubProgress = window.api.onSeparationProgress((e) => {
-      setJobQueue((prev) =>
-        prev.map((j) => (j.id === e.jobId ? { ...j, progress: e.percent } : j))
-      )
+      setJobQueue((prev) => prev.map((j) => (j.id === e.jobId ? { ...j, progress: e.percent } : j)))
     })
 
     const unsubComplete = window.api.onSeparationComplete((e) => {
       setJobQueue((prev) =>
         prev.map((j) =>
-          j.id === e.jobId
-            ? { ...j, status: 'completed', stems: e.stems, progress: 100 }
-            : j
+          j.id === e.jobId ? { ...j, status: 'completed', stems: e.stems, progress: 100 } : j
         )
       )
       window.api.listSongs().then(setRecentSongs)
@@ -64,18 +63,14 @@ function Home(): React.JSX.Element {
 
     const unsubFailed = window.api.onSeparationFailed((e) => {
       setJobQueue((prev) =>
-        prev.map((j) =>
-          j.id === e.jobId ? { ...j, status: 'failed', error: e.error } : j
-        )
+        prev.map((j) => (j.id === e.jobId ? { ...j, status: 'failed', error: e.error } : j))
       )
       const name = jobQueueRef.current.find((j) => j.id === e.jobId)?.songName ?? e.jobId
       addToast(`Failed: ${name}`, 'error')
     })
 
     const unsubCancelled = window.api.onSeparationCancelled((e) => {
-      setJobQueue((prev) =>
-        prev.map((j) => (j.id === e.jobId ? { ...j, status: 'cancelled' } : j))
-      )
+      setJobQueue((prev) => prev.map((j) => (j.id === e.jobId ? { ...j, status: 'cancelled' } : j)))
     })
 
     const unsubChanged = window.api.onSeparationJobsChanged((jobs) => {
@@ -185,9 +180,7 @@ function Home(): React.JSX.Element {
     addToast(`All stems exported to ${dir}`, 'success')
   }
 
-  const queuedJobs = jobQueue.filter(
-    (j) => j.status === 'queued' || j.status === 'running'
-  )
+  const queuedJobs = jobQueue.filter((j) => j.status === 'queued' || j.status === 'running')
 
   return (
     <div className="min-h-screen bg-neutral-950 flex">
@@ -239,9 +232,7 @@ function Home(): React.JSX.Element {
                     </div>
                   )}
                   {job.status === 'queued' && (
-                    <span className="text-[9px] text-neutral-600">
-                      Waiting...
-                    </span>
+                    <span className="text-[9px] text-neutral-600">Waiting...</span>
                   )}
                 </div>
               ))}
@@ -287,6 +278,7 @@ function Home(): React.JSX.Element {
 
         {currentSong ? (
           <StemPlayer
+            key={currentSong.songName}
             stems={currentSong.stems}
             songName={currentSong.songName}
             onExportAll={handleExportAll}

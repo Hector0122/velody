@@ -38,41 +38,50 @@ const api = {
     }>,
   cancelSeparation: (jobId: string) =>
     ipcRenderer.invoke('separation:cancel', jobId) as Promise<boolean>,
-  listSeparationJobs: () =>
-    ipcRenderer.invoke('separation:list') as Promise<SeparationJob[]>,
+  listSeparationJobs: () => ipcRenderer.invoke('separation:list') as Promise<SeparationJob[]>,
 
-  onSeparationProgress: (callback: (e: SeparationProgressEvent) => void) => {
-    const handler = (_event: Electron.IpcRendererEvent, e: SeparationProgressEvent) => callback(e)
+  onSeparationProgress: (callback: (e: SeparationProgressEvent) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, e: SeparationProgressEvent): void => {
+      callback(e)
+    }
     ipcRenderer.on('separation:progress', handler)
-    return () => {
+    return (): void => {
       ipcRenderer.removeListener('separation:progress', handler)
     }
   },
-  onSeparationComplete: (callback: (e: SeparationCompleteEvent) => void) => {
-    const handler = (_event: Electron.IpcRendererEvent, e: SeparationCompleteEvent) => callback(e)
+  onSeparationComplete: (callback: (e: SeparationCompleteEvent) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, e: SeparationCompleteEvent): void => {
+      callback(e)
+    }
     ipcRenderer.on('separation:complete', handler)
-    return () => {
+    return (): void => {
       ipcRenderer.removeListener('separation:complete', handler)
     }
   },
-  onSeparationFailed: (callback: (e: SeparationFailedEvent) => void) => {
-    const handler = (_event: Electron.IpcRendererEvent, e: SeparationFailedEvent) => callback(e)
+  onSeparationFailed: (callback: (e: SeparationFailedEvent) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, e: SeparationFailedEvent): void => {
+      callback(e)
+    }
     ipcRenderer.on('separation:failed', handler)
-    return () => {
+    return (): void => {
       ipcRenderer.removeListener('separation:failed', handler)
     }
   },
-  onSeparationCancelled: (callback: (e: SeparationCancelledEvent) => void) => {
-    const handler = (_event: Electron.IpcRendererEvent, e: SeparationCancelledEvent) => callback(e)
+  onSeparationCancelled: (callback: (e: SeparationCancelledEvent) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, e: SeparationCancelledEvent): void => {
+      callback(e)
+    }
     ipcRenderer.on('separation:cancelled', handler)
-    return () => {
+    return (): void => {
       ipcRenderer.removeListener('separation:cancelled', handler)
     }
   },
-  onSeparationJobsChanged: (callback: (jobs: SeparationJob[]) => void) => {
-    const handler = (_event: Electron.IpcRendererEvent, jobs: SeparationJob[]) => callback(jobs)
+  onSeparationJobsChanged: (callback: (jobs: SeparationJob[]) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, jobs: SeparationJob[]): void => {
+      callback(jobs)
+    }
     ipcRenderer.on('separation:jobs-changed', handler)
-    return () => {
+    return (): void => {
       ipcRenderer.removeListener('separation:jobs-changed', handler)
     }
   },

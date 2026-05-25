@@ -69,7 +69,11 @@ function Fretboard({ notes, rootNote }: FretboardProps): React.JSX.Element {
         <span className="text-xs text-neutral-500 ml-auto">{notes.length}-note scale</span>
       </div>
       <div className="w-full max-w-[90%] mx-auto">
-        <svg viewBox={`0 0 ${svgW} ${svgH}`} className="w-full h-auto" preserveAspectRatio="xMidYMid meet">
+        <svg
+          viewBox={`0 0 ${svgW} ${svgH}`}
+          className="w-full h-auto"
+          preserveAspectRatio="xMidYMid meet"
+        >
           {strings.map((s, si) => {
             const y = PADDING_Y + si * STRING_SPACING + STRING_SPACING / 2
             return (

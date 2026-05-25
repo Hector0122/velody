@@ -1,5 +1,5 @@
 import { ipcMain, dialog, shell } from 'electron'
-import { spawn, execSync, execFileSync } from 'child_process'
+import { spawn, execFile } from 'child_process'
 import { join } from 'path'
 import { tmpdir } from 'os'
 import {
@@ -96,9 +96,20 @@ export function registerIpcHandlers(): void {
       const pythonPath = setupManager?.getPythonPath() ?? 'python3'
       const scriptPath = join(__dirname, '../../python-worker/detect_key.py')
       try {
-        const out = execFileSync(pythonPath, [scriptPath, songDir, ...stemPaths], {
-          cwd: join(__dirname, '../../python-worker'),
-          encoding: 'utf-8'
+        const out = await new Promise<string>((resolve, reject) => {
+          execFile(
+            pythonPath,
+            [scriptPath, songDir, ...stemPaths],
+            {
+              cwd: join(__dirname, '../../python-worker'),
+              encoding: 'utf-8',
+              timeout: 30000
+            },
+            (err, stdout) => {
+              if (err) reject(err)
+              else resolve(stdout)
+            }
+          )
         })
         const result = JSON.parse(out.trim())
         if (result.key) return result.key
@@ -192,14 +203,29 @@ export function registerIpcHandlers(): void {
     writeFileSync(filePath, buf)
   }
 
-  function getLongestDuration(filePaths: string[]): number {
+  async function getLongestDuration(filePaths: string[]): Promise<number> {
     let maxDur = 0
     for (const fp of filePaths) {
       try {
-        const out = execSync(
-          `ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${fp}"`,
-          { encoding: 'utf-8', timeout: 5000 }
-        )
+        const out = await new Promise<string>((resolve, reject) => {
+          execFile(
+            'ffprobe',
+            [
+              '-v',
+              'error',
+              '-show_entries',
+              'format=duration',
+              '-of',
+              'default=noprint_wrappers=1:nokey=1',
+              fp
+            ],
+            { timeout: 5000 },
+            (err, stdout) => {
+              if (err) reject(err)
+              else resolve(stdout)
+            }
+          )
+        })
         const d = parseFloat(out.trim())
         if (d > maxDur) maxDur = d
       } catch {
@@ -216,7 +242,7 @@ export function registerIpcHandlers(): void {
       const allPaths = [...filePaths]
 
       if (options?.bpm) {
-        const dur = getLongestDuration(filePaths)
+        const dur = await getLongestDuration(filePaths)
         const tmpDir = mkdtempSync(join(tmpdir(), 'velody-click-'))
         const clickPath = join(tmpDir, 'click.wav')
         generateClickTrackWav(clickPath, options.bpm, Math.ceil(dur))
@@ -239,11 +265,13 @@ export function registerIpcHandlers(): void {
 
       return new Promise<{ success: boolean; error?: string }>((resolve) => {
         const proc = spawn(ffmpeg, args)
+        const timeout = setTimeout(() => proc.kill('SIGTERM'), 600_000)
         let stderr = ''
         proc.stderr.on('data', (data: Buffer) => {
           stderr += data.toString()
         })
         proc.on('close', (code) => {
+          clearTimeout(timeout)
           if (options?.bpm) {
             const tmpDir = join(allPaths[allPaths.length - 1], '..')
             rmSync(tmpDir, { recursive: true, force: true })
@@ -252,6 +280,7 @@ export function registerIpcHandlers(): void {
           else resolve({ success: false, error: stderr.slice(0, 500) })
         })
         proc.on('error', (err) => {
+          clearTimeout(timeout)
           if (options?.bpm) {
             const tmpDir = join(allPaths[allPaths.length - 1], '..')
             try {
@@ -310,13 +339,16 @@ export function registerIpcHandlers(): void {
 
       return new Promise<{ success: boolean; path?: string; error?: string }>((resolve) => {
         const proc = spawn(ffmpeg, ffmpegArgs)
+        const timeout = setTimeout(() => proc.kill('SIGTERM'), 600_000)
         proc.stderr.on('data', () => {})
         proc.on('close', (code) => {
+          clearTimeout(timeout)
           rmSync(tempPath, { force: true })
           if (code === 0) resolve({ success: true, path: destPath })
           else resolve({ success: false, error: 'Conversion failed' })
         })
         proc.on('error', (err) => {
+          clearTimeout(timeout)
           rmSync(tempPath, { force: true })
           resolve({ success: false, error: err.message })
         })
@@ -328,15 +360,20 @@ export function registerIpcHandlers(): void {
     const ffmpeg = setupManager?.getFfmpegPath() ?? 'ffmpeg'
     return new Promise<{ success: boolean; error?: string }>((resolve) => {
       const proc = spawn(ffmpeg, ['-i', filePath, '-y', outputPath])
+      const timeout = setTimeout(() => proc.kill('SIGTERM'), 600_000)
       let stderr = ''
       proc.stderr.on('data', (data: Buffer) => {
         stderr += data.toString()
       })
       proc.on('close', (code) => {
+        clearTimeout(timeout)
         if (code === 0) resolve({ success: true })
         else resolve({ success: false, error: stderr.slice(0, 500) })
       })
-      proc.on('error', (err) => resolve({ success: false, error: err.message }))
+      proc.on('error', (err) => {
+        clearTimeout(timeout)
+        resolve({ success: false, error: err.message })
+      })
     })
   })
 
@@ -374,11 +411,16 @@ export function registerIpcHandlers(): void {
           '-y',
           outPath
         ])
+        const timeout = setTimeout(() => proc.kill('SIGTERM'), 600_000)
         proc.stderr.on('data', () => {})
-        proc.on('close', (code) =>
+        proc.on('close', (code) => {
+          clearTimeout(timeout)
           code === 0 ? resolve() : reject(new Error(`FFmpeg exit code ${code}`))
-        )
-        proc.on('error', reject)
+        })
+        proc.on('error', (err) => {
+          clearTimeout(timeout)
+          reject(err)
+        })
       })
     }
 

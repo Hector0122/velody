@@ -3,17 +3,14 @@ import SetupScreen from './components/SetupScreen'
 import Home from './pages/Home'
 
 function App(): React.JSX.Element {
-  const [ready, setReady] = useState<boolean | null>(null)
+  const [ready, setReady] = useState<boolean | null>(() => (window.api ? null : true))
 
   useEffect(() => {
-    if (!window.api) {
-      setReady(true)
-      return
-    }
+    if (ready !== null || !window.api) return
     window.api.getSetupStatus().then((status) => {
       setReady(status.complete)
     })
-  }, [])
+  }, [ready])
 
   if (ready === null) {
     return (
