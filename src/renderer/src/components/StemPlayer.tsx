@@ -3,8 +3,9 @@ import WaveSurfer from 'wavesurfer.js'
 import ExportModal from './ExportModal'
 import JamZone from './JamZone'
 import RecordingConfirmationModal from './RecordingConfirmationModal'
-import TimelineMarkers from './TimelineMarkers'
-import StemCard from './StemCard'
+import StemGrid from './StemGrid'
+import MasterPanel from './MasterPanel'
+import TimelinePanel from './TimelinePanel'
 import { useMetronome } from '../hooks/useMetronome'
 import { useRecording } from '../hooks/useRecording'
 
@@ -43,6 +44,18 @@ function stemNameFromPath(path: string): string {
       ?.replace(/\.[^.]+$/, '') || path
   )
 }
+
+function formatTime(seconds: number): string {
+  const m = Math.floor(seconds / 60)
+  const s = Math.floor(seconds % 60)
+  return `${m}:${s.toString().padStart(2, '0')}`
+}
+
+const extForFormat = (fmt: string): string => (fmt === 'mp3' ? '.mp3' : '.wav')
+const formatFilter = (fmt: string): { name: string; extensions: string[] } =>
+  fmt === 'mp3'
+    ? { name: 'MP3 Audio', extensions: ['mp3'] }
+    : { name: 'WAV Audio', extensions: ['wav'] }
 
 function StemPlayer({ stems, songName, onExportAll }: StemPlayerProps): React.JSX.Element {
   const [progress, setProgress] = useState(0)
@@ -99,24 +112,9 @@ function StemPlayer({ stems, songName, onExportAll }: StemPlayerProps): React.JS
 
   const allStems = useMemo(() => [...stems, ...recordedStems], [stems, recordedStems])
 
-  const keyPickerRef = useRef<HTMLDivElement | null>(null)
-
-  // Close key picker on click outside
-  useEffect(() => {
-    if (!showKeyPicker) return
-    const handler = (e: MouseEvent): void => {
-      if (keyPickerRef.current && !keyPickerRef.current.contains(e.target as Node)) {
-        setShowKeyPicker(false)
-      }
-    }
-    document.addEventListener('mousedown', handler)
-    return () => document.removeEventListener('mousedown', handler)
-  }, [showKeyPicker])
-
   const audioEls = useRef<Record<string, HTMLAudioElement>>({})
   const stemWaves = useRef<Record<string, WaveSurfer>>({})
   const waveUrlsRef = useRef<Record<string, string>>({})
-  const stemContainers = useRef<Record<string, HTMLDivElement | null>>({})
   const masterWaveRef = useRef<WaveSurfer | null>(null)
   const masterWaveContainer = useRef<HTMLDivElement | null>(null)
   const masterWaveReady = useRef(false)
@@ -128,6 +126,9 @@ function StemPlayer({ stems, songName, onExportAll }: StemPlayerProps): React.JS
   const lastSeekRef = useRef(0)
 
   const audioStartRef = useRef<number | null>(null)
+
+  // We create stem WaveSurfers eagerly when URLs load so mini-waveforms
+  // are ready before the user presses play.
 
   // Shared refs (used by metronome + recording hooks)
   const audioCtxRef = useRef<AudioContext | null>(null)
@@ -327,16 +328,17 @@ function StemPlayer({ stems, songName, onExportAll }: StemPlayerProps): React.JS
     })()
   }, [urls, stems, setBpm, originalBpmRef, setDetectedKey])
 
-  // Init WaveSurfers — selective: only create/destroy what changed
+  // Init WaveSurfers eagerly — mini-waveforms ready before user presses play
   useEffect(() => {
     if (Object.keys(urls).length === 0) return
 
     const currentWaves = stemWaves.current
     const newWaves: Record<string, WaveSurfer> = {}
-    let firstReady = false
 
     for (const { key, meta } of stemItems) {
-      const container = stemContainers.current[key]
+      const container = document.querySelector(
+        `[data-stem-container="${key}"]`
+      ) as HTMLDivElement | null
       const url = urls[key]
       if (!container || !url) continue
 
@@ -363,13 +365,6 @@ function StemPlayer({ stems, songName, onExportAll }: StemPlayerProps): React.JS
         interact: false
       })
       ws.load(url)
-
-      ws.on('ready', () => {
-        if (!firstReady) {
-          setDuration(ws.getDuration())
-          firstReady = true
-        }
-      })
 
       newWaves[key] = ws
       waveUrlsRef.current[key] = url
@@ -419,6 +414,7 @@ function StemPlayer({ stems, songName, onExportAll }: StemPlayerProps): React.JS
     ws.on('ready', () => {
       masterWaveReady.current = true
       setMasterWaveDuration(ws.getDuration())
+      setDuration(ws.getDuration())
     })
 
     ws.on('click', (relativeX: number) => {
@@ -639,7 +635,10 @@ function StemPlayer({ stems, songName, onExportAll }: StemPlayerProps): React.JS
       }
       // Master play: enable all stems
       const all: Record<string, boolean> = {}
-      for (const path of stemsRef.current) all[stemNameFromPath(path)] = true
+      for (const path of stemsRef.current) {
+        const key = stemNameFromPath(path)
+        all[key] = true
+      }
       setActive(all)
       for (const key of Object.keys(audioEls.current)) {
         const el = audioEls.current[key]
@@ -673,28 +672,25 @@ function StemPlayer({ stems, songName, onExportAll }: StemPlayerProps): React.JS
     })
   }, [])
 
-  const extForFormat = (fmt: string): string => (fmt === 'mp3' ? '.mp3' : '.wav')
-  const formatFilter = (fmt: string): { name: string; extensions: string[] } =>
-    fmt === 'mp3'
-      ? { name: 'MP3 Audio', extensions: ['mp3'] }
-      : { name: 'WAV Audio', extensions: ['wav'] }
+  const handleExportSingle = useCallback(
+    async (key: string): Promise<void> => {
+      if (!window.api) return
+      const stemPath = allStems.find((p) => stemNameFromPath(p) === key)
+      if (!stemPath) return
+      const stemLabel = STEM_META[key]?.label ?? key
+      const outPath = await window.api.saveFileDialog(
+        `${songName} - ${stemLabel}${extForFormat(exportFormat)}`,
+        [formatFilter(exportFormat)]
+      )
+      if (!outPath) return
+      setExporting(true)
+      await window.api.exportSingle(stemPath, outPath)
+      setExporting(false)
+    },
+    [allStems, songName, exportFormat]
+  )
 
-  const handleExportSingle = async (key: string): Promise<void> => {
-    if (!window.api) return
-    const stemPath = allStems.find((p) => stemNameFromPath(p) === key)
-    if (!stemPath) return
-    const stemLabel = STEM_META[key]?.label ?? key
-    const outPath = await window.api.saveFileDialog(
-      `${songName} - ${stemLabel}${extForFormat(exportFormat)}`,
-      [formatFilter(exportFormat)]
-    )
-    if (!outPath) return
-    setExporting(true)
-    await window.api.exportSingle(stemPath, outPath)
-    setExporting(false)
-  }
-
-  const handleExportMix = async (): Promise<void> => {
+  const handleExportMix = useCallback(async (): Promise<void> => {
     if (!window.api) return
     const selected = Object.entries(exportSelection)
       .filter(([, v]) => v)
@@ -711,29 +707,32 @@ function StemPlayer({ stems, songName, onExportAll }: StemPlayerProps): React.JS
     setExporting(true)
     await window.api.exportMix(stemPaths, outPath, exportWithMetronome ? { bpm } : undefined)
     setExporting(false)
-  }
+  }, [exportSelection, allStems, songName, exportFormat, exportWithMetronome, bpm])
 
-  const handlePitchShift = async (delta: number): Promise<void> => {
-    if (!window.api) return
-    const newShift = pitchShift + delta
-    if (newShift < -12 || newShift > 12) return
-    if (newShift === 0) {
-      setPitchShift(0)
-      setShiftedPaths({})
-      return
-    }
-    setTransposing(true)
-    try {
-      const paths = await window.api.transposeStems(allStems, newShift)
-      const map: Record<string, string> = {}
-      for (const p of paths) map[stemNameFromPath(p)] = p
-      setShiftedPaths(map)
-      setPitchShift(newShift)
-    } catch {
-      /* transpose failed */
-    }
-    setTransposing(false)
-  }
+  const handlePitchShift = useCallback(
+    async (delta: number): Promise<void> => {
+      if (!window.api) return
+      const newShift = pitchShift + delta
+      if (newShift < -12 || newShift > 12) return
+      if (newShift === 0) {
+        setPitchShift(0)
+        setShiftedPaths({})
+        return
+      }
+      setTransposing(true)
+      try {
+        const paths = await window.api.transposeStems(allStems, newShift)
+        const map: Record<string, string> = {}
+        for (const p of paths) map[stemNameFromPath(p)] = p
+        setShiftedPaths(map)
+        setPitchShift(newShift)
+      } catch {
+        /* transpose failed */
+      }
+      setTransposing(false)
+    },
+    [pitchShift, allStems]
+  )
 
   const handleOpenTab = useCallback(
     (stemKey: string): void => {
@@ -746,11 +745,11 @@ function StemPlayer({ stems, songName, onExportAll }: StemPlayerProps): React.JS
     [songName]
   )
 
-  const toggleExportSelection = (key: string): void => {
+  const toggleExportSelection = useCallback((key: string): void => {
     setExportSelection((prev) => ({ ...prev, [key]: !prev[key] }))
-  }
+  }, [])
 
-  const handleDeleteRecording = async (path: string): Promise<void> => {
+  const handleDeleteRecording = useCallback(async (path: string): Promise<void> => {
     const key = stemNameFromPath(path)
     const el = audioEls.current[key]
     if (el) {
@@ -773,17 +772,101 @@ function StemPlayer({ stems, songName, onExportAll }: StemPlayerProps): React.JS
     if (window.api) {
       window.api.deleteFile(path)
     }
-  }
+  }, [])
 
   const handleMasterVolume = useCallback((e: React.ChangeEvent<HTMLInputElement>): void => {
     setMasterVolume(parseFloat(e.target.value))
   }, [])
 
-  const formatTime = (seconds: number): string => {
-    const m = Math.floor(seconds / 60)
-    const s = Math.floor(seconds % 60)
-    return `${m}:${s.toString().padStart(2, '0')}`
-  }
+  const handleKeySelect = useCallback(
+    (key: string): void => {
+      setManualKey(key)
+      setShowKeyPicker(false)
+      const songDir = stems.length > 0 ? stems[0].replace(/[/\\][^/\\]+$/, '') : ''
+      if (window.api && songDir) {
+        window.api.saveMeta(songDir, { key, _version: CACHE_VERSION } as Record<string, unknown>)
+      }
+    },
+    [stems]
+  )
+
+  const handleKeyReset = useCallback((): void => {
+    setManualKey(null)
+    setShowKeyPicker(false)
+  }, [])
+
+  // Memoized marker callbacks for TimelinePanel
+  const handleSetLoopStart = useCallback((time: number | null): void => {
+    setLoopStart(time)
+  }, [])
+  const handleSetLoopEnd = useCallback((time: number | null): void => {
+    setLoopEnd(time)
+  }, [])
+  const handleToggleLoop = useCallback((): void => {
+    setLoopEnabled((prev) => !prev)
+  }, [])
+  const handleClearMarkers = useCallback((): void => {
+    setMarkers([])
+  }, [])
+  const handleRemoveMarker = useCallback((i: number): void => {
+    setMarkers((prev) => prev.filter((_, idx) => idx !== i))
+  }, [])
+
+  const handleToggleKeyPicker = useCallback((): void => {
+    setShowKeyPicker((prev) => !prev)
+  }, [])
+
+  // BPM callbacks
+  const handleBpmDecrement = useCallback((): void => {
+    setBpm((prev) => {
+      const next = Math.max(40, prev - 1)
+      lastScheduledBeatRef.current = -1
+      return next
+    })
+  }, [setBpm, lastScheduledBeatRef])
+  const handleBpmIncrement = useCallback((): void => {
+    setBpm((prev) => {
+      const next = Math.min(280, prev + 1)
+      lastScheduledBeatRef.current = -1
+      return next
+    })
+  }, [setBpm, lastScheduledBeatRef])
+  const handleBpmChange = useCallback(
+    (v: number): void => {
+      setBpm(v)
+      lastScheduledBeatRef.current = -1
+    },
+    [setBpm, lastScheduledBeatRef]
+  )
+
+  // Search for "setBpm" calls to also handle lastScheduledBeatRef
+  const handleMetronomeToggle = useCallback((): void => {
+    setMetronomeOn((prev) => !prev)
+  }, [setMetronomeOn])
+  const handleMetroVolumeChange = useCallback(
+    (v: number): void => {
+      setMetroVolume(v)
+    },
+    [setMetroVolume]
+  )
+  const handleMonitorVolumeChange = useCallback(
+    (v: number): void => {
+      setMonitorVolume(v)
+    },
+    [setMonitorVolume]
+  )
+  const handleRecordingFormatChange = useCallback(
+    (fmt: 'wav' | 'mp3'): void => {
+      setRecordingFormat(fmt)
+    },
+    [setRecordingFormat]
+  )
+  const handleCountInBarsChange = useCallback(
+    (bars: number): void => {
+      setCountInBars(bars)
+    },
+    [setCountInBars]
+  )
 
   return (
     <>
@@ -816,121 +899,21 @@ function StemPlayer({ stems, songName, onExportAll }: StemPlayerProps): React.JS
           </div>
 
           {/* Master Timeline */}
-          <div className="bg-neutral-900/80 rounded-xl border border-neutral-800 p-4">
-            <div className="flex items-center justify-between mb-2">
-              <div className="flex items-center gap-2">
-                <span className="text-xs font-semibold text-neutral-400 uppercase tracking-wide">
-                  Timeline
-                </span>
-                <span className="text-[10px] font-mono text-neutral-500">
-                  {formatTime(progress)} / {formatTime(masterWaveDuration || duration)}
-                </span>
-              </div>
-              <div className="flex items-center gap-2">
-                {markers.length > 0 && (
-                  <>
-                    <select
-                      value={
-                        loopStart !== null
-                          ? markers.findIndex((m) => m.time === loopStart).toString()
-                          : ''
-                      }
-                      onChange={(e) => {
-                        const idx = parseInt(e.target.value)
-                        if (!isNaN(idx) && markers[idx]) setLoopStart(markers[idx].time)
-                        else setLoopStart(null)
-                      }}
-                      className="bg-neutral-800 text-neutral-300 text-[10px] border border-neutral-700 rounded px-1 py-0.5"
-                    >
-                      <option value="">A—</option>
-                      {markers.map((m, i) => (
-                        <option key={i} value={i}>
-                          {m.label}
-                        </option>
-                      ))}
-                    </select>
-                    <select
-                      value={
-                        loopEnd !== null
-                          ? markers.findIndex((m) => m.time === loopEnd).toString()
-                          : ''
-                      }
-                      onChange={(e) => {
-                        const idx = parseInt(e.target.value)
-                        if (!isNaN(idx) && markers[idx]) setLoopEnd(markers[idx].time)
-                        else setLoopEnd(null)
-                      }}
-                      className="bg-neutral-800 text-neutral-300 text-[10px] border border-neutral-700 rounded px-1 py-0.5"
-                    >
-                      <option value="">B—</option>
-                      {markers.map((m, i) => (
-                        <option key={i} value={i}>
-                          {m.label}
-                        </option>
-                      ))}
-                    </select>
-                    <button
-                      onClick={() => setLoopEnabled(!loopEnabled)}
-                      disabled={loopStart === null || loopEnd === null}
-                      className={`px-2 py-0.5 rounded text-[10px] font-semibold transition-colors ${
-                        loopEnabled
-                          ? 'bg-green-600 text-white'
-                          : 'bg-neutral-800 text-neutral-500 hover:text-white disabled:opacity-30'
-                      }`}
-                    >
-                      Loop
-                    </button>
-                  </>
-                )}
-                <button
-                  onClick={() => setMarkers([])}
-                  className="px-2 py-0.5 rounded text-[10px] font-medium bg-neutral-800 text-neutral-500 hover:text-white transition-colors"
-                >
-                  Clear
-                </button>
-              </div>
-            </div>
-            <div className="relative">
-              <div
-                ref={(el) => {
-                  masterWaveContainer.current = el
-                }}
-                className="w-full rounded overflow-hidden cursor-pointer h-16"
-              />
-              {/* Marker overlays + loop highlight */}
-              <TimelineMarkers
-                markers={markers}
-                loopStart={loopStart}
-                loopEnd={loopEnd}
-                loopEnabled={loopEnabled}
-                duration={masterWaveDuration || duration}
-                onMarkerClick={(m) => {
-                  if (loopStart === m.time) setLoopStart(null)
-                  else if (loopEnd === m.time) setLoopEnd(null)
-                  else if (loopStart === null) setLoopStart(m.time)
-                  else if (loopEnd === null) setLoopEnd(m.time)
-                  else {
-                    setLoopStart(m.time)
-                    setLoopEnd(null)
-                  }
-                }}
-                onMarkerContextMenu={(i) => {
-                  const m = markers[i]
-                  setMarkers((prev) => prev.filter((_, idx) => idx !== i))
-                  if (loopStart === m.time) setLoopStart(null)
-                  if (loopEnd === m.time) setLoopEnd(null)
-                }}
-              />
-            </div>
-            <div className="flex items-center justify-between mt-1">
-              <span className="text-[10px] text-neutral-600">
-                Double-click to add marker • Click marker to set A/B • Right-click to remove
-              </span>
-              <span className="text-[10px] text-neutral-600">
-                {markers.length} marker{markers.length !== 1 ? 's' : ''}
-              </span>
-            </div>
-          </div>
+          <TimelinePanel
+            markers={markers}
+            loopStart={loopStart}
+            loopEnd={loopEnd}
+            loopEnabled={loopEnabled}
+            masterWaveDuration={masterWaveDuration}
+            duration={duration}
+            progress={progress}
+            masterWaveContainerRef={masterWaveContainer}
+            onSetLoopStart={handleSetLoopStart}
+            onSetLoopEnd={handleSetLoopEnd}
+            onToggleLoop={handleToggleLoop}
+            onClearMarkers={handleClearMarkers}
+            onRemoveMarker={handleRemoveMarker}
+          />
 
           {showJamZone && effectiveKey && (
             <JamZone
@@ -942,328 +925,63 @@ function StemPlayer({ stems, songName, onExportAll }: StemPlayerProps): React.JS
             />
           )}
 
-          <div className="grid grid-cols-2 gap-4">
-            {stemItems.map(({ key, meta, isRecording }) => {
-              const isAudible = masterPlaying && active[key]
-              const isInactive = !active[key] && !masterPlaying
-              const canTab = ['guitar', 'bass', 'piano'].includes(key)
-              const canRecord = recording === 'idle' && !isRecording
-              const isRecordingThis = recordingKey === key && recording === 'recording'
-
-              return (
-                <StemCard
-                  key={key}
-                  meta={meta}
-                  isRecording={isRecording}
-                  isAudible={isAudible}
-                  isInactive={isInactive}
-                  isActive={!!active[key]}
-                  isSolo={!!solo[key]}
-                  progress={progress}
-                  duration={duration}
-                  exporting={exporting}
-                  isRecordingThis={isRecordingThis}
-                  recordingElapsed={recordingElapsed}
-                  canTab={canTab}
-                  canRecord={canRecord}
-                  formatTime={formatTime}
-                  onToggle={() => toggleStem(key)}
-                  onSolo={() => toggleSolo(key)}
-                  onExport={() => handleExportSingle(key)}
-                  onOpenTab={() => handleOpenTab(key)}
-                  onStartRecording={() => handleStartRecording(key)}
-                  onStopRecording={handleStopRecording}
-                  onDeleteRecording={() => {
-                    const recPath = allStems.find((p) => stemNameFromPath(p) === key)
-                    if (recPath) handleDeleteRecording(recPath)
-                  }}
-                >
-                  <audio
-                    ref={(el) => {
-                      if (el) {
-                        audioEls.current[key] = el
-                        el.preload = 'none'
-                        if (!isRecording) {
-                          el.ontimeupdate = () => onAudioTimeRef.current(el.currentTime)
-                        }
-                      }
-                    }}
-                  />
-                  <div
-                    ref={(el) => {
-                      stemContainers.current[key] = el
-                    }}
-                    className="h-8 rounded overflow-hidden cursor-pointer"
-                  />
-                </StemCard>
-              )
-            })}
-          </div>
+          <StemGrid
+            items={stemItems}
+            masterPlaying={masterPlaying}
+            active={active}
+            solo={solo}
+            progress={progress}
+            duration={duration}
+            exporting={exporting}
+            recording={recording}
+            recordingKey={recordingKey}
+            recordingElapsed={recordingElapsed}
+            formatTime={formatTime}
+            allStems={allStems}
+            onToggleStem={toggleStem}
+            onToggleSolo={toggleSolo}
+            onExportSingle={handleExportSingle}
+            onOpenTab={handleOpenTab}
+            onStartRecording={handleStartRecording}
+            onStopRecording={handleStopRecording}
+            onDeleteRecording={handleDeleteRecording}
+          />
         </div>
 
-        <div className="w-44 shrink-0 bg-neutral-900/80 rounded-xl border border-neutral-800 p-4 flex flex-col items-center gap-5 self-start order-1">
-          <h3 className="text-sm font-semibold text-neutral-400 uppercase tracking-wide">Master</h3>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={toggleMasterPlay}
-              className="w-12 h-12 rounded-full flex items-center justify-center bg-blue-600/20 hover:bg-blue-600/30 transition-colors"
-            >
-              {masterPlaying ? (
-                <span className="text-blue-400 text-base font-bold">| |</span>
-              ) : (
-                <span className="text-blue-400 text-base ml-0.5">&#9654;</span>
-              )}
-            </button>
-            <button
-              onClick={handleRestart}
-              className="w-10 h-10 rounded-full flex items-center justify-center bg-neutral-800 hover:bg-neutral-700 transition-colors text-neutral-400 hover:text-white"
-              title="Restart"
-            >
-              &#9664;&#9664;
-            </button>
-          </div>
-          <span className="text-[10px] font-mono text-neutral-500 -mt-2">
-            {formatTime(progress)} / {formatTime(duration)}
-          </span>
-          <div className="flex flex-col items-center gap-2 w-full">
-            <span className="text-xs text-neutral-500">Volume</span>
-            <input
-              type="range"
-              aria-label="Master volume"
-              min="0"
-              max="1"
-              step="0.01"
-              value={masterVolume}
-              onChange={handleMasterVolume}
-              className="accent-blue-500 cursor-pointer h-[120px] w-6 [writing-mode:vertical-lr] [direction:rtl]"
-            />
-            <span className="text-xs text-neutral-500">{Math.round(masterVolume * 100)}%</span>
-          </div>
-
-          <div className="border-t border-neutral-800 pt-4 w-full flex flex-col gap-3">
-            <h3 className="text-sm font-semibold text-neutral-400 uppercase tracking-wide text-center">
-              Record
-            </h3>
-            <div className="flex flex-col gap-2 w-full">
-              <span className="text-[10px] text-neutral-500 text-center">Monitor volume</span>
-              <input
-                type="range"
-                aria-label="Monitor volume"
-                min="0"
-                max="1"
-                step="0.01"
-                value={monitorVolume}
-                onChange={(e) => setMonitorVolume(parseFloat(e.target.value))}
-                className="accent-red-500 cursor-pointer w-full"
-              />
-            </div>
-            <div className="flex items-center justify-center gap-2">
-              <button
-                onClick={() => setRecordingFormat('wav')}
-                className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors ${
-                  recordingFormat === 'wav'
-                    ? 'bg-red-600 text-white'
-                    : 'bg-neutral-800 text-neutral-400'
-                }`}
-              >
-                WAV
-              </button>
-              <button
-                onClick={() => setRecordingFormat('mp3')}
-                className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors ${
-                  recordingFormat === 'mp3'
-                    ? 'bg-red-600 text-white'
-                    : 'bg-neutral-800 text-neutral-400'
-                }`}
-              >
-                MP3
-              </button>
-            </div>
-            <div className="flex items-center justify-center gap-1.5">
-              <span className="text-[10px] text-neutral-500">Count-in</span>
-              {[0, 1, 2, 4].map((bars) => (
-                <button
-                  key={bars}
-                  onClick={() => setCountInBars(bars)}
-                  className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors ${
-                    countInBars === bars
-                      ? 'bg-red-600 text-white'
-                      : 'bg-neutral-800 text-neutral-400'
-                  }`}
-                >
-                  {bars === 0 ? 'OFF' : `${bars}`}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div className="border-t border-neutral-800 pt-3 w-full">
-            <button
-              onClick={() => setShowExportModal(true)}
-              className="w-full px-2 py-1.5 rounded text-[10px] font-semibold bg-blue-600 hover:bg-blue-500 text-white transition-colors"
-            >
-              Export Mix...
-            </button>
-          </div>
-
-          <div className="border-t border-neutral-800 pt-4 w-full flex flex-col gap-3">
-            <h3 className="text-sm font-semibold text-neutral-400 uppercase tracking-wide text-center">
-              Key
-            </h3>
-            <div className="text-center relative">
-              <button
-                onClick={() => setShowKeyPicker(!showKeyPicker)}
-                className="text-lg font-bold text-white hover:text-orange-400 transition-colors cursor-pointer"
-                title="Click to change key"
-              >
-                {effectiveKey || '...'}
-                {manualKey && <span className="text-[10px] text-orange-400 ml-1">✎</span>}
-              </button>
-              {showKeyPicker && (
-                <div
-                  ref={keyPickerRef}
-                  className="absolute z-50 top-full mt-2 left-1/2 -translate-x-1/2 bg-neutral-900 border border-neutral-700 rounded-xl p-3 shadow-2xl w-48 max-h-64 overflow-y-auto"
-                >
-                  <div className="grid grid-cols-2 gap-1">
-                    {(() => {
-                      const NOTE = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
-                      const types = ['Major', 'Minor']
-                      const keys: string[] = []
-                      for (const n of NOTE) for (const t of types) keys.push(`${n} ${t}`)
-                      return keys.map((k) => (
-                        <button
-                          key={k}
-                          onClick={() => {
-                            setManualKey(k)
-                            setShowKeyPicker(false)
-                            const songDir =
-                              stems.length > 0 ? stems[0].replace(/[/\\][^/\\]+$/, '') : ''
-                            if (window.api && songDir) {
-                              window.api.saveMeta(songDir, {
-                                key: k,
-                                _version: CACHE_VERSION
-                              } as Record<string, unknown>)
-                            }
-                          }}
-                          className={`px-2 py-1 rounded text-xs font-medium transition-colors ${
-                            effectiveKey === k
-                              ? 'bg-orange-600 text-white'
-                              : 'bg-neutral-800 text-neutral-400 hover:text-white hover:bg-neutral-700'
-                          }`}
-                        >
-                          {k}
-                        </button>
-                      ))
-                    })()}
-                  </div>
-                  {manualKey && (
-                    <button
-                      onClick={() => {
-                        setManualKey(null)
-                        setShowKeyPicker(false)
-                      }}
-                      className="w-full mt-2 px-2 py-1 rounded text-xs font-medium bg-neutral-800 text-neutral-500 hover:text-white transition-colors"
-                    >
-                      Reset to detected ({detectedKey ?? '...'})
-                    </button>
-                  )}
-                </div>
-              )}
-            </div>
-            <div className="flex items-center justify-center gap-1.5">
-              <button
-                onClick={() => handlePitchShift(-1)}
-                disabled={transposing || pitchShift <= -12}
-                className="w-8 h-8 rounded bg-neutral-800 text-neutral-400 hover:text-white disabled:text-neutral-600 disabled:cursor-not-allowed text-sm flex items-center justify-center"
-              >
-                −
-              </button>
-              <span className="w-14 text-center text-sm font-mono text-orange-400">
-                {pitchShift === 0 ? '±0' : pitchShift > 0 ? `+${pitchShift}` : `${pitchShift}`}
-              </span>
-              <button
-                onClick={() => handlePitchShift(1)}
-                disabled={transposing || pitchShift >= 12}
-                className="w-8 h-8 rounded bg-neutral-800 text-neutral-400 hover:text-white disabled:text-neutral-600 disabled:cursor-not-allowed text-sm flex items-center justify-center"
-              >
-                +
-              </button>
-            </div>
-            <span className="text-[10px] text-neutral-500 text-center">
-              {transposing ? 'Transposing...' : 'semitone steps'}
-            </span>
-          </div>
-
-          <div className="border-t border-neutral-800 pt-4 w-full flex flex-col gap-3">
-            <h3 className="text-sm font-semibold text-neutral-400 uppercase tracking-wide text-center">
-              Metronome
-            </h3>
-            {/* Row 1: BPM controls */}
-            <div className="flex items-center justify-center gap-1.5">
-              <span className="text-xs text-neutral-500">BPM</span>
-              <button
-                onClick={() => {
-                  setBpm((prev) => Math.max(40, prev - 1))
-                  lastScheduledBeatRef.current = -1
-                }}
-                className="w-6 h-6 rounded bg-neutral-800 text-neutral-400 hover:text-white text-xs flex items-center justify-center"
-              >
-                −
-              </button>
-              <input
-                type="number"
-                aria-label="BPM"
-                min="40"
-                max="280"
-                value={bpm}
-                onChange={(e) => {
-                  const v = parseInt(e.target.value, 10)
-                  if (!isNaN(v) && v >= 40 && v <= 280) {
-                    setBpm(v)
-                    lastScheduledBeatRef.current = -1
-                  }
-                }}
-                className="w-12 h-6 text-center text-xs font-mono text-white bg-neutral-800 border border-neutral-700 rounded focus:outline-none focus:border-orange-500 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
-              />
-              <button
-                onClick={() => {
-                  setBpm((prev) => Math.min(280, prev + 1))
-                  lastScheduledBeatRef.current = -1
-                }}
-                className="w-6 h-6 rounded bg-neutral-800 text-neutral-400 hover:text-white text-xs flex items-center justify-center"
-              >
-                +
-              </button>
-            </div>
-            {/* Row 2: ON/OFF + Volume */}
-            <div className="flex items-center justify-between px-1">
-              <button
-                onClick={() => setMetronomeOn((prev) => !prev)}
-                className={`px-4 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
-                  metronomeOn
-                    ? 'bg-orange-600 text-white'
-                    : 'bg-neutral-800 text-neutral-400 hover:text-white'
-                }`}
-              >
-                {metronomeOn ? 'ON' : 'OFF'}
-              </button>
-              <div className="flex flex-col items-center gap-1.5">
-                <span className="text-xs text-neutral-500">Vol</span>
-                <input
-                  type="range"
-                  aria-label="Metronome volume"
-                  min="0"
-                  max="1"
-                  step="0.01"
-                  value={metroVolume}
-                  onChange={(e) => setMetroVolume(parseFloat(e.target.value))}
-                  className="accent-orange-500 cursor-pointer h-[60px] w-5 [writing-mode:vertical-lr] [direction:rtl]"
-                />
-                <span className="text-xs text-neutral-500">{Math.round(metroVolume * 100)}%</span>
-              </div>
-            </div>
-          </div>
-        </div>
+        <MasterPanel
+          masterPlaying={masterPlaying}
+          masterVolume={masterVolume}
+          progress={progress}
+          duration={duration}
+          effectiveKey={effectiveKey}
+          manualKey={manualKey}
+          detectedKey={detectedKey}
+          pitchShift={pitchShift}
+          transposing={transposing}
+          bpm={bpm}
+          metronomeOn={metronomeOn}
+          metroVolume={metroVolume}
+          monitorVolume={monitorVolume}
+          recordingFormat={recordingFormat}
+          countInBars={countInBars}
+          showKeyPicker={showKeyPicker}
+          onToggleMasterPlay={toggleMasterPlay}
+          onRestart={handleRestart}
+          onMasterVolumeChange={handleMasterVolume}
+          onPitchShift={handlePitchShift}
+          onBpmDecrement={handleBpmDecrement}
+          onBpmChange={handleBpmChange}
+          onBpmIncrement={handleBpmIncrement}
+          onMetronomeToggle={handleMetronomeToggle}
+          onMetroVolumeChange={handleMetroVolumeChange}
+          onMonitorVolumeChange={handleMonitorVolumeChange}
+          onRecordingFormatChange={handleRecordingFormatChange}
+          onCountInBarsChange={handleCountInBarsChange}
+          onShowExportModal={() => setShowExportModal(true)}
+          onToggleKeyPicker={handleToggleKeyPicker}
+          onKeySelect={handleKeySelect}
+          onKeyReset={handleKeyReset}
+        />
       </div>
 
       {/* Countdown overlay */}
@@ -1304,6 +1022,24 @@ function StemPlayer({ stems, songName, onExportAll }: StemPlayerProps): React.JS
           handleExportMix()
         }}
       />
+
+      {/* Audio elements (always mounted, not virtualized) */}
+      <div className="hidden" aria-hidden="true">
+        {stemItems.map(({ key, isRecording }) => (
+          <audio
+            key={key}
+            ref={(el) => {
+              if (el) {
+                audioEls.current[key] = el
+                el.preload = 'none'
+                if (!isRecording) {
+                  el.ontimeupdate = () => onAudioTimeRef.current(el.currentTime)
+                }
+              }
+            }}
+          />
+        ))}
+      </div>
 
       {/* Marker label input */}
       {showMarkerInput && (

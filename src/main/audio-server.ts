@@ -56,7 +56,8 @@ export function startAudioServer(): Promise<number> {
         'Content-Type': mime,
         'Accept-Ranges': 'bytes',
         'Access-Control-Allow-Origin': '*',
-        'Cache-Control': 'no-cache'
+        'Cache-Control': 'public, max-age=86400',
+        'X-Content-Type-Options': 'nosniff'
       }
 
       if (rangeHeader) {

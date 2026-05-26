@@ -5,7 +5,6 @@ import { registerIpcHandlers, setSetupManager, setJobManager } from './ipc/handl
 import { SetupManager } from './setup'
 import { JobManager } from './jobs/JobManager'
 import { startAudioServer, stopAudioServer, audioUrl } from './audio-server'
-import icon from '../../resources/icon.png?asset'
 import { exec } from 'child_process'
 
 let mainWindow: BrowserWindow | null = null
@@ -20,7 +19,6 @@ function createWindow(): void {
     minHeight: 600,
     show: false,
     autoHideMenuBar: true,
-    ...(process.platform === 'linux' ? { icon } : {}),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: false

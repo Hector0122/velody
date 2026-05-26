@@ -1,3 +1,5 @@
+import { memo } from 'react'
+
 interface StemCardMeta {
   color: string
   label: string
@@ -28,7 +30,7 @@ interface StemCardProps {
   children: React.ReactNode
 }
 
-export default function StemCard({
+function StemCard({
   meta,
   isRecording,
   isAudible,
@@ -171,3 +173,5 @@ export default function StemCard({
     </div>
   )
 }
+
+export default memo(StemCard)

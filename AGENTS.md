@@ -527,3 +527,49 @@ NOT on:
 - Kubernetes
 - expensive GPU infrastructure
 - premature scaling
+
+---
+
+# Performance Tracking
+
+## Completed
+
+| # | Optimización | Impacto | Estado |
+|---|---|---|---|
+| R1 | BPM detection → Web Worker (`bpm.worker.ts`) | UI no se congela 1-2s | ✅ Done |
+| R2 | `setProgress` throttle 60fps → 20fps | -66% re-renders | ✅ Done |
+| R3 | WaveSurfer sync directo a Canvas | 0 renders extra | ✅ Done |
+| R4 | Refs en `useLayoutEffect` | Sin ESLint warnings | ✅ Done |
+| R5 | Inline styles → Tailwind | CSS más eficiente | ✅ Done |
+| R6 | Strict TypeScript (`tsconfig strict: true`) | Type safety total | ✅ Done |
+| R7 | Extracción componentes `ExportModal`, `JamZone`, `RecordingConfirmationModal`, `TimelineMarkers`, `StemCard` | Código más mantenible | ✅ Done |
+| R8 | Extracción hooks `useMetronome`, `useRecording` | Separación de concerns | ✅ Done |
+| R9 | Eliminación `ProcessingScreen`, `useAudio`, `audio/player.ts`, `shared/types/` | Dead code removal | ✅ Done |
+| R10 | Eliminación `electron-updater`, `@electron-toolkit/preload` | -2 dependencias | ✅ Done |
+| R11 | Audio-server: `isPathSafe`, CORS `'*'`, OPTIONS preflight | Seguridad + estabilidad | ✅ Done |
+| R12 | Async `execFile` reemplaza `execSync`/`execFileSync` | Non-blocking I/O | ✅ Done |
+| R13 | Timeouts 10min en spawns FFmpeg | Evita procesos colgados | ✅ Done |
+| R14 | `AudioContext.close()` on unmount + cleanup timeouts | Sin memory leaks | ✅ Done |
+| R15 | Fixed stale closures WaveSurfer + recording sync | Bugs corregidos | ✅ Done |
+
+## In Progress
+
+| # | Optimización | Esfuerzo estimado | Impacto esperado | Estado |
+|---|---|---|---|---|
+| P1 | React.memo + split (StemPlayer → subcomponentes memoizados) | ~3h | -80% re-renders en cambio BPM/key | ✅ Done |
+| P2 | Lazy WaveSurfer (crear waveform solo al activar stem) | ~2h | -50% WaveSurfer, -40% RAM | ✅ Done |
+| P3 | Virtualización StemGrid (`react-window`) | ~4h | -75% elementos renderizados, -60% RAM | ✅ Done |
+| P4 | Compartir decodificación de audio (cache HTTP en audio-server) | ~2h | -30% fetch/decodificación | ✅ Done |
+| P2 | Lazy WaveSurfer (crear waveform solo al activar stem) | ~2h | -50% WaveSurfer, -40% RAM | ⏳ Pending |
+| P3 | Virtualización StemGrid (`react-window`) | ~4h | -75% elementos renderizados, -60% RAM | ⏳ Pending |
+| P5 | Pool de `<audio>` reutilizables | ~2h | Menos GC pressure | ⏳ Pending |
+| P6 | Cache de pitch shift (no regenerar stems transpuestos) | ~1h | Sin regeneración redundante | ✅ Done |
+| P7 | Web Worker pool para procesos Python/FFmpeg | ~6h | Liberar main process | ⏳ Pending |
+
+## Decisiones técnicas
+
+- **Secuencial**: Primero React.memo + split (menor riesgo, mayor ROI inmediato), luego las demás.
+- **Lazy WaveSurfer**: Se implementa después de React.memo para evitar conflictos.
+- **Virtualización**: Requiere agregar dependencia `react-window`, se evaluará cuando hayan muchas grabaciones.
+- **Cache de pitch shift**: Ya está implementado parcialmente (`_transposed/`), solo falta persistencia.
+- **Web Worker pool**: El más complejo; se deja para el final.
