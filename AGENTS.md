@@ -88,12 +88,17 @@ velody/
 │
 ├── src/
 │   ├── main/
-│   │   ├── index.ts          ← Electron main process
-│   │   └── ipc/
-│   │       └── handlers.ts   ← IPC: file dialog, spawn Python
+│   │   ├── index.ts              ← Electron main process
+│   │   ├── ipc/
+│   │   │   └── handlers.ts       ← IPC: file dialog, spawn Python
+│   │   ├── audio-server.ts       ← HTTP streaming server
+│   │   ├── jobs/
+│   │   │   └── JobManager.ts     ← Separation job queue
+│   │   └── setup/
+│   │       └── index.ts          ← Auto-setup manager
 │   ├── preload/
-│   │   ├── index.ts          ← contextBridge APIs
-│   │   └── index.d.ts        ← Window.api types
+│   │   ├── index.ts              ← contextBridge APIs
+│   │   └── index.d.ts            ← Window.api types
 │   └── renderer/
 │       ├── index.html
 │       └── src/
@@ -101,29 +106,37 @@ velody/
 │           ├── App.tsx
 │           ├── env.d.ts
 │           ├── components/
-│           │   └── AudioUploader.tsx  ← Drag & drop
+│           │   ├── AudioUploader.tsx   ← Drag & drop
+│           │   ├── StemPlayer.tsx      ← Main orchestrator
+│           │   ├── StemGrid.tsx        ← Virtualized stem grid
+│           │   ├── StemCard.tsx        ← Individual stem controls
+│           │   ├── MasterPanel.tsx     ← Master volume, BPM, metronome
+│           │   ├── TimelinePanel.tsx   ← Loop A/B controls
+│           │   ├── TimelineMarkers.tsx ← Visual markers
+│           │   ├── JamZone.tsx         ← Scale explorer
+│           │   ├── Fretboard.tsx       ← Interactive fretboard
+│           │   ├── ExportModal.tsx     ← Export dialog
+│           │   ├── RecordingConfirmationModal.tsx
+│           │   └── SetupScreen.tsx     ← First-run setup
 │           ├── pages/
-│           │   └── Home.tsx           ← Main layout
+│           │   └── Home.tsx           ← Main layout + queue
 │           ├── hooks/
-│           │   └── useAudio.ts        ← Audio state
-│           └── audio/
-│               └── player.ts          ← WaveSurfer wrapper
-│
-├── shared/
-│   └── types/
-│       └── index.ts           ← Stem, Track, SeparationResult
+│           │   ├── useMetronome.ts    ← Click track engine
+│           │   └── useRecording.ts    ← Recording flow
+│           └── workers/
+│               └── bpm.worker.ts      ← BPM detection worker
 │
 ├── python-worker/
-│   ├── separate.py            ← Demucs script
-│   ├── detect_key.py          ← Key detection (numpy FFT + Krumhansl-Schmuckler)
+│   ├── separate.py              ← Demucs script
+│   ├── detect_key.py            ← Key detection (Krumhansl-Schmuckler)
 │   ├── requirements.txt
 │   └── utils/
 │
 ├── output/
-│   └── stems/                 ← Generated stems here
+│   └── stems/                   ← Generated stems here
 │
-├── resources/                 ← App icons
-├── build/                     ← Electron builder configs
+├── resources/                   ← App icons
+├── build/                       ← Electron builder configs
 ├── electron.vite.config.ts
 ├── package.json
 ├── tsconfig.json / .node / .web
@@ -168,7 +181,7 @@ Features:
 - Waveforms
 - Mute stem
 - Solo stem
-- Volume per stem
+- Volume per stem (individual slider)
 
 Using:
 
@@ -341,9 +354,9 @@ Update UI
 
 Features para navegar y practicar secciones específicas de la canción:
 
-- **Timeline interactivo**: waveform clickeable con zoom, seek y arrastre, reemplazando el seek básico actual
-- **Marcadores secciones**: markers editables sobre el timeline (verso, coro, puente, etc.)
-- **Loops secciones**: loop A/B y loop de sección usando los marcadores, para repetir pasajes difíciles
+- **Timeline interactivo**: waveform clickeable con zoom, seek y arrastre, reemplazando el seek básico actual ◐ (seek listo, falta zoom/arrastre)
+- **Marcadores secciones**: markers editables sobre el timeline (verso, coro, puente, etc.) ✅
+- **Loops secciones**: loop A/B y loop de sección usando los marcadores, para repetir pasajes difíciles ✅
 
 ## Phase 2 — Grabación simple
 
@@ -356,16 +369,17 @@ Herramientas mínimas para que el músico se grabe practicando:
 ## Phase 2 — Herramientas de práctica
 
 - **Tempo tap**: tocar el tempo manualmente con un botón si la detección automática falla
-- **Manual key override**: permitir al usuario cambiar la tonalidad detectada si el algoritmo falla
-- **Key-aware Jam Zone**: que las escalas cambien en tiempo real si el usuario sobreescribe la key
-- **Jam Zone visual**: reemplazar los chips de notas por un teclado de piano visual interactivo
-- **Diapasón interactivo**: mostrar el mástil de guitarra/bajo con las notas de la escala resaltadas
-- **🔗 Tab Finder**: botón por stem que busca tabs en Ultimate Guitar (se abre en el navegador predeterminado)
+- **Manual key override**: permitir al usuario cambiar la tonalidad detectada si el algoritmo falla ✅
+- **Key-aware Jam Zone**: que las escalas cambien en tiempo real si el usuario sobreescribe la key ✅
+- **Jam Zone visual / Diapasón interactivo**: fretboard SVG con notas de escala, toggle guitarra/bajo ✅
+- **🔗 Tab Finder**: botón por stem que busca tabs en Ultimate Guitar ✅
 
-## Phase 2 — Visualización
+## Phase 2 — Mezcla
 
-- **Jam Zone visual**: reemplazar los chips de notas por un diapasón interactivo de guitarra/bajo
-- **Diapasón interactivo**: mostrar el mástil de guitarra/bajo con las notas de la escala resaltadas, notas raíz en naranja, toggle guitarra/bajo
+Control de mezcla por stem para ajustar la escucha:
+
+- **Volumen por track**: slider individual de volumen para cada stem (ya existe volumen básico, mejorar precisión y UX)
+- **Per-track panning**: control de paneo izquierda/derecha por stem
 
 ---
 
@@ -552,24 +566,26 @@ NOT on:
 | R14 | `AudioContext.close()` on unmount + cleanup timeouts | Sin memory leaks | ✅ Done |
 | R15 | Fixed stale closures WaveSurfer + recording sync | Bugs corregidos | ✅ Done |
 
-## In Progress
+## Pending
 
-| # | Optimización | Esfuerzo estimado | Impacto esperado | Estado |
+| # | Optimización / Feature | Esfuerzo estimado | Impacto esperado | Estado |
 |---|---|---|---|---|
-| P1 | React.memo + split (StemPlayer → subcomponentes memoizados) | ~3h | -80% re-renders en cambio BPM/key | ✅ Done |
-| P2 | Lazy WaveSurfer (crear waveform solo al activar stem) | ~2h | -50% WaveSurfer, -40% RAM | ✅ Done |
-| P3 | Virtualización StemGrid (`react-window`) | ~4h | -75% elementos renderizados, -60% RAM | ✅ Done |
-| P4 | Compartir decodificación de audio (cache HTTP en audio-server) | ~2h | -30% fetch/decodificación | ✅ Done |
 | P2 | Lazy WaveSurfer (crear waveform solo al activar stem) | ~2h | -50% WaveSurfer, -40% RAM | ⏳ Pending |
-| P3 | Virtualización StemGrid (`react-window`) | ~4h | -75% elementos renderizados, -60% RAM | ⏳ Pending |
 | P5 | Pool de `<audio>` reutilizables | ~2h | Menos GC pressure | ⏳ Pending |
-| P6 | Cache de pitch shift (no regenerar stems transpuestos) | ~1h | Sin regeneración redundante | ✅ Done |
 | P7 | Web Worker pool para procesos Python/FFmpeg | ~6h | Liberar main process | ⏳ Pending |
+| P8 | Volumen por track (mejorar slider individual preciso) | ~1h | Mezcla más cómoda | ⏳ Pending |
+| P9 | Per-track panning (control stereo L/R por stem) | ~2h | Mezcla más profesional | ⏳ Pending |
 
-## Decisiones técnicas
+## Future improvements (sin priorizar)
 
-- **Secuencial**: Primero React.memo + split (menor riesgo, mayor ROI inmediato), luego las demás.
-- **Lazy WaveSurfer**: Se implementa después de React.memo para evitar conflictos.
-- **Virtualización**: Requiere agregar dependencia `react-window`, se evaluará cuando hayan muchas grabaciones.
-- **Cache de pitch shift**: Ya está implementado parcialmente (`_transposed/`), solo falta persistencia.
-- **Web Worker pool**: El más complejo; se deja para el final.
+- **Tempo tap**: botón para detectar BPM manualmente
+- **Loop multi-take**: loop A/B integrado con grabación
+- **Timeline zoom/arrastre**: mejorar seek básico actual
+- **StemPlayer god component**: sigue siendo grande (~800 lns), seguir extrayendo
+
+## Notas técnicas
+
+- **P3 Virtualización StemGrid**: ✅ Ya implementado con `react-window`
+- **Cache de pitch shift**: ✅ Ya implementado (`_transposed/`), solo falta persistencia
+- **Lazy WaveSurfer**: Pendiente — actualmente se crean waveforms eager para todos los stems
+- **Web Worker pool**: El más complejo; requiere refactor del JobManager
