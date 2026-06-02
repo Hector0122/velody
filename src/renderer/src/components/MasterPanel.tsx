@@ -1,4 +1,5 @@
 import { memo, useEffect, useRef } from 'react'
+import { formatTime, BPM_MIN, BPM_MAX } from '../utils'
 
 interface MasterPanelProps {
   masterPlaying: boolean
@@ -38,12 +39,6 @@ interface MasterPanelProps {
 const NOTE = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
 const ALL_KEYS: string[] = []
 for (const n of NOTE) for (const t of ['Major', 'Minor']) ALL_KEYS.push(`${n} ${t}`)
-
-function formatTime(seconds: number): string {
-  const m = Math.floor(seconds / 60)
-  const s = Math.floor(seconds % 60)
-  return `${m}:${s.toString().padStart(2, '0')}`
-}
 
 function MasterPanel({
   masterPlaying,
@@ -279,12 +274,12 @@ function MasterPanel({
           <input
             type="number"
             aria-label="BPM"
-            min="40"
-            max="280"
+            min={BPM_MIN}
+            max={BPM_MAX}
             value={bpm}
             onChange={(e) => {
               const v = parseInt(e.target.value, 10)
-              if (!isNaN(v) && v >= 40 && v <= 280) onBpmChange(v)
+              if (!isNaN(v) && v >= BPM_MIN && v <= BPM_MAX) onBpmChange(v)
             }}
             className="w-12 h-6 text-center text-xs font-mono text-white bg-neutral-800 border border-neutral-700 rounded focus:outline-none focus:border-orange-500 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
           />

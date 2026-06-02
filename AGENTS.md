@@ -548,44 +548,45 @@ NOT on:
 
 ## Completed
 
-| # | Optimización | Impacto | Estado |
-|---|---|---|---|
-| R1 | BPM detection → Web Worker (`bpm.worker.ts`) | UI no se congela 1-2s | ✅ Done |
-| R2 | `setProgress` throttle 60fps → 20fps | -66% re-renders | ✅ Done |
-| R3 | WaveSurfer sync directo a Canvas | 0 renders extra | ✅ Done |
-| R4 | Refs en `useLayoutEffect` | Sin ESLint warnings | ✅ Done |
-| R5 | Inline styles → Tailwind | CSS más eficiente | ✅ Done |
-| R6 | Strict TypeScript (`tsconfig strict: true`) | Type safety total | ✅ Done |
-| R7 | Extracción componentes `ExportModal`, `JamZone`, `RecordingConfirmationModal`, `TimelineMarkers`, `StemCard` | Código más mantenible | ✅ Done |
-| R8 | Extracción hooks `useMetronome`, `useRecording` | Separación de concerns | ✅ Done |
-| R9 | Eliminación `ProcessingScreen`, `useAudio`, `audio/player.ts`, `shared/types/` | Dead code removal | ✅ Done |
-| R10 | Eliminación `electron-updater`, `@electron-toolkit/preload` | -2 dependencias | ✅ Done |
-| R11 | Audio-server: `isPathSafe`, CORS `'*'`, OPTIONS preflight | Seguridad + estabilidad | ✅ Done |
-| R12 | Async `execFile` reemplaza `execSync`/`execFileSync` | Non-blocking I/O | ✅ Done |
-| R13 | Timeouts 10min en spawns FFmpeg | Evita procesos colgados | ✅ Done |
-| R14 | `AudioContext.close()` on unmount + cleanup timeouts | Sin memory leaks | ✅ Done |
-| R15 | Fixed stale closures WaveSurfer + recording sync | Bugs corregidos | ✅ Done |
+| #   | Optimización                                                                                                 | Impacto                          | Estado  |
+| --- | ------------------------------------------------------------------------------------------------------------ | -------------------------------- | ------- |
+| R1  | BPM detection → Web Worker (`bpm.worker.ts`)                                                                 | UI no se congela 1-2s            | ✅ Done |
+| R2  | `setProgress` throttle 60fps → 20fps                                                                         | -66% re-renders                  | ✅ Done |
+| R3  | WaveSurfer sync directo a Canvas                                                                             | 0 renders extra                  | ✅ Done |
+| R4  | Refs en `useLayoutEffect`                                                                                    | Sin ESLint warnings              | ✅ Done |
+| R5  | Inline styles → Tailwind                                                                                     | CSS más eficiente                | ✅ Done |
+| R6  | Strict TypeScript (`tsconfig strict: true`)                                                                  | Type safety total                | ✅ Done |
+| R7  | Extracción componentes `ExportModal`, `JamZone`, `RecordingConfirmationModal`, `TimelineMarkers`, `StemCard` | Código más mantenible            | ✅ Done |
+| R8  | Extracción hooks `useMetronome`, `useRecording`                                                              | Separación de concerns           | ✅ Done |
+| R9  | Eliminación `ProcessingScreen`, `useAudio`, `audio/player.ts`, `shared/types/`                               | Dead code removal                | ✅ Done |
+| R10 | Eliminación `electron-updater`, `@electron-toolkit/preload`                                                  | -2 dependencias                  | ✅ Done |
+| R11 | Audio-server: `isPathSafe`, CORS `'*'`, OPTIONS preflight                                                    | Seguridad + estabilidad          | ✅ Done |
+| R12 | Async `execFile` reemplaza `execSync`/`execFileSync`                                                         | Non-blocking I/O                 | ✅ Done |
+| R13 | Timeouts 10min en spawns FFmpeg                                                                              | Evita procesos colgados          | ✅ Done |
+| R14 | `AudioContext.close()` on unmount + cleanup timeouts                                                         | Sin memory leaks                 | ✅ Done |
+| R15 | Fixed stale closures WaveSurfer + recording sync                                                             | Bugs corregidos                  | ✅ Done |
+| R16 | Extracción `MarkerLabelInput` a su propio archivo                                                            | -66 líneas de StemPlayer         | ✅ Done |
+| R17 | Extracción BPM + key detection → `useSongAnalysis` hook                                                      | Separación de concerns           | ✅ Done |
+| R18 | `stemNameFromPath` unificada en `utils.ts`                                                                   | Sin duplicación (era 2 archivos) | ✅ Done |
+| R19 | `formatTime` unificada en `utils.ts`                                                                         | Sin duplicación (era 3 archivos) | ✅ Done |
+| R20 | Magic numbers → constantes en `utils.ts`                                                                     | Código más legible               | ✅ Done |
+| P2  | Lazy WaveSurfer (crear waveform solo al activar stem)                                                        | -50% WaveSurfer, -40% RAM        | ✅ Done |
+| P8  | Volumen por track (slider individual por stem)                                                               | Mezcla más cómoda                | ✅ Done |
+| P9  | Per-track panning (control stereo L/R por stem via Web Audio API)                                            | Mezcla más profesional           | ✅ Done |
 
 ## Pending
 
-| # | Optimización / Feature | Esfuerzo estimado | Impacto esperado | Estado |
-|---|---|---|---|---|
-| P2 | Lazy WaveSurfer (crear waveform solo al activar stem) | ~2h | -50% WaveSurfer, -40% RAM | ⏳ Pending |
-| P5 | Pool de `<audio>` reutilizables | ~2h | Menos GC pressure | ⏳ Pending |
-| P7 | Web Worker pool para procesos Python/FFmpeg | ~6h | Liberar main process | ⏳ Pending |
-| P8 | Volumen por track (mejorar slider individual preciso) | ~1h | Mezcla más cómoda | ⏳ Pending |
-| P9 | Per-track panning (control stereo L/R por stem) | ~2h | Mezcla más profesional | ⏳ Pending |
+| #   | Optimización / Feature | Esfuerzo estimado | Impacto esperado | Estado |
+| --- | ---------------------- | ----------------- | ---------------- | ------ |
 
 ## Future improvements (sin priorizar)
 
-- **Tempo tap**: botón para detectar BPM manualmente
-- **Loop multi-take**: loop A/B integrado con grabación
-- **Timeline zoom/arrastre**: mejorar seek básico actual
-- **StemPlayer god component**: sigue siendo grande (~800 lns), seguir extrayendo
+- **StemPlayer god component**: ~1,080 lns (bajó de ~1,125), aún se puede seguir extrayendo
 
 ## Notas técnicas
 
 - **P3 Virtualización StemGrid**: ✅ Ya implementado con `react-window`
 - **Cache de pitch shift**: ✅ Ya implementado (`_transposed/`), solo falta persistencia
-- **Lazy WaveSurfer**: Pendiente — actualmente se crean waveforms eager para todos los stems
+- **Lazy WaveSurfer**: ✅ Implementado — `ensureWaveSurfer()` crea waveforms on-demand al dar play
+- **Per-stem panning**: ✅ Implementado via Web Audio API `StereoPannerNode` + `crossOrigin = 'anonymous'` en `<audio>` para sortear CORS
 - **Web Worker pool**: El más complejo; requiere refactor del JobManager

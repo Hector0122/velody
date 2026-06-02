@@ -1,6 +1,7 @@
 import { memo } from 'react'
 import { Grid } from 'react-window'
 import StemCard from './StemCard'
+import { stemNameFromPath } from '../utils'
 
 interface StemMeta {
   color: string
@@ -25,6 +26,8 @@ interface StemGridCellProps {
   recordingKey: string | null
   recordingElapsed: number
   formatTime: (s: number) => string
+  stemVolumes: Record<string, number>
+  stemPannings: Record<string, number>
   onToggleStem: (key: string) => void
   onToggleSolo: (key: string) => void
   onExportSingle: (key: string) => void
@@ -32,19 +35,12 @@ interface StemGridCellProps {
   onStartRecording: (key: string) => void
   onStopRecording: () => void
   onDeleteRecording: (path: string) => void
+  onStemVolume: (key: string, value: number) => void
+  onStemPanning: (key: string, value: number) => void
   allStems: string[]
 }
 
 const ROW_HEIGHT = 200
-
-function stemNameFromPath(path: string): string {
-  return (
-    path
-      .split(/[/\\]/)
-      .pop()
-      ?.replace(/\.[^.]+$/, '') || path
-  )
-}
 
 function StemGridCell({
   columnIndex,
@@ -68,6 +64,8 @@ function StemGridCell({
     recordingKey,
     recordingElapsed,
     formatTime,
+    stemVolumes,
+    stemPannings,
     onToggleStem,
     onToggleSolo,
     onExportSingle,
@@ -75,6 +73,8 @@ function StemGridCell({
     onStartRecording,
     onStopRecording,
     onDeleteRecording,
+    onStemVolume,
+    onStemPanning,
     allStems
   } = cellProps
 
@@ -104,12 +104,16 @@ function StemGridCell({
         canTab={canTab}
         canRecord={canRecord}
         formatTime={formatTime}
+        stemVolume={stemVolumes[key] ?? 1}
+        stemPanning={stemPannings[key] ?? 0}
         onToggle={() => onToggleStem(key)}
         onSolo={() => onToggleSolo(key)}
         onExport={() => onExportSingle(key)}
         onOpenTab={() => onOpenTab(key)}
         onStartRecording={() => onStartRecording(key)}
         onStopRecording={onStopRecording}
+        onVolumeChange={(v) => onStemVolume(key, v)}
+        onPanningChange={(v) => onStemPanning(key, v)}
         onDeleteRecording={() => {
           const recPath = allStems.find((p) => stemNameFromPath(p) === key)
           if (recPath) onDeleteRecording(recPath)

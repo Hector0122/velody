@@ -20,6 +20,8 @@ interface StemCardProps {
   canTab: boolean
   canRecord: boolean
   formatTime: (s: number) => string
+  stemVolume: number
+  stemPanning: number
   onToggle: () => void
   onSolo: () => void
   onExport: () => void
@@ -27,6 +29,8 @@ interface StemCardProps {
   onStartRecording: () => void
   onStopRecording: () => void
   onDeleteRecording: () => void
+  onVolumeChange: (value: number) => void
+  onPanningChange: (value: number) => void
   children: React.ReactNode
 }
 
@@ -45,6 +49,8 @@ function StemCard({
   canTab,
   canRecord,
   formatTime,
+  stemVolume,
+  stemPanning,
   onToggle,
   onSolo,
   onExport,
@@ -52,6 +58,8 @@ function StemCard({
   onStartRecording,
   onStopRecording,
   onDeleteRecording,
+  onVolumeChange,
+  onPanningChange,
   children
 }: StemCardProps): React.JSX.Element {
   return (
@@ -103,6 +111,35 @@ function StemCard({
       </div>
 
       {children}
+
+      <div className="flex items-center gap-3">
+        <div className="flex items-center gap-1 flex-1 min-w-0">
+          <input
+            type="range"
+            aria-label={`${meta.label} volume`}
+            min="0"
+            max="1"
+            step="0.01"
+            value={stemVolume}
+            onChange={(e) => onVolumeChange(parseFloat(e.target.value))}
+            className="accent-current cursor-pointer w-full h-1"
+            style={{ accentColor: meta.color }}
+          />
+        </div>
+        <div className="flex items-center gap-1 w-[70px] shrink-0">
+          <input
+            type="range"
+            aria-label={`${meta.label} pan`}
+            min="-1"
+            max="1"
+            step="0.01"
+            value={stemPanning}
+            onChange={(e) => onPanningChange(parseFloat(e.target.value))}
+            className="accent-current cursor-pointer w-full h-1"
+            style={{ accentColor: meta.color + '80' }}
+          />
+        </div>
+      </div>
 
       <div className="flex items-center justify-between text-[10px] text-neutral-500">
         <span>{formatTime(progress)}</span>
