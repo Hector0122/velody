@@ -2,13 +2,31 @@ import { useEffect, useLayoutEffect, useRef, useState, useCallback, useMemo } fr
 import WaveSurfer from 'wavesurfer.js'
 import ExportModal from './ExportModal'
 import JamZone from './JamZone'
+import MarkerLabelInput from './MarkerLabelInput'
 import RecordingConfirmationModal from './RecordingConfirmationModal'
-import TimelineMarkers from './TimelineMarkers'
-import StemCard from './StemCard'
+import StemGrid from './StemGrid'
+import MasterPanel from './MasterPanel'
+import TimelinePanel from './TimelinePanel'
 import { useMetronome } from '../hooks/useMetronome'
 import { useRecording } from '../hooks/useRecording'
+import useSongAnalysis from '../hooks/useSongAnalysis'
+import useKeyPitch from '../hooks/useKeyPitch'
+import useMarkers from '../hooks/useMarkers'
+import {
+  stemNameFromPath,
+  formatTime,
+  extForFormat,
+  formatFilter,
+  BPM_MIN,
+  BPM_MAX,
+  PROGRESS_THROTTLE_MS,
+  AUDIO_START_THRESHOLD,
+  AUDIO_START_MAX_SCAN_SECS,
+  MASTER_WAVEFORM_HEIGHT,
+  MASTER_MIN_PX_PER_SEC,
+  STEM_WAVEFORM_HEIGHT
+} from '../utils'
 
-const CACHE_VERSION = 9
 interface StemPlayerProps {
   stems: string[]
   songName: string
@@ -35,15 +53,6 @@ const RECORDING_COLORS = [
   '#f97316'
 ]
 
-function stemNameFromPath(path: string): string {
-  return (
-    path
-      .split(/[/\\]/)
-      .pop()
-      ?.replace(/\.[^.]+$/, '') || path
-  )
-}
-
 function StemPlayer({ stems, songName, onExportAll }: StemPlayerProps): React.JSX.Element {
   const [progress, setProgress] = useState(0)
   const [duration, setDuration] = useState(0)
@@ -52,6 +61,8 @@ function StemPlayer({ stems, songName, onExportAll }: StemPlayerProps): React.JS
   const [active, setActive] = useState<Record<string, boolean>>({})
   const [solo, setSolo] = useState<Record<string, boolean>>({})
   const [urls, setUrls] = useState<Record<string, string>>({})
+  const [stemVolumes, setStemVolumes] = useState<Record<string, number>>({})
+  const [stemPannings, setStemPannings] = useState<Record<string, number>>({})
 
   // Export
   const [showExportModal, setShowExportModal] = useState(false)
@@ -63,60 +74,14 @@ function StemPlayer({ stems, songName, onExportAll }: StemPlayerProps): React.JS
   // Recording — state owned by hook; recordedStems stays here for UI
   const [recordedStems, setRecordedStems] = useState<string[]>([])
 
-  // Key & Pitch
+  // Key (detectedKey owned here — passed to useSongAnalysis + useKeyPitch)
   const [detectedKey, setDetectedKey] = useState<string | null>(null)
-  const [manualKey, setManualKey] = useState<string | null>(null)
-  const [showKeyPicker, setShowKeyPicker] = useState(false)
-  const effectiveKey = manualKey ?? detectedKey
-  const [pitchShift, setPitchShift] = useState(0)
-  const [shiftedPaths, setShiftedPaths] = useState<Record<string, string>>({})
-  const [transposing, setTransposing] = useState(false)
-  const [showJamZone, setShowJamZone] = useState(false)
-  const [selectedScaleIdx, setSelectedScaleIdx] = useState(0)
-
-  // Markers & Loop
-  const [markers, setMarkers] = useState<{ time: number; label: string }[]>([])
-  const [loopStart, setLoopStart] = useState<number | null>(null)
-  const [loopEnd, setLoopEnd] = useState<number | null>(null)
-  const [loopEnabled, setLoopEnabled] = useState(false)
-  const [pendingMarkerTime, setPendingMarkerTime] = useState(0)
-  const [showMarkerInput, setShowMarkerInput] = useState(false)
-  const fretboardColRef = useRef<HTMLDivElement | null>(null)
-  const [scalesMaxH, setScalesMaxH] = useState<number>(400)
-
-  // Sync scales list height to fretboard column height
-  useLayoutEffect(() => {
-    const el = fretboardColRef.current
-    if (!showJamZone || !el) return
-    const update = (): void => {
-      setScalesMaxH(el.offsetHeight)
-    }
-    update()
-    const obs = new ResizeObserver(update)
-    obs.observe(el)
-    return () => obs.disconnect()
-  }, [showJamZone])
 
   const allStems = useMemo(() => [...stems, ...recordedStems], [stems, recordedStems])
-
-  const keyPickerRef = useRef<HTMLDivElement | null>(null)
-
-  // Close key picker on click outside
-  useEffect(() => {
-    if (!showKeyPicker) return
-    const handler = (e: MouseEvent): void => {
-      if (keyPickerRef.current && !keyPickerRef.current.contains(e.target as Node)) {
-        setShowKeyPicker(false)
-      }
-    }
-    document.addEventListener('mousedown', handler)
-    return () => document.removeEventListener('mousedown', handler)
-  }, [showKeyPicker])
 
   const audioEls = useRef<Record<string, HTMLAudioElement>>({})
   const stemWaves = useRef<Record<string, WaveSurfer>>({})
   const waveUrlsRef = useRef<Record<string, string>>({})
-  const stemContainers = useRef<Record<string, HTMLDivElement | null>>({})
   const masterWaveRef = useRef<WaveSurfer | null>(null)
   const masterWaveContainer = useRef<HTMLDivElement | null>(null)
   const masterWaveReady = useRef(false)
@@ -129,10 +94,17 @@ function StemPlayer({ stems, songName, onExportAll }: StemPlayerProps): React.JS
 
   const audioStartRef = useRef<number | null>(null)
 
+  // Panning: per-stem graph nodes (source → panner → destination)
+  const panNodesRef = useRef<
+    Record<string, { source: MediaElementAudioSourceNode; panner: StereoPannerNode }>
+  >({})
+
+  // We create stem WaveSurfers eagerly when URLs load so mini-waveforms
+  // are ready before the user presses play.
+
   // Shared refs (used by metronome + recording hooks)
   const audioCtxRef = useRef<AudioContext | null>(null)
   const masterPlayingRef = useRef(masterPlaying)
-  const originalBpmRef = useRef(120)
   const playbackRateRef = useRef(1)
   const durationRef = useRef(0)
 
@@ -189,6 +161,43 @@ function StemPlayer({ stems, songName, onExportAll }: StemPlayerProps): React.JS
     setProgress
   })
 
+  // Song analysis (BPM + key detection)
+  const originalBpmRef = useSongAnalysis(urls, stems, setBpm, setDetectedKey)
+  const {
+    manualKey,
+    effectiveKey,
+    pitchShift,
+    shiftedPaths,
+    transposing,
+    showKeyPicker,
+    showJamZone,
+    selectedScaleIdx,
+    scalesMaxH,
+    fretboardColRef,
+    setShowJamZone,
+    setSelectedScaleIdx,
+    handleKeySelect,
+    handleKeyReset,
+    handlePitchShift,
+    handleToggleKeyPicker
+  } = useKeyPitch(stems, allStems, detectedKey)
+  const {
+    markers,
+    loopStart,
+    loopEnd,
+    loopEnabled,
+    pendingMarkerTime,
+    showMarkerInput,
+    setShowMarkerInput,
+    setMarkers,
+    setPendingMarkerTime,
+    handleSetLoopStart,
+    handleSetLoopEnd,
+    handleToggleLoop,
+    handleClearMarkers,
+    handleRemoveMarker
+  } = useMarkers()
+
   // Sync shared refs to state
   useLayoutEffect(() => {
     stemsRef.current = allStems
@@ -244,147 +253,67 @@ function StemPlayer({ stems, songName, onExportAll }: StemPlayerProps): React.JS
     }
   }, [urls])
 
-  // Auto-detect BPM + key — cache results to avoid re-processing
+  // Clean up WaveSurfers for stems that no longer exist
   useEffect(() => {
-    const allUrls = Object.values(urls)
-    if (allUrls.length === 0 || stems.length === 0) return
-    const songDir = stems[0].replace(/[/\\][^/\\]+$/, '')
-
-    const runKeyDetection = (bpmVal: number): void => {
-      if (window.api) {
-        window.api.detectKey(songDir, stems).then((key) => {
-          if (key) {
-            setDetectedKey(key)
-            window.api.saveMeta(songDir, { bpm: bpmVal, key, _version: CACHE_VERSION })
-          }
-        })
-      }
-    }
-
-    ;(async (): Promise<void> => {
-      if (window.api) {
-        const cached = (await window.api.loadMeta(songDir)) as {
-          bpm?: number
-          key?: string
-          _version?: number
-        } | null
-        if (cached && cached.bpm && cached._version === CACHE_VERSION) {
-          originalBpmRef.current = cached.bpm
-          setBpm(cached.bpm)
-          if (cached.key) setDetectedKey(cached.key)
-          runKeyDetection(cached.bpm)
-          return
-        }
-      }
-      try {
-        const bufferMap: Record<string, Float32Array> = {}
-        let sampleRate = 44100
-        let maxLen = 0
-        for (const [, url] of Object.entries(urls)) {
-          const resp = await fetch(url)
-          const buf = await resp.arrayBuffer()
-          const offlineCtx = new OfflineAudioContext(1, 1, 44100)
-          const decoded = await offlineCtx.decodeAudioData(buf)
-          const ch = decoded.getChannelData(0)
-          sampleRate = decoded.sampleRate
-          if (ch.length > maxLen) maxLen = ch.length
-          bufferMap[url] = ch
-        }
-
-        const mixed = new Float32Array(maxLen)
-        for (const ch of Object.values(bufferMap)) {
-          for (let i = 0; i < ch.length; i++) mixed[i] += ch[i]
-        }
-        let peak = 0
-        for (let i = 0; i < mixed.length; i++) {
-          const a = Math.abs(mixed[i])
-          if (a > peak) peak = a
-        }
-        if (peak > 1) for (let i = 0; i < mixed.length; i++) mixed[i] /= peak
-
-        const worker = new Worker(new URL('../workers/bpm.worker.ts', import.meta.url), {
-          type: 'module'
-        })
-
-        const bpmVal = await new Promise<number>((resolveBpm) => {
-          worker.onmessage = (e: MessageEvent<{ bpm: number }>) => {
-            resolveBpm(e.data.bpm)
-            worker.terminate()
-          }
-          worker.onerror = () => {
-            resolveBpm(120)
-            worker.terminate()
-          }
-          worker.postMessage({ mixed, sampleRate }, [mixed.buffer])
-        })
-
-        originalBpmRef.current = bpmVal
-        setBpm(bpmVal)
-        runKeyDetection(bpmVal)
-      } catch {
-        /* detection failed */
-      }
-    })()
-  }, [urls, stems, setBpm, originalBpmRef, setDetectedKey])
-
-  // Init WaveSurfers — selective: only create/destroy what changed
-  useEffect(() => {
-    if (Object.keys(urls).length === 0) return
-
-    const currentWaves = stemWaves.current
-    const newWaves: Record<string, WaveSurfer> = {}
-    let firstReady = false
-
-    for (const { key, meta } of stemItems) {
-      const container = stemContainers.current[key]
-      const url = urls[key]
-      if (!container || !url) continue
-
-      // Keep existing waveform if URL hasn't changed
-      if (currentWaves[key] && waveUrlsRef.current[key] === url) {
-        newWaves[key] = currentWaves[key]
-        continue
-      }
-
-      // Destroy old waveform if URL changed
-      if (currentWaves[key]) {
-        currentWaves[key].destroy()
-      }
-
-      const ws = WaveSurfer.create({
-        container,
-        waveColor: meta.color + '30',
-        progressColor: meta.color,
-        cursorColor: 'transparent',
-        barWidth: 1,
-        barGap: 0,
-        height: 32,
-        normalize: true,
-        interact: false
-      })
-      ws.load(url)
-
-      ws.on('ready', () => {
-        if (!firstReady) {
-          setDuration(ws.getDuration())
-          firstReady = true
-        }
-      })
-
-      newWaves[key] = ws
-      waveUrlsRef.current[key] = url
-    }
-
-    // Destroy waveforms for stems that no longer exist
-    for (const [key, ws] of Object.entries(currentWaves)) {
-      if (!newWaves[key]) {
+    const validKeys = new Set(stemItems.map((s) => s.key))
+    for (const [key, ws] of Object.entries(stemWaves.current)) {
+      if (!validKeys.has(key)) {
         ws.destroy()
+        delete stemWaves.current[key]
         delete waveUrlsRef.current[key]
       }
     }
+  }, [stemItems])
 
-    stemWaves.current = newWaves
-  }, [urls, stemItems])
+  // Create a stem WaveSurfer on demand (lazy)
+  const ensureWaveSurfer = useCallback(
+    (key: string): WaveSurfer | undefined => {
+      if (stemWaves.current[key]) return stemWaves.current[key]
+
+      const container = document.querySelector(
+        `[data-stem-container="${key}"]`
+      ) as HTMLDivElement | null
+      if (!container) return undefined
+
+      const item = stemItems.find((s) => s.key === key)
+      const color = item?.meta.color ?? '#6b7280'
+
+      const ws = WaveSurfer.create({
+        container,
+        waveColor: color + '30',
+        progressColor: color,
+        cursorColor: 'transparent',
+        barWidth: 1,
+        barGap: 0,
+        height: STEM_WAVEFORM_HEIGHT,
+        normalize: true,
+        interact: false
+      })
+
+      stemWaves.current[key] = ws
+
+      const url = urls[key]
+      if (url) {
+        ws.load(url)
+        waveUrlsRef.current[key] = url
+      }
+
+      return ws
+    },
+    [urls, stemItems]
+  )
+
+  // Load pending waveform data when URLs become available
+  useEffect(() => {
+    for (const [key] of Object.entries(stemWaves.current)) {
+      const ws = stemWaves.current[key]
+      const url = urls[key]
+      if (ws && url && waveUrlsRef.current[key] !== url) {
+        ws.load(url)
+        waveUrlsRef.current[key] = url
+      }
+    }
+  }, [urls])
 
   // Init master timeline WaveSurfer
   const masterUrl = useMemo(() => {
@@ -409,16 +338,17 @@ function StemPlayer({ stems, songName, onExportAll }: StemPlayerProps): React.JS
       cursorWidth: 2,
       barWidth: 2,
       barGap: 1,
-      height: 64,
+      height: MASTER_WAVEFORM_HEIGHT,
       normalize: true,
       interact: true,
-      minPxPerSec: 20
+      minPxPerSec: MASTER_MIN_PX_PER_SEC
     })
     ws.load(masterUrl)
 
     ws.on('ready', () => {
       masterWaveReady.current = true
       setMasterWaveDuration(ws.getDuration())
+      setDuration(ws.getDuration())
     })
 
     ws.on('click', (relativeX: number) => {
@@ -449,7 +379,7 @@ function StemPlayer({ stems, songName, onExportAll }: StemPlayerProps): React.JS
       masterWaveRef.current = null
       masterWaveReady.current = false
     }
-  }, [masterUrl])
+  }, [masterUrl]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Sync master WaveSurfer progress
   useEffect(() => {
@@ -463,11 +393,12 @@ function StemPlayer({ stems, songName, onExportAll }: StemPlayerProps): React.JS
     (key: string): number => {
       if (!masterPlaying) return 0
       if (!activeRef.current[key]) return 0
+      const stemVol = stemVolumes[key] ?? 1
       const soloed = Object.keys(solo).find((k) => solo[k])
-      if (soloed) return soloed === key ? masterVolume : 0
-      return masterVolume
+      if (soloed) return soloed === key ? stemVol * masterVolume : 0
+      return stemVol * masterVolume
     },
-    [masterPlaying, solo, masterVolume]
+    [masterPlaying, solo, masterVolume, stemVolumes]
   )
 
   const applyVolume = useCallback(
@@ -493,7 +424,7 @@ function StemPlayer({ stems, songName, onExportAll }: StemPlayerProps): React.JS
     for (const el of Object.values(audioEls.current)) {
       el.playbackRate = rate
     }
-  }, [bpm, masterPlaying])
+  }, [bpm, masterPlaying]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Clean up unused audio elements on stem change
   useEffect(() => {
@@ -520,8 +451,8 @@ function StemPlayer({ stems, songName, onExportAll }: StemPlayerProps): React.JS
       await ctx.close()
       const ch = ab.getChannelData(0)
       const sr = ab.sampleRate
-      const threshold = 0.008
-      const maxFrames = Math.min(ch.length, 30 * sr)
+      const threshold = AUDIO_START_THRESHOLD
+      const maxFrames = Math.min(ch.length, AUDIO_START_MAX_SCAN_SECS * sr)
       for (let i = 0; i < maxFrames; i++) {
         if (Math.abs(ch[i]) > threshold) {
           const t = i / sr
@@ -546,6 +477,14 @@ function StemPlayer({ stems, songName, onExportAll }: StemPlayerProps): React.JS
   // Close AudioContext on unmount
   useEffect(() => {
     return () => {
+      for (const nodes of Object.values(panNodesRef.current)) {
+        try {
+          nodes.panner.disconnect()
+        } catch {
+          /* ignore */
+        }
+      }
+      panNodesRef.current = {}
       audioCtxRef.current?.close()
       audioCtxRef.current = null
       if (mediaStreamRef.current) {
@@ -580,7 +519,7 @@ function StemPlayer({ stems, songName, onExportAll }: StemPlayerProps): React.JS
 
       // Throttle React setProgress to ~20fps to reduce re-renders
       const now = Date.now()
-      if (now - lastSeekRef.current < 50) return
+      if (now - lastSeekRef.current < PROGRESS_THROTTLE_MS) return
       lastSeekRef.current = now
 
       setProgress(time)
@@ -590,6 +529,71 @@ function StemPlayer({ stems, songName, onExportAll }: StemPlayerProps): React.JS
 
   // eslint-disable-next-line react-hooks/refs
   onAudioTimeRef.current = onAudioTime
+
+  // --- AudioContext panning helpers ---
+  // Ensure AudioContext exists and is running. Must be called from a user-gesture handler.
+  const ensureAudioContext = useCallback((): AudioContext | null => {
+    if (!audioCtxRef.current) {
+      try {
+        audioCtxRef.current = new AudioContext()
+        console.log('[pan] AudioContext created, state=', audioCtxRef.current.state)
+      } catch (e) {
+        console.error('[pan] AudioContext creation failed', e)
+        return null
+      }
+    }
+    if (audioCtxRef.current.state === 'suspended') {
+      audioCtxRef.current.resume()
+      console.log('[pan] AudioContext resume() called, state=', audioCtxRef.current.state)
+    }
+    return audioCtxRef.current
+  }, [])
+
+  // Set up AudioContext routing for a single stem. Called after ensureAudioContext.
+  const setupPanningForKey = useCallback(
+    (key: string): void => {
+      if (panNodesRef.current[key]) {
+        console.log('[pan] setup skipped for', key, '- already wired')
+        return
+      }
+      const ctx = audioCtxRef.current
+      if (!ctx) {
+        console.log('[pan] setup aborted for', key, '- no AudioContext')
+        return
+      }
+      const el = audioEls.current[key]
+      if (!el) {
+        console.log('[pan] setup aborted for', key, '- no audio element')
+        return
+      }
+      try {
+        const source = ctx.createMediaElementSource(el)
+        const panner = ctx.createStereoPanner()
+        panner.pan.value = stemPannings[key] ?? 0
+        source.connect(panner)
+        panner.connect(ctx.destination)
+        panNodesRef.current[key] = { source, panner }
+        console.log('[pan] SUCCESS for', key, 'pan=', panner.pan.value, 'ctx.state=', ctx.state)
+      } catch (err) {
+        console.error('[pan] FAILED for', key, err)
+      }
+    },
+    [stemPannings]
+  )
+
+  // Set up panning for all stems that have a non-zero pan configured.
+  const setupAllPanning = useCallback((): void => {
+    for (const key of Object.keys(stemPannings)) {
+      setupPanningForKey(key)
+    }
+  }, [stemPannings, setupPanningForKey])
+
+  // Sync panner values reactively when sliders move after graph is wired.
+  useEffect(() => {
+    for (const [key, nodes] of Object.entries(panNodesRef.current)) {
+      nodes.panner.pan.value = stemPannings[key] ?? 0
+    }
+  }, [stemPannings])
 
   // Toggle stem active
   const toggleStem = useCallback(
@@ -602,6 +606,9 @@ function StemPlayer({ stems, songName, onExportAll }: StemPlayerProps): React.JS
       if (!masterPlaying) {
         if (isActive) return // stopped + already active → nothing
         lastScheduledBeatRef.current = -1
+        ensureAudioContext()
+        setupAllPanning()
+        ensureWaveSurfer(key)
         // Start with only this stem
         setActive({ [key]: true })
         for (const k of Object.keys(audioEls.current)) {
@@ -618,7 +625,7 @@ function StemPlayer({ stems, songName, onExportAll }: StemPlayerProps): React.JS
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [masterPlaying]
+    [masterPlaying, ensureWaveSurfer]
   )
 
   // Master play: enable all / Master stop: disable all
@@ -629,17 +636,15 @@ function StemPlayer({ stems, songName, onExportAll }: StemPlayerProps): React.JS
       setMasterPlaying(false)
     } else {
       lastScheduledBeatRef.current = -1
-      // Ensure AudioContext exists (needed for clicks playback)
-      if (!audioCtxRef.current) {
-        try {
-          audioCtxRef.current = new AudioContext()
-        } catch {
-          /* ignore */
-        }
-      }
+      ensureAudioContext()
+      setupAllPanning()
       // Master play: enable all stems
       const all: Record<string, boolean> = {}
-      for (const path of stemsRef.current) all[stemNameFromPath(path)] = true
+      for (const path of stemsRef.current) {
+        const key = stemNameFromPath(path)
+        all[key] = true
+        ensureWaveSurfer(key)
+      }
       setActive(all)
       for (const key of Object.keys(audioEls.current)) {
         const el = audioEls.current[key]
@@ -652,7 +657,7 @@ function StemPlayer({ stems, songName, onExportAll }: StemPlayerProps): React.JS
       setMasterPlaying(true)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [masterPlaying])
+  }, [masterPlaying, ensureWaveSurfer])
 
   const handleRestart = useCallback((): void => {
     positionRef.current = 0
@@ -673,28 +678,25 @@ function StemPlayer({ stems, songName, onExportAll }: StemPlayerProps): React.JS
     })
   }, [])
 
-  const extForFormat = (fmt: string): string => (fmt === 'mp3' ? '.mp3' : '.wav')
-  const formatFilter = (fmt: string): { name: string; extensions: string[] } =>
-    fmt === 'mp3'
-      ? { name: 'MP3 Audio', extensions: ['mp3'] }
-      : { name: 'WAV Audio', extensions: ['wav'] }
+  const handleExportSingle = useCallback(
+    async (key: string): Promise<void> => {
+      if (!window.api) return
+      const stemPath = allStems.find((p) => stemNameFromPath(p) === key)
+      if (!stemPath) return
+      const stemLabel = STEM_META[key]?.label ?? key
+      const outPath = await window.api.saveFileDialog(
+        `${songName} - ${stemLabel}${extForFormat(exportFormat)}`,
+        [formatFilter(exportFormat)]
+      )
+      if (!outPath) return
+      setExporting(true)
+      await window.api.exportSingle(stemPath, outPath)
+      setExporting(false)
+    },
+    [allStems, songName, exportFormat]
+  )
 
-  const handleExportSingle = async (key: string): Promise<void> => {
-    if (!window.api) return
-    const stemPath = allStems.find((p) => stemNameFromPath(p) === key)
-    if (!stemPath) return
-    const stemLabel = STEM_META[key]?.label ?? key
-    const outPath = await window.api.saveFileDialog(
-      `${songName} - ${stemLabel}${extForFormat(exportFormat)}`,
-      [formatFilter(exportFormat)]
-    )
-    if (!outPath) return
-    setExporting(true)
-    await window.api.exportSingle(stemPath, outPath)
-    setExporting(false)
-  }
-
-  const handleExportMix = async (): Promise<void> => {
+  const handleExportMix = useCallback(async (): Promise<void> => {
     if (!window.api) return
     const selected = Object.entries(exportSelection)
       .filter(([, v]) => v)
@@ -711,29 +713,7 @@ function StemPlayer({ stems, songName, onExportAll }: StemPlayerProps): React.JS
     setExporting(true)
     await window.api.exportMix(stemPaths, outPath, exportWithMetronome ? { bpm } : undefined)
     setExporting(false)
-  }
-
-  const handlePitchShift = async (delta: number): Promise<void> => {
-    if (!window.api) return
-    const newShift = pitchShift + delta
-    if (newShift < -12 || newShift > 12) return
-    if (newShift === 0) {
-      setPitchShift(0)
-      setShiftedPaths({})
-      return
-    }
-    setTransposing(true)
-    try {
-      const paths = await window.api.transposeStems(allStems, newShift)
-      const map: Record<string, string> = {}
-      for (const p of paths) map[stemNameFromPath(p)] = p
-      setShiftedPaths(map)
-      setPitchShift(newShift)
-    } catch {
-      /* transpose failed */
-    }
-    setTransposing(false)
-  }
+  }, [exportSelection, allStems, songName, exportFormat, exportWithMetronome, bpm])
 
   const handleOpenTab = useCallback(
     (stemKey: string): void => {
@@ -746,11 +726,11 @@ function StemPlayer({ stems, songName, onExportAll }: StemPlayerProps): React.JS
     [songName]
   )
 
-  const toggleExportSelection = (key: string): void => {
+  const toggleExportSelection = useCallback((key: string): void => {
     setExportSelection((prev) => ({ ...prev, [key]: !prev[key] }))
-  }
+  }, [])
 
-  const handleDeleteRecording = async (path: string): Promise<void> => {
+  const handleDeleteRecording = useCallback(async (path: string): Promise<void> => {
     const key = stemNameFromPath(path)
     const el = audioEls.current[key]
     if (el) {
@@ -764,6 +744,14 @@ function StemPlayer({ stems, songName, onExportAll }: StemPlayerProps): React.JS
       delete stemWaves.current[key]
       delete waveUrlsRef.current[key]
     }
+    if (panNodesRef.current[key]) {
+      try {
+        panNodesRef.current[key].panner.disconnect()
+      } catch {
+        /* ignore */
+      }
+      delete panNodesRef.current[key]
+    }
     setRecordedStems((prev) => prev.filter((p) => p !== path))
     setActive((prev) => {
       const next = { ...prev }
@@ -773,17 +761,82 @@ function StemPlayer({ stems, songName, onExportAll }: StemPlayerProps): React.JS
     if (window.api) {
       window.api.deleteFile(path)
     }
-  }
+  }, [])
 
   const handleMasterVolume = useCallback((e: React.ChangeEvent<HTMLInputElement>): void => {
     setMasterVolume(parseFloat(e.target.value))
   }, [])
 
-  const formatTime = (seconds: number): string => {
-    const m = Math.floor(seconds / 60)
-    const s = Math.floor(seconds % 60)
-    return `${m}:${s.toString().padStart(2, '0')}`
-  }
+  // BPM callbacks
+  const handleBpmDecrement = useCallback((): void => {
+    setBpm((prev) => {
+      const next = Math.max(BPM_MIN, prev - 1)
+      lastScheduledBeatRef.current = -1
+      return next
+    })
+  }, [setBpm, lastScheduledBeatRef])
+  const handleBpmIncrement = useCallback((): void => {
+    setBpm((prev) => {
+      const next = Math.min(BPM_MAX, prev + 1)
+      lastScheduledBeatRef.current = -1
+      return next
+    })
+  }, [setBpm, lastScheduledBeatRef])
+  const handleBpmChange = useCallback(
+    (v: number): void => {
+      setBpm(v)
+      lastScheduledBeatRef.current = -1
+    },
+    [setBpm, lastScheduledBeatRef]
+  )
+
+  // Search for "setBpm" calls to also handle lastScheduledBeatRef
+  const handleMetronomeToggle = useCallback((): void => {
+    setMetronomeOn((prev) => !prev)
+  }, [setMetronomeOn])
+  const handleMetroVolumeChange = useCallback(
+    (v: number): void => {
+      setMetroVolume(v)
+    },
+    [setMetroVolume]
+  )
+  const handleMonitorVolumeChange = useCallback(
+    (v: number): void => {
+      setMonitorVolume(v)
+    },
+    [setMonitorVolume]
+  )
+  const handleRecordingFormatChange = useCallback(
+    (fmt: 'wav' | 'mp3'): void => {
+      setRecordingFormat(fmt)
+    },
+    [setRecordingFormat]
+  )
+  const handleCountInBarsChange = useCallback(
+    (bars: number): void => {
+      setCountInBars(bars)
+    },
+    [setCountInBars]
+  )
+
+  const handleStemVolume = useCallback((key: string, value: number): void => {
+    setStemVolumes((prev) => ({ ...prev, [key]: value }))
+  }, [])
+  const handleStemPanning = useCallback(
+    (key: string, value: number): void => {
+      setStemPannings((prev) => ({ ...prev, [key]: value }))
+
+      // If graph not yet wired, set it up now (slider change is a user gesture)
+      if (!panNodesRef.current[key]) {
+        console.log('[pan] wiring graph for', key, 'pan=', value)
+        ensureAudioContext()
+        setupPanningForKey(key)
+      } else {
+        console.log('[pan] graph already wired for', key, 'updating to', value)
+      }
+    },
+    [ensureAudioContext, setupPanningForKey]
+  )
 
   return (
     <>
@@ -816,121 +869,21 @@ function StemPlayer({ stems, songName, onExportAll }: StemPlayerProps): React.JS
           </div>
 
           {/* Master Timeline */}
-          <div className="bg-neutral-900/80 rounded-xl border border-neutral-800 p-4">
-            <div className="flex items-center justify-between mb-2">
-              <div className="flex items-center gap-2">
-                <span className="text-xs font-semibold text-neutral-400 uppercase tracking-wide">
-                  Timeline
-                </span>
-                <span className="text-[10px] font-mono text-neutral-500">
-                  {formatTime(progress)} / {formatTime(masterWaveDuration || duration)}
-                </span>
-              </div>
-              <div className="flex items-center gap-2">
-                {markers.length > 0 && (
-                  <>
-                    <select
-                      value={
-                        loopStart !== null
-                          ? markers.findIndex((m) => m.time === loopStart).toString()
-                          : ''
-                      }
-                      onChange={(e) => {
-                        const idx = parseInt(e.target.value)
-                        if (!isNaN(idx) && markers[idx]) setLoopStart(markers[idx].time)
-                        else setLoopStart(null)
-                      }}
-                      className="bg-neutral-800 text-neutral-300 text-[10px] border border-neutral-700 rounded px-1 py-0.5"
-                    >
-                      <option value="">A—</option>
-                      {markers.map((m, i) => (
-                        <option key={i} value={i}>
-                          {m.label}
-                        </option>
-                      ))}
-                    </select>
-                    <select
-                      value={
-                        loopEnd !== null
-                          ? markers.findIndex((m) => m.time === loopEnd).toString()
-                          : ''
-                      }
-                      onChange={(e) => {
-                        const idx = parseInt(e.target.value)
-                        if (!isNaN(idx) && markers[idx]) setLoopEnd(markers[idx].time)
-                        else setLoopEnd(null)
-                      }}
-                      className="bg-neutral-800 text-neutral-300 text-[10px] border border-neutral-700 rounded px-1 py-0.5"
-                    >
-                      <option value="">B—</option>
-                      {markers.map((m, i) => (
-                        <option key={i} value={i}>
-                          {m.label}
-                        </option>
-                      ))}
-                    </select>
-                    <button
-                      onClick={() => setLoopEnabled(!loopEnabled)}
-                      disabled={loopStart === null || loopEnd === null}
-                      className={`px-2 py-0.5 rounded text-[10px] font-semibold transition-colors ${
-                        loopEnabled
-                          ? 'bg-green-600 text-white'
-                          : 'bg-neutral-800 text-neutral-500 hover:text-white disabled:opacity-30'
-                      }`}
-                    >
-                      Loop
-                    </button>
-                  </>
-                )}
-                <button
-                  onClick={() => setMarkers([])}
-                  className="px-2 py-0.5 rounded text-[10px] font-medium bg-neutral-800 text-neutral-500 hover:text-white transition-colors"
-                >
-                  Clear
-                </button>
-              </div>
-            </div>
-            <div className="relative">
-              <div
-                ref={(el) => {
-                  masterWaveContainer.current = el
-                }}
-                className="w-full rounded overflow-hidden cursor-pointer h-16"
-              />
-              {/* Marker overlays + loop highlight */}
-              <TimelineMarkers
-                markers={markers}
-                loopStart={loopStart}
-                loopEnd={loopEnd}
-                loopEnabled={loopEnabled}
-                duration={masterWaveDuration || duration}
-                onMarkerClick={(m) => {
-                  if (loopStart === m.time) setLoopStart(null)
-                  else if (loopEnd === m.time) setLoopEnd(null)
-                  else if (loopStart === null) setLoopStart(m.time)
-                  else if (loopEnd === null) setLoopEnd(m.time)
-                  else {
-                    setLoopStart(m.time)
-                    setLoopEnd(null)
-                  }
-                }}
-                onMarkerContextMenu={(i) => {
-                  const m = markers[i]
-                  setMarkers((prev) => prev.filter((_, idx) => idx !== i))
-                  if (loopStart === m.time) setLoopStart(null)
-                  if (loopEnd === m.time) setLoopEnd(null)
-                }}
-              />
-            </div>
-            <div className="flex items-center justify-between mt-1">
-              <span className="text-[10px] text-neutral-600">
-                Double-click to add marker • Click marker to set A/B • Right-click to remove
-              </span>
-              <span className="text-[10px] text-neutral-600">
-                {markers.length} marker{markers.length !== 1 ? 's' : ''}
-              </span>
-            </div>
-          </div>
+          <TimelinePanel
+            markers={markers}
+            loopStart={loopStart}
+            loopEnd={loopEnd}
+            loopEnabled={loopEnabled}
+            masterWaveDuration={masterWaveDuration}
+            duration={duration}
+            progress={progress}
+            masterWaveContainerRef={masterWaveContainer}
+            onSetLoopStart={handleSetLoopStart}
+            onSetLoopEnd={handleSetLoopEnd}
+            onToggleLoop={handleToggleLoop}
+            onClearMarkers={handleClearMarkers}
+            onRemoveMarker={handleRemoveMarker}
+          />
 
           {showJamZone && effectiveKey && (
             <JamZone
@@ -942,328 +895,67 @@ function StemPlayer({ stems, songName, onExportAll }: StemPlayerProps): React.JS
             />
           )}
 
-          <div className="grid grid-cols-2 gap-4">
-            {stemItems.map(({ key, meta, isRecording }) => {
-              const isAudible = masterPlaying && active[key]
-              const isInactive = !active[key] && !masterPlaying
-              const canTab = ['guitar', 'bass', 'piano'].includes(key)
-              const canRecord = recording === 'idle' && !isRecording
-              const isRecordingThis = recordingKey === key && recording === 'recording'
-
-              return (
-                <StemCard
-                  key={key}
-                  meta={meta}
-                  isRecording={isRecording}
-                  isAudible={isAudible}
-                  isInactive={isInactive}
-                  isActive={!!active[key]}
-                  isSolo={!!solo[key]}
-                  progress={progress}
-                  duration={duration}
-                  exporting={exporting}
-                  isRecordingThis={isRecordingThis}
-                  recordingElapsed={recordingElapsed}
-                  canTab={canTab}
-                  canRecord={canRecord}
-                  formatTime={formatTime}
-                  onToggle={() => toggleStem(key)}
-                  onSolo={() => toggleSolo(key)}
-                  onExport={() => handleExportSingle(key)}
-                  onOpenTab={() => handleOpenTab(key)}
-                  onStartRecording={() => handleStartRecording(key)}
-                  onStopRecording={handleStopRecording}
-                  onDeleteRecording={() => {
-                    const recPath = allStems.find((p) => stemNameFromPath(p) === key)
-                    if (recPath) handleDeleteRecording(recPath)
-                  }}
-                >
-                  <audio
-                    ref={(el) => {
-                      if (el) {
-                        audioEls.current[key] = el
-                        el.preload = 'none'
-                        if (!isRecording) {
-                          el.ontimeupdate = () => onAudioTimeRef.current(el.currentTime)
-                        }
-                      }
-                    }}
-                  />
-                  <div
-                    ref={(el) => {
-                      stemContainers.current[key] = el
-                    }}
-                    className="h-8 rounded overflow-hidden cursor-pointer"
-                  />
-                </StemCard>
-              )
-            })}
-          </div>
+          <StemGrid
+            items={stemItems}
+            masterPlaying={masterPlaying}
+            active={active}
+            solo={solo}
+            progress={progress}
+            duration={duration}
+            exporting={exporting}
+            recording={recording}
+            recordingKey={recordingKey}
+            recordingElapsed={recordingElapsed}
+            formatTime={formatTime}
+            allStems={allStems}
+            stemVolumes={stemVolumes}
+            stemPannings={stemPannings}
+            onToggleStem={toggleStem}
+            onToggleSolo={toggleSolo}
+            onExportSingle={handleExportSingle}
+            onOpenTab={handleOpenTab}
+            onStartRecording={handleStartRecording}
+            onStopRecording={handleStopRecording}
+            onDeleteRecording={handleDeleteRecording}
+            onStemVolume={handleStemVolume}
+            onStemPanning={handleStemPanning}
+          />
         </div>
 
-        <div className="w-44 shrink-0 bg-neutral-900/80 rounded-xl border border-neutral-800 p-4 flex flex-col items-center gap-5 self-start order-1">
-          <h3 className="text-sm font-semibold text-neutral-400 uppercase tracking-wide">Master</h3>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={toggleMasterPlay}
-              className="w-12 h-12 rounded-full flex items-center justify-center bg-blue-600/20 hover:bg-blue-600/30 transition-colors"
-            >
-              {masterPlaying ? (
-                <span className="text-blue-400 text-base font-bold">| |</span>
-              ) : (
-                <span className="text-blue-400 text-base ml-0.5">&#9654;</span>
-              )}
-            </button>
-            <button
-              onClick={handleRestart}
-              className="w-10 h-10 rounded-full flex items-center justify-center bg-neutral-800 hover:bg-neutral-700 transition-colors text-neutral-400 hover:text-white"
-              title="Restart"
-            >
-              &#9664;&#9664;
-            </button>
-          </div>
-          <span className="text-[10px] font-mono text-neutral-500 -mt-2">
-            {formatTime(progress)} / {formatTime(duration)}
-          </span>
-          <div className="flex flex-col items-center gap-2 w-full">
-            <span className="text-xs text-neutral-500">Volume</span>
-            <input
-              type="range"
-              aria-label="Master volume"
-              min="0"
-              max="1"
-              step="0.01"
-              value={masterVolume}
-              onChange={handleMasterVolume}
-              className="accent-blue-500 cursor-pointer h-[120px] w-6 [writing-mode:vertical-lr] [direction:rtl]"
-            />
-            <span className="text-xs text-neutral-500">{Math.round(masterVolume * 100)}%</span>
-          </div>
-
-          <div className="border-t border-neutral-800 pt-4 w-full flex flex-col gap-3">
-            <h3 className="text-sm font-semibold text-neutral-400 uppercase tracking-wide text-center">
-              Record
-            </h3>
-            <div className="flex flex-col gap-2 w-full">
-              <span className="text-[10px] text-neutral-500 text-center">Monitor volume</span>
-              <input
-                type="range"
-                aria-label="Monitor volume"
-                min="0"
-                max="1"
-                step="0.01"
-                value={monitorVolume}
-                onChange={(e) => setMonitorVolume(parseFloat(e.target.value))}
-                className="accent-red-500 cursor-pointer w-full"
-              />
-            </div>
-            <div className="flex items-center justify-center gap-2">
-              <button
-                onClick={() => setRecordingFormat('wav')}
-                className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors ${
-                  recordingFormat === 'wav'
-                    ? 'bg-red-600 text-white'
-                    : 'bg-neutral-800 text-neutral-400'
-                }`}
-              >
-                WAV
-              </button>
-              <button
-                onClick={() => setRecordingFormat('mp3')}
-                className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors ${
-                  recordingFormat === 'mp3'
-                    ? 'bg-red-600 text-white'
-                    : 'bg-neutral-800 text-neutral-400'
-                }`}
-              >
-                MP3
-              </button>
-            </div>
-            <div className="flex items-center justify-center gap-1.5">
-              <span className="text-[10px] text-neutral-500">Count-in</span>
-              {[0, 1, 2, 4].map((bars) => (
-                <button
-                  key={bars}
-                  onClick={() => setCountInBars(bars)}
-                  className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors ${
-                    countInBars === bars
-                      ? 'bg-red-600 text-white'
-                      : 'bg-neutral-800 text-neutral-400'
-                  }`}
-                >
-                  {bars === 0 ? 'OFF' : `${bars}`}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div className="border-t border-neutral-800 pt-3 w-full">
-            <button
-              onClick={() => setShowExportModal(true)}
-              className="w-full px-2 py-1.5 rounded text-[10px] font-semibold bg-blue-600 hover:bg-blue-500 text-white transition-colors"
-            >
-              Export Mix...
-            </button>
-          </div>
-
-          <div className="border-t border-neutral-800 pt-4 w-full flex flex-col gap-3">
-            <h3 className="text-sm font-semibold text-neutral-400 uppercase tracking-wide text-center">
-              Key
-            </h3>
-            <div className="text-center relative">
-              <button
-                onClick={() => setShowKeyPicker(!showKeyPicker)}
-                className="text-lg font-bold text-white hover:text-orange-400 transition-colors cursor-pointer"
-                title="Click to change key"
-              >
-                {effectiveKey || '...'}
-                {manualKey && <span className="text-[10px] text-orange-400 ml-1">✎</span>}
-              </button>
-              {showKeyPicker && (
-                <div
-                  ref={keyPickerRef}
-                  className="absolute z-50 top-full mt-2 left-1/2 -translate-x-1/2 bg-neutral-900 border border-neutral-700 rounded-xl p-3 shadow-2xl w-48 max-h-64 overflow-y-auto"
-                >
-                  <div className="grid grid-cols-2 gap-1">
-                    {(() => {
-                      const NOTE = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
-                      const types = ['Major', 'Minor']
-                      const keys: string[] = []
-                      for (const n of NOTE) for (const t of types) keys.push(`${n} ${t}`)
-                      return keys.map((k) => (
-                        <button
-                          key={k}
-                          onClick={() => {
-                            setManualKey(k)
-                            setShowKeyPicker(false)
-                            const songDir =
-                              stems.length > 0 ? stems[0].replace(/[/\\][^/\\]+$/, '') : ''
-                            if (window.api && songDir) {
-                              window.api.saveMeta(songDir, {
-                                key: k,
-                                _version: CACHE_VERSION
-                              } as Record<string, unknown>)
-                            }
-                          }}
-                          className={`px-2 py-1 rounded text-xs font-medium transition-colors ${
-                            effectiveKey === k
-                              ? 'bg-orange-600 text-white'
-                              : 'bg-neutral-800 text-neutral-400 hover:text-white hover:bg-neutral-700'
-                          }`}
-                        >
-                          {k}
-                        </button>
-                      ))
-                    })()}
-                  </div>
-                  {manualKey && (
-                    <button
-                      onClick={() => {
-                        setManualKey(null)
-                        setShowKeyPicker(false)
-                      }}
-                      className="w-full mt-2 px-2 py-1 rounded text-xs font-medium bg-neutral-800 text-neutral-500 hover:text-white transition-colors"
-                    >
-                      Reset to detected ({detectedKey ?? '...'})
-                    </button>
-                  )}
-                </div>
-              )}
-            </div>
-            <div className="flex items-center justify-center gap-1.5">
-              <button
-                onClick={() => handlePitchShift(-1)}
-                disabled={transposing || pitchShift <= -12}
-                className="w-8 h-8 rounded bg-neutral-800 text-neutral-400 hover:text-white disabled:text-neutral-600 disabled:cursor-not-allowed text-sm flex items-center justify-center"
-              >
-                −
-              </button>
-              <span className="w-14 text-center text-sm font-mono text-orange-400">
-                {pitchShift === 0 ? '±0' : pitchShift > 0 ? `+${pitchShift}` : `${pitchShift}`}
-              </span>
-              <button
-                onClick={() => handlePitchShift(1)}
-                disabled={transposing || pitchShift >= 12}
-                className="w-8 h-8 rounded bg-neutral-800 text-neutral-400 hover:text-white disabled:text-neutral-600 disabled:cursor-not-allowed text-sm flex items-center justify-center"
-              >
-                +
-              </button>
-            </div>
-            <span className="text-[10px] text-neutral-500 text-center">
-              {transposing ? 'Transposing...' : 'semitone steps'}
-            </span>
-          </div>
-
-          <div className="border-t border-neutral-800 pt-4 w-full flex flex-col gap-3">
-            <h3 className="text-sm font-semibold text-neutral-400 uppercase tracking-wide text-center">
-              Metronome
-            </h3>
-            {/* Row 1: BPM controls */}
-            <div className="flex items-center justify-center gap-1.5">
-              <span className="text-xs text-neutral-500">BPM</span>
-              <button
-                onClick={() => {
-                  setBpm((prev) => Math.max(40, prev - 1))
-                  lastScheduledBeatRef.current = -1
-                }}
-                className="w-6 h-6 rounded bg-neutral-800 text-neutral-400 hover:text-white text-xs flex items-center justify-center"
-              >
-                −
-              </button>
-              <input
-                type="number"
-                aria-label="BPM"
-                min="40"
-                max="280"
-                value={bpm}
-                onChange={(e) => {
-                  const v = parseInt(e.target.value, 10)
-                  if (!isNaN(v) && v >= 40 && v <= 280) {
-                    setBpm(v)
-                    lastScheduledBeatRef.current = -1
-                  }
-                }}
-                className="w-12 h-6 text-center text-xs font-mono text-white bg-neutral-800 border border-neutral-700 rounded focus:outline-none focus:border-orange-500 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
-              />
-              <button
-                onClick={() => {
-                  setBpm((prev) => Math.min(280, prev + 1))
-                  lastScheduledBeatRef.current = -1
-                }}
-                className="w-6 h-6 rounded bg-neutral-800 text-neutral-400 hover:text-white text-xs flex items-center justify-center"
-              >
-                +
-              </button>
-            </div>
-            {/* Row 2: ON/OFF + Volume */}
-            <div className="flex items-center justify-between px-1">
-              <button
-                onClick={() => setMetronomeOn((prev) => !prev)}
-                className={`px-4 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
-                  metronomeOn
-                    ? 'bg-orange-600 text-white'
-                    : 'bg-neutral-800 text-neutral-400 hover:text-white'
-                }`}
-              >
-                {metronomeOn ? 'ON' : 'OFF'}
-              </button>
-              <div className="flex flex-col items-center gap-1.5">
-                <span className="text-xs text-neutral-500">Vol</span>
-                <input
-                  type="range"
-                  aria-label="Metronome volume"
-                  min="0"
-                  max="1"
-                  step="0.01"
-                  value={metroVolume}
-                  onChange={(e) => setMetroVolume(parseFloat(e.target.value))}
-                  className="accent-orange-500 cursor-pointer h-[60px] w-5 [writing-mode:vertical-lr] [direction:rtl]"
-                />
-                <span className="text-xs text-neutral-500">{Math.round(metroVolume * 100)}%</span>
-              </div>
-            </div>
-          </div>
-        </div>
+        <MasterPanel
+          masterPlaying={masterPlaying}
+          masterVolume={masterVolume}
+          progress={progress}
+          duration={duration}
+          effectiveKey={effectiveKey}
+          manualKey={manualKey}
+          detectedKey={detectedKey}
+          pitchShift={pitchShift}
+          transposing={transposing}
+          bpm={bpm}
+          metronomeOn={metronomeOn}
+          metroVolume={metroVolume}
+          monitorVolume={monitorVolume}
+          recordingFormat={recordingFormat}
+          countInBars={countInBars}
+          showKeyPicker={showKeyPicker}
+          onToggleMasterPlay={toggleMasterPlay}
+          onRestart={handleRestart}
+          onMasterVolumeChange={handleMasterVolume}
+          onPitchShift={handlePitchShift}
+          onBpmDecrement={handleBpmDecrement}
+          onBpmChange={handleBpmChange}
+          onBpmIncrement={handleBpmIncrement}
+          onMetronomeToggle={handleMetronomeToggle}
+          onMetroVolumeChange={handleMetroVolumeChange}
+          onMonitorVolumeChange={handleMonitorVolumeChange}
+          onRecordingFormatChange={handleRecordingFormatChange}
+          onCountInBarsChange={handleCountInBarsChange}
+          onShowExportModal={() => setShowExportModal(true)}
+          onToggleKeyPicker={handleToggleKeyPicker}
+          onKeySelect={handleKeySelect}
+          onKeyReset={handleKeyReset}
+        />
       </div>
 
       {/* Countdown overlay */}
@@ -1305,6 +997,25 @@ function StemPlayer({ stems, songName, onExportAll }: StemPlayerProps): React.JS
         }}
       />
 
+      {/* Audio elements (always mounted, not virtualized) */}
+      <div className="hidden" aria-hidden="true">
+        {stemItems.map(({ key, isRecording }) => (
+          <audio
+            key={key}
+            ref={(el) => {
+              if (el) {
+                audioEls.current[key] = el
+                el.preload = 'none'
+                el.crossOrigin = 'anonymous'
+                if (!isRecording) {
+                  el.ontimeupdate = () => onAudioTimeRef.current(el.currentTime)
+                }
+              }
+            }}
+          />
+        ))}
+      </div>
+
       {/* Marker label input */}
       {showMarkerInput && (
         <MarkerLabelInput
@@ -1324,66 +1035,3 @@ function StemPlayer({ stems, songName, onExportAll }: StemPlayerProps): React.JS
 }
 
 export default StemPlayer
-
-function MarkerLabelInput({
-  time,
-  formatTime,
-  onSave,
-  onCancel
-}: {
-  time: number
-  formatTime: (s: number) => string
-  onSave: (label: string) => void
-  onCancel: () => void
-}): React.JSX.Element {
-  const [label, setLabel] = useState(() => {
-    const sec = Math.floor(time % 60)
-    const min = Math.floor(time / 60)
-    return `Section ${min}:${sec.toString().padStart(2, '0')}`
-  })
-  const inputRef = useRef<HTMLInputElement | null>(null)
-
-  useEffect(() => {
-    inputRef.current?.focus()
-  }, [])
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-      <div className="bg-neutral-900 border border-neutral-700 rounded-2xl p-5 w-72 shadow-2xl flex flex-col gap-3">
-        <h3 className="text-sm font-semibold text-neutral-400 uppercase tracking-wide">
-          New Marker
-        </h3>
-        <div className="flex flex-col gap-1">
-          <span className="text-[10px] text-neutral-500">Position: {formatTime(time)}</span>
-          <input
-            ref={inputRef}
-            type="text"
-            value={label}
-            onChange={(e) => setLabel(e.target.value)}
-            placeholder="e.g. Verse, Chorus, Bridge..."
-            className="w-full px-3 py-2 rounded-lg text-sm bg-neutral-800 border border-neutral-700 text-white placeholder-neutral-600 focus:outline-none focus:border-orange-500"
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && label.trim()) onSave(label.trim())
-              if (e.key === 'Escape') onCancel()
-            }}
-          />
-        </div>
-        <div className="flex gap-3">
-          <button
-            onClick={onCancel}
-            className="flex-1 px-4 py-2 rounded-lg text-xs font-medium bg-neutral-800 text-neutral-400 hover:text-white transition-colors"
-          >
-            Cancel
-          </button>
-          <button
-            onClick={() => label.trim() && onSave(label.trim())}
-            disabled={!label.trim()}
-            className="flex-1 px-4 py-2 rounded-lg text-xs font-semibold bg-orange-600 hover:bg-orange-500 text-white transition-colors disabled:opacity-50"
-          >
-            Add Marker
-          </button>
-        </div>
-      </div>
-    </div>
-  )
-}

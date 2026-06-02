@@ -88,12 +88,17 @@ velody/
 │
 ├── src/
 │   ├── main/
-│   │   ├── index.ts          ← Electron main process
-│   │   └── ipc/
-│   │       └── handlers.ts   ← IPC: file dialog, spawn Python
+│   │   ├── index.ts              ← Electron main process
+│   │   ├── ipc/
+│   │   │   └── handlers.ts       ← IPC: file dialog, spawn Python
+│   │   ├── audio-server.ts       ← HTTP streaming server
+│   │   ├── jobs/
+│   │   │   └── JobManager.ts     ← Separation job queue
+│   │   └── setup/
+│   │       └── index.ts          ← Auto-setup manager
 │   ├── preload/
-│   │   ├── index.ts          ← contextBridge APIs
-│   │   └── index.d.ts        ← Window.api types
+│   │   ├── index.ts              ← contextBridge APIs
+│   │   └── index.d.ts            ← Window.api types
 │   └── renderer/
 │       ├── index.html
 │       └── src/
@@ -101,29 +106,37 @@ velody/
 │           ├── App.tsx
 │           ├── env.d.ts
 │           ├── components/
-│           │   └── AudioUploader.tsx  ← Drag & drop
+│           │   ├── AudioUploader.tsx   ← Drag & drop
+│           │   ├── StemPlayer.tsx      ← Main orchestrator
+│           │   ├── StemGrid.tsx        ← Virtualized stem grid
+│           │   ├── StemCard.tsx        ← Individual stem controls
+│           │   ├── MasterPanel.tsx     ← Master volume, BPM, metronome
+│           │   ├── TimelinePanel.tsx   ← Loop A/B controls
+│           │   ├── TimelineMarkers.tsx ← Visual markers
+│           │   ├── JamZone.tsx         ← Scale explorer
+│           │   ├── Fretboard.tsx       ← Interactive fretboard
+│           │   ├── ExportModal.tsx     ← Export dialog
+│           │   ├── RecordingConfirmationModal.tsx
+│           │   └── SetupScreen.tsx     ← First-run setup
 │           ├── pages/
-│           │   └── Home.tsx           ← Main layout
+│           │   └── Home.tsx           ← Main layout + queue
 │           ├── hooks/
-│           │   └── useAudio.ts        ← Audio state
-│           └── audio/
-│               └── player.ts          ← WaveSurfer wrapper
-│
-├── shared/
-│   └── types/
-│       └── index.ts           ← Stem, Track, SeparationResult
+│           │   ├── useMetronome.ts    ← Click track engine
+│           │   └── useRecording.ts    ← Recording flow
+│           └── workers/
+│               └── bpm.worker.ts      ← BPM detection worker
 │
 ├── python-worker/
-│   ├── separate.py            ← Demucs script
-│   ├── detect_key.py          ← Key detection (numpy FFT + Krumhansl-Schmuckler)
+│   ├── separate.py              ← Demucs script
+│   ├── detect_key.py            ← Key detection (Krumhansl-Schmuckler)
 │   ├── requirements.txt
 │   └── utils/
 │
 ├── output/
-│   └── stems/                 ← Generated stems here
+│   └── stems/                   ← Generated stems here
 │
-├── resources/                 ← App icons
-├── build/                     ← Electron builder configs
+├── resources/                   ← App icons
+├── build/                       ← Electron builder configs
 ├── electron.vite.config.ts
 ├── package.json
 ├── tsconfig.json / .node / .web
@@ -168,7 +181,7 @@ Features:
 - Waveforms
 - Mute stem
 - Solo stem
-- Volume per stem
+- Volume per stem (individual slider)
 
 Using:
 
@@ -341,9 +354,9 @@ Update UI
 
 Features para navegar y practicar secciones específicas de la canción:
 
-- **Timeline interactivo**: waveform clickeable con zoom, seek y arrastre, reemplazando el seek básico actual
-- **Marcadores secciones**: markers editables sobre el timeline (verso, coro, puente, etc.)
-- **Loops secciones**: loop A/B y loop de sección usando los marcadores, para repetir pasajes difíciles
+- **Timeline interactivo**: waveform clickeable con zoom, seek y arrastre, reemplazando el seek básico actual ◐ (seek listo, falta zoom/arrastre)
+- **Marcadores secciones**: markers editables sobre el timeline (verso, coro, puente, etc.) ✅
+- **Loops secciones**: loop A/B y loop de sección usando los marcadores, para repetir pasajes difíciles ✅
 
 ## Phase 2 — Grabación simple
 
@@ -356,16 +369,17 @@ Herramientas mínimas para que el músico se grabe practicando:
 ## Phase 2 — Herramientas de práctica
 
 - **Tempo tap**: tocar el tempo manualmente con un botón si la detección automática falla
-- **Manual key override**: permitir al usuario cambiar la tonalidad detectada si el algoritmo falla
-- **Key-aware Jam Zone**: que las escalas cambien en tiempo real si el usuario sobreescribe la key
-- **Jam Zone visual**: reemplazar los chips de notas por un teclado de piano visual interactivo
-- **Diapasón interactivo**: mostrar el mástil de guitarra/bajo con las notas de la escala resaltadas
-- **🔗 Tab Finder**: botón por stem que busca tabs en Ultimate Guitar (se abre en el navegador predeterminado)
+- **Manual key override**: permitir al usuario cambiar la tonalidad detectada si el algoritmo falla ✅
+- **Key-aware Jam Zone**: que las escalas cambien en tiempo real si el usuario sobreescribe la key ✅
+- **Jam Zone visual / Diapasón interactivo**: fretboard SVG con notas de escala, toggle guitarra/bajo ✅
+- **🔗 Tab Finder**: botón por stem que busca tabs en Ultimate Guitar ✅
 
-## Phase 2 — Visualización
+## Phase 2 — Mezcla
 
-- **Jam Zone visual**: reemplazar los chips de notas por un diapasón interactivo de guitarra/bajo
-- **Diapasón interactivo**: mostrar el mástil de guitarra/bajo con las notas de la escala resaltadas, notas raíz en naranja, toggle guitarra/bajo
+Control de mezcla por stem para ajustar la escucha:
+
+- **Volumen por track**: slider individual de volumen para cada stem (ya existe volumen básico, mejorar precisión y UX)
+- **Per-track panning**: control de paneo izquierda/derecha por stem
 
 ---
 
@@ -527,3 +541,52 @@ NOT on:
 - Kubernetes
 - expensive GPU infrastructure
 - premature scaling
+
+---
+
+# Performance Tracking
+
+## Completed
+
+| #   | Optimización                                                                                                 | Impacto                          | Estado  |
+| --- | ------------------------------------------------------------------------------------------------------------ | -------------------------------- | ------- |
+| R1  | BPM detection → Web Worker (`bpm.worker.ts`)                                                                 | UI no se congela 1-2s            | ✅ Done |
+| R2  | `setProgress` throttle 60fps → 20fps                                                                         | -66% re-renders                  | ✅ Done |
+| R3  | WaveSurfer sync directo a Canvas                                                                             | 0 renders extra                  | ✅ Done |
+| R4  | Refs en `useLayoutEffect`                                                                                    | Sin ESLint warnings              | ✅ Done |
+| R5  | Inline styles → Tailwind                                                                                     | CSS más eficiente                | ✅ Done |
+| R6  | Strict TypeScript (`tsconfig strict: true`)                                                                  | Type safety total                | ✅ Done |
+| R7  | Extracción componentes `ExportModal`, `JamZone`, `RecordingConfirmationModal`, `TimelineMarkers`, `StemCard` | Código más mantenible            | ✅ Done |
+| R8  | Extracción hooks `useMetronome`, `useRecording`                                                              | Separación de concerns           | ✅ Done |
+| R9  | Eliminación `ProcessingScreen`, `useAudio`, `audio/player.ts`, `shared/types/`                               | Dead code removal                | ✅ Done |
+| R10 | Eliminación `electron-updater`, `@electron-toolkit/preload`                                                  | -2 dependencias                  | ✅ Done |
+| R11 | Audio-server: `isPathSafe`, CORS `'*'`, OPTIONS preflight                                                    | Seguridad + estabilidad          | ✅ Done |
+| R12 | Async `execFile` reemplaza `execSync`/`execFileSync`                                                         | Non-blocking I/O                 | ✅ Done |
+| R13 | Timeouts 10min en spawns FFmpeg                                                                              | Evita procesos colgados          | ✅ Done |
+| R14 | `AudioContext.close()` on unmount + cleanup timeouts                                                         | Sin memory leaks                 | ✅ Done |
+| R15 | Fixed stale closures WaveSurfer + recording sync                                                             | Bugs corregidos                  | ✅ Done |
+| R16 | Extracción `MarkerLabelInput` a su propio archivo                                                            | -66 líneas de StemPlayer         | ✅ Done |
+| R17 | Extracción BPM + key detection → `useSongAnalysis` hook                                                      | Separación de concerns           | ✅ Done |
+| R18 | `stemNameFromPath` unificada en `utils.ts`                                                                   | Sin duplicación (era 2 archivos) | ✅ Done |
+| R19 | `formatTime` unificada en `utils.ts`                                                                         | Sin duplicación (era 3 archivos) | ✅ Done |
+| R20 | Magic numbers → constantes en `utils.ts`                                                                     | Código más legible               | ✅ Done |
+| P2  | Lazy WaveSurfer (crear waveform solo al activar stem)                                                        | -50% WaveSurfer, -40% RAM        | ✅ Done |
+| P8  | Volumen por track (slider individual por stem)                                                               | Mezcla más cómoda                | ✅ Done |
+| P9  | Per-track panning (control stereo L/R por stem via Web Audio API)                                            | Mezcla más profesional           | ✅ Done |
+
+## Pending
+
+| #   | Optimización / Feature | Esfuerzo estimado | Impacto esperado | Estado |
+| --- | ---------------------- | ----------------- | ---------------- | ------ |
+
+## Future improvements (sin priorizar)
+
+- **StemPlayer god component**: ~1,080 lns (bajó de ~1,125), aún se puede seguir extrayendo
+
+## Notas técnicas
+
+- **P3 Virtualización StemGrid**: ✅ Ya implementado con `react-window`
+- **Cache de pitch shift**: ✅ Ya implementado (`_transposed/`), solo falta persistencia
+- **Lazy WaveSurfer**: ✅ Implementado — `ensureWaveSurfer()` crea waveforms on-demand al dar play
+- **Per-stem panning**: ✅ Implementado via Web Audio API `StereoPannerNode` + `crossOrigin = 'anonymous'` en `<audio>` para sortear CORS
+- **Web Worker pool**: El más complejo; requiere refactor del JobManager

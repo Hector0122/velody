@@ -2,16 +2,9 @@ import { ipcMain, dialog, shell } from 'electron'
 import { spawn, execFile } from 'child_process'
 import { join } from 'path'
 import { tmpdir } from 'os'
-import {
-  mkdirSync,
-  writeFileSync,
-  existsSync,
-  readdirSync,
-  statSync,
-  rmSync,
-  mkdtempSync,
-  readFileSync
-} from 'fs'
+import { createWriteStream } from 'fs'
+import { mkdir, writeFile, readFile, rm, readdir, stat, mkdtemp, access } from 'fs/promises'
+import { constants } from 'fs'
 import { SetupManager } from '../setup'
 import { JobManager } from '../jobs/JobManager'
 
@@ -32,6 +25,15 @@ function getStemsRootDir(): string {
   return join(__dirname, '../../output/stems')
 }
 
+async function fileExists(path: string): Promise<boolean> {
+  try {
+    await access(path, constants.F_OK)
+    return true
+  } catch {
+    return false
+  }
+}
+
 export interface SongItem {
   name: string
   stems: string[]
@@ -40,20 +42,23 @@ export interface SongItem {
 export function registerIpcHandlers(): void {
   ipcMain.handle('shell:openExternal', (_event, url: string) => shell.openExternal(url))
 
-  ipcMain.handle('songs:list', (): SongItem[] => {
+  ipcMain.handle('songs:list', async (): Promise<SongItem[]> => {
     const root = getStemsRootDir()
-    if (!existsSync(root)) return []
-    return readdirSync(root)
-      .filter((entry) => statSync(join(root, entry)).isDirectory())
-      .map((name) => {
-        const dir = join(root, name)
-        const stems = readdirSync(dir)
-          .filter((f) => STEM_NAMES.some((s) => f.startsWith(s)))
-          .map((f) => join(dir, f))
-        return { name, stems }
-      })
-      .filter((s) => s.stems.length > 0)
-      .sort((a, b) => b.name.localeCompare(a.name))
+    if (!(await fileExists(root))) return []
+    const entries = await readdir(root)
+    const result: SongItem[] = []
+    for (const entry of entries) {
+      const dir = join(root, entry)
+      const st = await stat(dir)
+      if (!st.isDirectory()) continue
+      const files = await readdir(dir)
+      const stems = files
+        .filter((f) => STEM_NAMES.some((s) => f.startsWith(s)))
+        .map((f) => join(dir, f))
+      if (stems.length > 0) result.push({ name: entry, stems })
+    }
+    result.sort((a, b) => b.name.localeCompare(a.name))
+    return result
   })
 
   ipcMain.handle('dialog:openFile', async () => {
@@ -67,24 +72,27 @@ export function registerIpcHandlers(): void {
     return result.filePaths[0]
   })
 
-  ipcMain.handle('song:delete', (_event, songName: string) => {
+  ipcMain.handle('song:delete', async (_event, songName: string) => {
     const dir = join(getStemsRootDir(), songName)
-    if (!existsSync(dir)) return { success: false, error: 'Song not found' }
-    rmSync(dir, { recursive: true, force: true })
+    if (!(await fileExists(dir))) return { success: false, error: 'Song not found' }
+    await rm(dir, { recursive: true, force: true })
     return { success: true }
   })
 
-  ipcMain.handle('song:saveMeta', (_event, songDir: string, meta: Record<string, unknown>) => {
-    const metaPath = join(songDir, '.velody')
-    writeFileSync(metaPath, JSON.stringify(meta), 'utf-8')
-    return { success: true }
-  })
+  ipcMain.handle(
+    'song:saveMeta',
+    async (_event, songDir: string, meta: Record<string, unknown>) => {
+      const metaPath = join(songDir, '.velody')
+      await writeFile(metaPath, JSON.stringify(meta), 'utf-8')
+      return { success: true }
+    }
+  )
 
-  ipcMain.handle('song:loadMeta', (_event, songDir: string) => {
+  ipcMain.handle('song:loadMeta', async (_event, songDir: string) => {
     const metaPath = join(songDir, '.velody')
-    if (!existsSync(metaPath)) return null
+    if (!(await fileExists(metaPath))) return null
     try {
-      return JSON.parse(readFileSync(metaPath, 'utf-8'))
+      return JSON.parse(await readFile(metaPath, 'utf-8'))
     } catch {
       return null
     }
@@ -100,23 +108,15 @@ export function registerIpcHandlers(): void {
           execFile(
             pythonPath,
             [scriptPath, songDir, ...stemPaths],
-            {
-              cwd: join(__dirname, '../../python-worker'),
-              encoding: 'utf-8',
-              timeout: 30000
-            },
-            (err, stdout) => {
-              if (err) reject(err)
-              else resolve(stdout)
-            }
+            { timeout: 600_000, maxBuffer: 65536 },
+            (err, stdout) => (err ? reject(err) : resolve(stdout))
           )
         })
-        const result = JSON.parse(out.trim())
-        if (result.key) return result.key
-        console.error('detect_key error:', result.error)
-        return null
-      } catch (err) {
-        console.error('detect_key failed:', err)
+        const lines = out.trim().split('\n')
+        const last = lines[lines.length - 1]
+        const parsed = last ? JSON.parse(last.trim()) : null
+        return parsed && typeof parsed.key === 'string' ? parsed.key : null
+      } catch {
         return null
       }
     }
@@ -161,46 +161,74 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  function generateClickTrackWav(
+  // Async click track generation — yields to event loop between chunks
+  async function generateClickTrackWavAsync(
     filePath: string,
     bpm: number,
     durationSec: number,
     sampleRate = 44100
-  ): void {
+  ): Promise<void> {
     const totalSamples = Math.floor(sampleRate * durationSec)
-    const buf = Buffer.alloc(44 + totalSamples * 2)
-
-    buf.write('RIFF', 0)
-    buf.writeUInt32LE(36 + totalSamples * 2, 4)
-    buf.write('WAVE', 8)
-    buf.write('fmt ', 12)
-    buf.writeUInt32LE(16, 16)
-    buf.writeUInt16LE(1, 20)
-    buf.writeUInt16LE(1, 22)
-    buf.writeUInt32LE(sampleRate, 24)
-    buf.writeUInt32LE(sampleRate * 2, 28)
-    buf.writeUInt16LE(2, 32)
-    buf.writeUInt16LE(16, 34)
-    buf.write('data', 36)
-    buf.writeUInt32LE(totalSamples * 2, 40)
-
     const beatInterval = 60 / bpm
-    for (let i = 0; i < totalSamples; i++) {
-      const t = i / sampleRate
-      const beatNum = Math.round(t / beatInterval)
-      const beatPos = t - beatNum * beatInterval
-      const clickDur = beatNum % 4 === 0 ? 0.002 : 0.001
-      const clickFreq = beatNum % 4 === 0 ? 1600 : 900
-      let sample = 0
-      if (beatPos < clickDur) {
-        const phase = beatPos / clickDur
-        sample = Math.sin(2 * Math.PI * clickFreq * beatPos) * (1 - phase)
-        sample *= beatNum % 4 === 0 ? 0.5 : 0.3
+
+    // Write WAV header
+    const header = Buffer.alloc(44)
+    header.write('RIFF', 0)
+    header.writeUInt32LE(36 + totalSamples * 2, 4)
+    header.write('WAVE', 8)
+    header.write('fmt ', 12)
+    header.writeUInt32LE(16, 16)
+    header.writeUInt16LE(1, 20)
+    header.writeUInt16LE(1, 22)
+    header.writeUInt32LE(sampleRate, 24)
+    header.writeUInt32LE(sampleRate * 2, 28)
+    header.writeUInt16LE(2, 32)
+    header.writeUInt16LE(16, 34)
+    header.write('data', 36)
+    header.writeUInt32LE(totalSamples * 2, 40)
+
+    const writeStream = createWriteStream(filePath)
+    writeStream.write(header)
+
+    const CHUNK = 44100 // 1 second per chunk
+    let offset = 0
+
+    return new Promise<void>((resolve, reject) => {
+      const processChunk = (): void => {
+        const end = Math.min(offset + CHUNK, totalSamples)
+        const len = end - offset
+        const buf = Buffer.alloc(len * 2)
+
+        for (let i = 0; i < len; i++) {
+          const t = (offset + i) / sampleRate
+          const beatNum = Math.round(t / beatInterval)
+          const beatPos = t - beatNum * beatInterval
+          const clickDur = beatNum % 4 === 0 ? 0.002 : 0.001
+          const clickFreq = beatNum % 4 === 0 ? 1600 : 900
+          let sample = 0
+          if (beatPos < clickDur) {
+            const phase = beatPos / clickDur
+            sample = Math.sin(2 * Math.PI * clickFreq * beatPos) * (1 - phase)
+            sample *= beatNum % 4 === 0 ? 0.5 : 0.3
+          }
+          const intSample = Math.max(-32768, Math.min(32767, Math.floor(sample * 32767)))
+          buf.writeInt16LE(intSample, i * 2)
+        }
+
+        writeStream.write(buf)
+        offset = end
+
+        if (offset < totalSamples) {
+          setImmediate(processChunk)
+        } else {
+          writeStream.end()
+          resolve()
+        }
       }
-      const intSample = Math.max(-32768, Math.min(32767, Math.floor(sample * 32767)))
-      buf.writeInt16LE(intSample, 44 + i * 2)
-    }
-    writeFileSync(filePath, buf)
+
+      writeStream.on('error', reject)
+      setImmediate(processChunk)
+    })
   }
 
   async function getLongestDuration(filePaths: string[]): Promise<number> {
@@ -243,9 +271,9 @@ export function registerIpcHandlers(): void {
 
       if (options?.bpm) {
         const dur = await getLongestDuration(filePaths)
-        const tmpDir = mkdtempSync(join(tmpdir(), 'velody-click-'))
+        const tmpDir = await mkdtemp(join(tmpdir(), 'velody-click-'))
         const clickPath = join(tmpDir, 'click.wav')
-        generateClickTrackWav(clickPath, options.bpm, Math.ceil(dur))
+        await generateClickTrackWavAsync(clickPath, options.bpm, Math.ceil(dur))
         allPaths.push(clickPath)
       }
 
@@ -270,21 +298,25 @@ export function registerIpcHandlers(): void {
         proc.stderr.on('data', (data: Buffer) => {
           stderr += data.toString()
         })
-        proc.on('close', (code) => {
+        proc.on('close', async (code) => {
           clearTimeout(timeout)
           if (options?.bpm) {
-            const tmpDir = join(allPaths[allPaths.length - 1], '..')
-            rmSync(tmpDir, { recursive: true, force: true })
+            const td = join(allPaths[allPaths.length - 1], '..')
+            try {
+              await rm(td, { recursive: true, force: true })
+            } catch {
+              /* ignore */
+            }
           }
           if (code === 0) resolve({ success: true })
           else resolve({ success: false, error: stderr.slice(0, 500) })
         })
-        proc.on('error', (err) => {
+        proc.on('error', async (err) => {
           clearTimeout(timeout)
           if (options?.bpm) {
-            const tmpDir = join(allPaths[allPaths.length - 1], '..')
+            const td = join(allPaths[allPaths.length - 1], '..')
             try {
-              rmSync(tmpDir, { recursive: true, force: true })
+              await rm(td, { recursive: true, force: true })
             } catch {
               /* ignore */
             }
@@ -310,13 +342,12 @@ export function registerIpcHandlers(): void {
       const fileName = `${name}${ext}`
       const destPath = join(songDir, fileName)
       const tempPath = join(songDir, `_tmp_rec.wav`)
-      writeFileSync(tempPath, Buffer.from(data))
+      await writeFile(tempPath, Buffer.from(data))
 
       const ffmpeg = setupManager?.getFfmpegPath() ?? 'ffmpeg'
 
       let ffmpegArgs: string[]
       if (offset > 0) {
-        // Prepend silence so the recording aligns with the song timeline
         ffmpegArgs = [
           '-f',
           'lavfi',
@@ -341,15 +372,23 @@ export function registerIpcHandlers(): void {
         const proc = spawn(ffmpeg, ffmpegArgs)
         const timeout = setTimeout(() => proc.kill('SIGTERM'), 600_000)
         proc.stderr.on('data', () => {})
-        proc.on('close', (code) => {
+        proc.on('close', async (code) => {
           clearTimeout(timeout)
-          rmSync(tempPath, { force: true })
+          try {
+            await rm(tempPath, { force: true })
+          } catch {
+            /* ignore */
+          }
           if (code === 0) resolve({ success: true, path: destPath })
           else resolve({ success: false, error: 'Conversion failed' })
         })
-        proc.on('error', (err) => {
+        proc.on('error', async (err) => {
           clearTimeout(timeout)
-          rmSync(tempPath, { force: true })
+          try {
+            await rm(tempPath, { force: true })
+          } catch {
+            /* ignore */
+          }
           resolve({ success: false, error: err.message })
         })
       })
@@ -377,19 +416,19 @@ export function registerIpcHandlers(): void {
     })
   })
 
-  ipcMain.handle('file:delete', (_event, filePath: string) => {
-    if (existsSync(filePath)) {
-      rmSync(filePath)
+  ipcMain.handle('file:delete', async (_event, filePath: string) => {
+    if (await fileExists(filePath)) {
+      await rm(filePath)
       return { success: true }
     }
     return { success: false, error: 'File not found' }
   })
 
   ipcMain.handle('stems:transpose', async (_event, stemPaths: string[], semitones: number) => {
-    const outDir = join(stemPaths[0], '../../_transposed')
-    const absDir = join(outDir)
-    if (existsSync(absDir)) rmSync(absDir, { recursive: true, force: true })
-    mkdirSync(absDir, { recursive: true })
+    const baseDir = join(stemPaths[0], '../../_transposed')
+    const suffix = semitones >= 0 ? `+${semitones}` : `${semitones}`
+    const absDir = join(baseDir, suffix)
+    await mkdir(absDir, { recursive: true })
 
     const ffmpeg = setupManager?.getFfmpegPath() ?? 'ffmpeg'
     const pitchFactor = Math.pow(2, semitones / 12)
@@ -399,6 +438,8 @@ export function registerIpcHandlers(): void {
       const name = stemPath.split(/[/\\]/).pop()
       const outPath = join(absDir, name!)
       newPaths.push(outPath)
+
+      if (await fileExists(outPath)) continue // cache hit — skip FFmpeg
 
       await new Promise<void>((resolve, reject) => {
         const proc = spawn(ffmpeg, [

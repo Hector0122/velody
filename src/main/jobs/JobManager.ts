@@ -73,7 +73,7 @@ export class JobManager {
   }
 
   getQueue(): SeparationJob[] {
-    return [...this.queue]
+    return this.queue.map((j) => this.sanitizeJob(j))
   }
 
   private tryDequeue(): void {
@@ -236,11 +236,24 @@ export class JobManager {
     job.stems = stems
   }
 
+  private sanitizeJob(job: SeparationJob): SeparationJob {
+    const { process: _p, ...rest } = job
+    void _p
+    return rest
+  }
+
   private emit(channel: string, payload: unknown): void {
     const windows = BrowserWindow.getAllWindows()
+    const sanitized = Array.isArray(payload)
+      ? payload.map((item) =>
+          typeof item === 'object' && item !== null && 'process' in item
+            ? this.sanitizeJob(item as SeparationJob)
+            : item
+        )
+      : payload
     for (const win of windows) {
       if (!win.isDestroyed()) {
-        win.webContents.send(channel, payload)
+        win.webContents.send(channel, sanitized)
       }
     }
   }

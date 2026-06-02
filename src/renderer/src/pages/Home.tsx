@@ -122,16 +122,19 @@ function Home(): React.JSX.Element {
     for (const file of files) {
       try {
         const result = await window.api.startSeparation(file.path)
-        setJobQueue((prev) => [
-          ...prev,
-          {
-            id: result.jobId,
-            songPath: file.path,
-            songName: result.songName,
-            status: 'queued',
-            progress: 0
-          }
-        ])
+        setJobQueue((prev) => {
+          if (prev.some((j) => j.id === result.jobId)) return prev
+          return [
+            ...prev,
+            {
+              id: result.jobId,
+              songPath: file.path,
+              songName: result.songName,
+              status: 'queued',
+              progress: 0
+            }
+          ]
+        })
       } catch (err) {
         const msg = err instanceof Error ? err.message : 'Failed to queue'
         setError(msg)
@@ -153,8 +156,21 @@ function Home(): React.JSX.Element {
   const handleDeleteSong = async (song: RecentSong, e: React.MouseEvent): Promise<void> => {
     e.stopPropagation()
     if (!window.api) return
+
+    // Cancel running/queued jobs for this song first
+    const normalized = song.name.toLowerCase()
+    for (const job of jobQueueRef.current) {
+      if (
+        job.songName.toLowerCase() === normalized &&
+        (job.status === 'queued' || job.status === 'running')
+      ) {
+        await window.api.cancelSeparation(job.id)
+      }
+    }
+
     await window.api.deleteSong(song.name)
     setRecentSongs((prev) => prev.filter((s) => s.name !== song.name))
+    setJobQueue((prev) => prev.filter((j) => j.songName.toLowerCase() !== normalized))
     if (currentSong?.songName === song.name) setCurrentSong(null)
   }
 
