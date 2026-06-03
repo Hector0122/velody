@@ -1,6 +1,6 @@
 import { spawn, ChildProcess } from 'child_process'
 import { join } from 'path'
-import { BrowserWindow } from 'electron'
+import { BrowserWindow, app } from 'electron'
 import { randomUUID } from 'crypto'
 import type { SetupManager } from '../setup'
 
@@ -22,6 +22,20 @@ function songNameFromPath(path: string): string {
       .pop()
       ?.replace(/\.[^.]+$/, '') || 'untitled'
   )
+}
+
+function getPythonWorkerDir(): string {
+  if (app.isPackaged) {
+    return join(process.resourcesPath, 'python-worker')
+  }
+  return join(__dirname, '../../python-worker')
+}
+
+function getOutputStemsDir(): string {
+  if (app.isPackaged) {
+    return join(app.getPath('userData'), 'output', 'stems')
+  }
+  return join(__dirname, '../../output/stems')
 }
 
 export class JobManager {
@@ -118,12 +132,17 @@ export class JobManager {
   private runDemucs(job: SeparationJob): Promise<void> {
     return new Promise((resolve, reject) => {
       const pythonPath = this.setupManager?.getPythonPath() ?? 'python3'
-      const scriptDir = join(__dirname, '../../python-worker')
+      const scriptDir = getPythonWorkerDir()
       const pythonScript = join(scriptDir, 'separate.py')
+      const outputDir = getOutputStemsDir()
 
-      const proc = spawn(pythonPath, [pythonScript, job.songPath, '--job-id', job.id], {
-        cwd: scriptDir
-      })
+      const proc = spawn(
+        pythonPath,
+        [pythonScript, job.songPath, '--job-id', job.id, '--output-dir', outputDir],
+        {
+          cwd: scriptDir
+        }
+      )
 
       job.process = proc
 
@@ -175,7 +194,7 @@ export class JobManager {
   }
 
   private async runSimulation(job: SeparationJob): Promise<void> {
-    const stemsDir = join(__dirname, '../../output/stems', job.songName)
+    const stemsDir = join(getOutputStemsDir(), job.songName)
     const { mkdirSync, writeFileSync } = await import('fs')
 
     mkdirSync(stemsDir, { recursive: true })

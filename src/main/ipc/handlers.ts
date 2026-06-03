@@ -1,6 +1,6 @@
-import { ipcMain, dialog, shell } from 'electron'
+import { ipcMain, dialog, shell, app } from 'electron'
 import { spawn, execFile } from 'child_process'
-import { join } from 'path'
+import { join, dirname } from 'path'
 import { tmpdir } from 'os'
 import { createWriteStream } from 'fs'
 import { mkdir, writeFile, readFile, rm, readdir, stat, mkdtemp, access } from 'fs/promises'
@@ -22,7 +22,27 @@ export function setJobManager(mgr: JobManager): void {
 }
 
 function getStemsRootDir(): string {
+  if (app.isPackaged) {
+    return join(app.getPath('userData'), 'output', 'stems')
+  }
   return join(__dirname, '../../output/stems')
+}
+
+function getPythonWorkerDir(): string {
+  if (app.isPackaged) {
+    return join(process.resourcesPath, 'python-worker')
+  }
+  return join(__dirname, '../../python-worker')
+}
+
+function getFfprobePath(): string {
+  const ffmpeg = setupManager?.getFfmpegPath()
+  if (ffmpeg && ffmpeg !== 'ffmpeg') {
+    const dir = dirname(ffmpeg)
+    const bin = process.platform === 'win32' ? 'ffprobe.exe' : 'ffprobe'
+    return join(dir, bin)
+  }
+  return 'ffprobe'
 }
 
 async function fileExists(path: string): Promise<boolean> {
@@ -102,12 +122,13 @@ export function registerIpcHandlers(): void {
     'song:detectKey',
     async (_event, songDir: string, stemPaths: string[]): Promise<string | null> => {
       const pythonPath = setupManager?.getPythonPath() ?? 'python3'
-      const scriptPath = join(__dirname, '../../python-worker/detect_key.py')
+      const scriptPath = join(getPythonWorkerDir(), 'detect_key.py')
+      const ffmpegPath = setupManager?.getFfmpegPath() ?? 'ffmpeg'
       try {
         const out = await new Promise<string>((resolve, reject) => {
           execFile(
             pythonPath,
-            [scriptPath, songDir, ...stemPaths],
+            [scriptPath, songDir, ...stemPaths, '--ffmpeg-path', ffmpegPath],
             { timeout: 600_000, maxBuffer: 65536 },
             (err, stdout) => (err ? reject(err) : resolve(stdout))
           )
@@ -237,7 +258,7 @@ export function registerIpcHandlers(): void {
       try {
         const out = await new Promise<string>((resolve, reject) => {
           execFile(
-            'ffprobe',
+            getFfprobePath(),
             [
               '-v',
               'error',

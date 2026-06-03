@@ -20,21 +20,22 @@ import tempfile
 import uuid
 from pathlib import Path
 
-OUTPUT_DIR = Path(__file__).resolve().parent.parent / "output" / "stems"
+DEFAULT_OUTPUT_DIR = Path(__file__).resolve().parent.parent / "output" / "stems"
 
 
 def _emit(obj: dict) -> None:
     print(json.dumps(obj), flush=True)
 
 
-def separate(audio_path: str, job_id: str) -> list[str]:
+def separate(audio_path: str, job_id: str, output_dir: str | None = None) -> list[str]:
     audio_file = Path(audio_path)
 
     if not audio_file.exists():
         raise FileNotFoundError(f"Audio file not found: {audio_path}")
 
     song_name = audio_file.stem
-    song_output = OUTPUT_DIR / song_name
+    output_base = Path(output_dir) if output_dir else DEFAULT_OUTPUT_DIR
+    song_output = output_base / song_name
     song_output.mkdir(parents=True, exist_ok=True)
 
     # Unique temp directory per job to avoid collisions
@@ -105,16 +106,21 @@ if __name__ == "__main__":
 
     audio_path = sys.argv[1]
 
-    # Parse optional --job-id
     job_id = str(uuid.uuid4())
+    output_dir = None
     args = sys.argv[2:]
-    for i, arg in enumerate(args):
-        if arg == "--job-id" and i + 1 < len(args):
-            job_id = args[i + 1]
-            break
+    i = 0
+    while i < len(args):
+        if args[i] == '--job-id' and i + 1 < len(args):
+            i += 1
+            job_id = args[i]
+        elif args[i] == '--output-dir' and i + 1 < len(args):
+            i += 1
+            output_dir = args[i]
+        i += 1
 
     try:
-        stems = separate(audio_path, job_id)
+        stems = separate(audio_path, job_id, output_dir)
         _emit({"type": "complete", "stems": stems})
     except subprocess.CalledProcessError as e:
         _emit({"type": "error", "message": e.stderr.strip() if e.stderr else str(e)})
