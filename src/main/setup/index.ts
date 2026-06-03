@@ -17,11 +17,20 @@ const isWin = process.platform === 'win32'
 const PYTHON = isWin ? 'python' : 'python3'
 const VENV_PYTHON = join(VENV_DIR, isWin ? 'Scripts' : 'bin', isWin ? 'python.exe' : PYTHON)
 
-const HELP: Record<string, string> = {
-  python: 'Install Python 3:\n  sudo apt install python3 python3-pip python3-venv',
-  demucs: `Create venv and install Demucs:\n  python3 -m venv ${VENV_DIR}\n  ${VENV_DIR}/bin/pip install demucs torch torchaudio`,
-  ffmpeg: 'Install FFmpeg:\n  sudo apt install ffmpeg'
-}
+const HELP: Record<string, string> = isWin
+  ? {
+      python:
+        'Python 3 not found.\nDownload and install Python from:\nhttps://python.org/downloads/\nMake sure to check "Add Python to PATH" during installation.',
+      demucs: `Python found but Demucs is not installed.\nOpen a terminal and run:\n  ${PYTHON} -m pip install demucs torch torchaudio`,
+      ffmpeg:
+        'FFmpeg not found.\nDownload FFmpeg from:\nhttps://ffmpeg.org/download.html\nOr install with winget:\n  winget install ffmpeg'
+    }
+  : {
+      python:
+        'Python 3 not found.\nInstall Python 3:\n  sudo apt install python3 python3-pip python3-venv',
+      demucs: `Create venv and install Demucs:\n  python3 -m venv ${VENV_DIR}\n  ${VENV_DIR}/bin/pip install demucs torch torchaudio`,
+      ffmpeg: 'FFmpeg not found.\nInstall FFmpeg:\n  sudo apt install ffmpeg'
+    }
 
 export class SetupManager {
   private progressCallback: ProgressCallback | null = null
