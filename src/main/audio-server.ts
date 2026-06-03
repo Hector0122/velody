@@ -1,6 +1,7 @@
 import { createServer } from 'http'
 import { createReadStream, existsSync, statSync } from 'fs'
 import { extname, resolve, join, sep } from 'path'
+import { app } from 'electron'
 
 const MIME_MAP: Record<string, string> = {
   '.wav': 'audio/wav',
@@ -23,7 +24,9 @@ function isPathSafe(filePath: string): boolean {
 
 export function startAudioServer(): Promise<number> {
   return new Promise((resolvePort) => {
-    stemsRootDir = resolve(join(__dirname, '../../output/stems'))
+    stemsRootDir = app.isPackaged
+      ? join(app.getPath('userData'), 'output', 'stems')
+      : resolve(join(__dirname, '../../output/stems'))
 
     server = createServer((req, res) => {
       // Handle CORS preflight
@@ -100,5 +103,6 @@ export function getAudioPort(): number {
 }
 
 export function audioUrl(filePath: string): string {
-  return `http://127.0.0.1:${activePort}/${encodeURI(filePath)}`
+  const normalizedPath = filePath.replace(/\\/g, '/')
+  return `http://127.0.0.1:${activePort}/${encodeURI(normalizedPath)}`
 }
