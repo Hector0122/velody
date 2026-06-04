@@ -16,9 +16,9 @@ KS_MINOR = np.array([6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69,
 NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
 
 
-def decode_audio(path: str, sr: int = 44100) -> np.ndarray:
+def decode_audio(path: str, sr: int = 44100, ffmpeg_path: str = 'ffmpeg') -> np.ndarray:
     import subprocess as sp
-    cmd = ['ffmpeg', '-i', path, '-f', 'f32le', '-ac', '1', '-ar', str(sr), '-']
+    cmd = [ffmpeg_path, '-i', path, '-f', 'f32le', '-ac', '1', '-ar', str(sr), '-']
     proc = sp.run(cmd, capture_output=True, check=True)
     return np.frombuffer(proc.stdout, dtype=np.float32)
 
@@ -63,12 +63,12 @@ def compute_chroma(signal: np.ndarray, sr: int, start_offset: float = 5.0) -> np
     return chroma
 
 
-def detect_key(stem_paths: list[str]) -> str:
+def detect_key(stem_paths: list[str], ffmpeg_path: str = 'ffmpeg') -> str:
     sr = 44100
     # Find bass stem
     bass_path = next((p for p in stem_paths if os.path.splitext(os.path.basename(p))[0].lower() == 'bass'), None)
     if bass_path:
-        bass_sig = decode_audio(bass_path, sr)
+        bass_sig = decode_audio(bass_path, sr, ffmpeg_path)
         peak = np.max(np.abs(bass_sig))
         if peak > 0 and peak < 1e-6:
             bass_path = None
@@ -80,7 +80,7 @@ def detect_key(stem_paths: list[str]) -> str:
             return 'C Major'
         sig = None
         for p in harmonic:
-            s = decode_audio(p, sr)
+            s = decode_audio(p, sr, ffmpeg_path)
             if sig is None:
                 sig = np.zeros_like(s)
             elif len(s) > len(sig):
@@ -125,10 +125,22 @@ def detect_key(stem_paths: list[str]) -> str:
 
 if __name__ == '__main__':
     if len(sys.argv) < 3:
-        print(json.dumps({"error": "Usage: detect_key.py <song_dir> <stem_path> ..."}))
+        print(json.dumps({"error": "Usage: detect_key.py <song_dir> <stem_path> ... [--ffmpeg-path <path>]"}))
         sys.exit(1)
     try:
-        key = detect_key(sys.argv[2:])
+        ffmpeg_path = 'ffmpeg'
+        stem_paths = list(sys.argv[2:])
+        while stem_paths and stem_paths[-1].startswith('--'):
+            if stem_paths[-1] == '--ffmpeg-path':
+                stem_paths.pop()
+                if not stem_paths:
+                    print(json.dumps({"error": "Missing ffmpeg path after --ffmpeg-path"}))
+                    sys.exit(1)
+                ffmpeg_path = stem_paths.pop()
+            else:
+                print(json.dumps({"error": f"Unknown option: {stem_paths[-1]}"}))
+                sys.exit(1)
+        key = detect_key(stem_paths, ffmpeg_path)
         print(json.dumps({"key": key}))
     except Exception as e:
         print(json.dumps({"error": str(e)}))
