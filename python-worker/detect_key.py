@@ -70,7 +70,7 @@ def detect_key(stem_paths: list[str], ffmpeg_path: str = 'ffmpeg') -> str:
     if bass_path:
         bass_sig = decode_audio(bass_path, sr, ffmpeg_path)
         peak = np.max(np.abs(bass_sig))
-        if peak > 0 and peak < 1e-6:
+        if peak < 1e-6:
             bass_path = None
     if bass_path:
         chroma = compute_chroma(bass_sig, sr, 5.0)

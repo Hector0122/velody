@@ -536,7 +536,6 @@ function StemPlayer({ stems, songName, onExportAll }: StemPlayerProps): React.JS
     if (!audioCtxRef.current) {
       try {
         audioCtxRef.current = new AudioContext()
-        console.log('[pan] AudioContext created, state=', audioCtxRef.current.state)
       } catch (e) {
         console.error('[pan] AudioContext creation failed', e)
         return null
@@ -544,7 +543,6 @@ function StemPlayer({ stems, songName, onExportAll }: StemPlayerProps): React.JS
     }
     if (audioCtxRef.current.state === 'suspended') {
       audioCtxRef.current.resume()
-      console.log('[pan] AudioContext resume() called, state=', audioCtxRef.current.state)
     }
     return audioCtxRef.current
   }, [])
@@ -553,17 +551,14 @@ function StemPlayer({ stems, songName, onExportAll }: StemPlayerProps): React.JS
   const setupPanningForKey = useCallback(
     (key: string): void => {
       if (panNodesRef.current[key]) {
-        console.log('[pan] setup skipped for', key, '- already wired')
         return
       }
       const ctx = audioCtxRef.current
       if (!ctx) {
-        console.log('[pan] setup aborted for', key, '- no AudioContext')
         return
       }
       const el = audioEls.current[key]
       if (!el) {
-        console.log('[pan] setup aborted for', key, '- no audio element')
         return
       }
       try {
@@ -573,7 +568,6 @@ function StemPlayer({ stems, songName, onExportAll }: StemPlayerProps): React.JS
         source.connect(panner)
         panner.connect(ctx.destination)
         panNodesRef.current[key] = { source, panner }
-        console.log('[pan] SUCCESS for', key, 'pan=', panner.pan.value, 'ctx.state=', ctx.state)
       } catch (err) {
         console.error('[pan] FAILED for', key, err)
       }
@@ -828,11 +822,8 @@ function StemPlayer({ stems, songName, onExportAll }: StemPlayerProps): React.JS
 
       // If graph not yet wired, set it up now (slider change is a user gesture)
       if (!panNodesRef.current[key]) {
-        console.log('[pan] wiring graph for', key, 'pan=', value)
         ensureAudioContext()
         setupPanningForKey(key)
-      } else {
-        console.log('[pan] graph already wired for', key, 'updating to', value)
       }
     },
     [ensureAudioContext, setupPanningForKey]

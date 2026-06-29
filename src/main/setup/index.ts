@@ -52,42 +52,44 @@ function downloadHttps(
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     const parsed = new URL(url)
-    https.get(
-      {
-        hostname: parsed.hostname,
-        port: 443,
-        path: parsed.pathname + parsed.search,
-        headers: { 'User-Agent': 'Velody/1.0' }
-      },
-      (res) => {
-        if (res.statusCode === 301 || res.statusCode === 302) {
-          const redirect = res.headers.location
-          if (redirect) {
-            downloadHttps(redirect, dest, onProgress).then(resolve).catch(reject)
+    https
+      .get(
+        {
+          hostname: parsed.hostname,
+          port: 443,
+          path: parsed.pathname + parsed.search,
+          headers: { 'User-Agent': 'Velody/1.0' }
+        },
+        (res) => {
+          if (res.statusCode === 301 || res.statusCode === 302) {
+            const redirect = res.headers.location
+            if (redirect) {
+              downloadHttps(redirect, dest, onProgress).then(resolve).catch(reject)
+              return
+            }
+          }
+          if (res.statusCode !== 200) {
+            reject(new Error(`HTTP ${res.statusCode}`))
             return
           }
+          const total = parseInt(res.headers['content-length'] || '0', 10)
+          let received = 0
+          const file = createWriteStream(dest)
+          res.on('data', (chunk: Buffer) => {
+            received += chunk.length
+            if (total && onProgress) {
+              onProgress(Math.round((received / total) * 100))
+            }
+          })
+          res.pipe(file)
+          file.on('finish', () => {
+            file.close()
+            resolve()
+          })
+          file.on('error', reject)
         }
-        if (res.statusCode !== 200) {
-          reject(new Error(`HTTP ${res.statusCode}`))
-          return
-        }
-        const total = parseInt(res.headers['content-length'] || '0', 10)
-        let received = 0
-        const file = createWriteStream(dest)
-        res.on('data', (chunk: Buffer) => {
-          received += chunk.length
-          if (total && onProgress) {
-            onProgress(Math.round((received / total) * 100))
-          }
-        })
-        res.pipe(file)
-        file.on('finish', () => {
-          file.close()
-          resolve()
-        })
-        file.on('error', reject)
-      }
-    ).on('error', reject)
+      )
+      .on('error', reject)
   })
 }
 
@@ -258,10 +260,7 @@ export class SetupManager {
 
       const extracted = await this.spawnAsync(
         'powershell',
-        [
-          '-Command',
-          `Expand-Archive -Path '${zipPath}' -DestinationPath '${FFMPEG_DIR}' -Force`
-        ],
+        ['-Command', `Expand-Archive -Path '${zipPath}' -DestinationPath '${FFMPEG_DIR}' -Force`],
         'ffmpeg',
         120_000
       )
