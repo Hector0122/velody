@@ -1,6 +1,6 @@
 import { execFile, spawn } from 'child_process'
 import { createWriteStream, existsSync, mkdirSync, readdirSync, renameSync } from 'fs'
-import { mkdir, rm } from 'fs/promises'
+import { mkdir, rm, readdir } from 'fs/promises'
 import https from 'https'
 import { join } from 'path'
 import { homedir, tmpdir } from 'os'
@@ -27,22 +27,31 @@ const FFMPEG_BIN = join(FFMPEG_DIR, 'bin', isWin ? 'ffmpeg.exe' : 'ffmpeg')
 
 const STEPS = ['python', 'venv', 'demucs', 'ffmpeg'] as const
 
+const STANDALONE_DIR = join(DATA_DIR, 'python')
+const STANDALONE_PYTHON = join(
+  STANDALONE_DIR,
+  isWin ? 'python.exe' : 'bin',
+  isWin ? 'python.exe' : 'python3'
+)
+
+const COMPATIBLE_PYTHON_VERSIONS = ['3.11', '3.10', '3.9']
+
 const HELP: Record<string, string> = isWin
   ? {
       python:
-        'Python 3 not found.\nDownload and install Python from:\nhttps://python.org/downloads/\nMake sure to check "Add Python to PATH" during installation.',
+        'Compatible Python (3.9-3.11) not found.\nDownload and install Python from:\nhttps://python.org/downloads/\nMake sure to check "Add Python to PATH" during installation.',
       venv: 'Failed to create virtual environment.',
       demucs:
-        'Failed to install Demucs.\nTry running manually:\n  python -m pip install demucs torch torchaudio',
+        'Failed to install dependencies.\nTry running manually:\n  python -m pip install demucs torch torchaudio tempocnn librosa',
       ffmpeg:
         'FFmpeg not found.\nDownload FFmpeg from:\nhttps://ffmpeg.org/download.html\nOr install with winget:\n  winget install ffmpeg'
     }
   : {
       python:
-        'Python 3 not found.\nInstall Python 3:\n  sudo apt install python3 python3-pip python3-venv',
+        'Compatible Python (3.9-3.11) not found.\nInstall Python 3.11:\n  brew install python@3.11\nor download from:\n  https://www.python.org/downloads/',
       venv: 'Failed to create virtual environment.',
-      demucs: `Failed to install Demucs.\nTry running manually:\n  python3 -m venv ${VENV_DIR}\n  ${VENV_DIR}/bin/pip install demucs torch torchaudio`,
-      ffmpeg: 'FFmpeg not found.\nInstall FFmpeg:\n  sudo apt install ffmpeg'
+      demucs: `Failed to install dependencies.\nTry running manually:\n  python3 -m venv ${VENV_DIR}\n  ${VENV_DIR}/bin/pip install demucs torch torchaudio tempocnn librosa`,
+      ffmpeg: 'FFmpeg not found.\nInstall FFmpeg:\n  brew install ffmpeg'
     }
 
 function downloadHttps(
@@ -96,6 +105,7 @@ function downloadHttps(
 export class SetupManager {
   private progressCallback: ProgressCallback | null = null
   private readonly simMode: boolean
+  private compatiblePythonPath: string | null = null
 
   constructor(simMode = false) {
     this.simMode = simMode
@@ -180,13 +190,28 @@ export class SetupManager {
   }
 
   private async checkPython(): Promise<boolean> {
-    return this.tryCmd(`${PYTHON} --version`)
+    // Try compatible Python versions on PATH
+    for (const ver of COMPATIBLE_PYTHON_VERSIONS) {
+      const name = isWin ? 'python' : `python${ver}`
+      if (await this.tryCmd(`${name} --version`)) {
+        this.compatiblePythonPath = name
+        return true
+      }
+    }
+    // Check standalone download
+    if (existsSync(STANDALONE_PYTHON)) {
+      this.compatiblePythonPath = STANDALONE_PYTHON
+      return true
+    }
+    // Download standalone Python
+    return this.downloadStandalonePython()
   }
 
   private async check(step: string): Promise<boolean> {
     switch (step) {
       case 'venv':
-        return existsSync(VENV_PYTHON)
+        if (!existsSync(VENV_PYTHON)) return false
+        return this.isVenvCompatible()
       case 'demucs':
         return this.checkDemucs()
       case 'ffmpeg': {
@@ -200,10 +225,64 @@ export class SetupManager {
 
   private async checkDemucs(): Promise<boolean> {
     const python = this.getPythonPath()
-    for (const pkg of ['demucs', 'torch', 'torchaudio']) {
+    for (const pkg of ['demucs', 'torch', 'torchaudio', 'tempocnn', 'librosa']) {
       if (!(await this.tryCmd(`${python} -m pip show ${pkg}`))) return false
     }
     return true
+  }
+
+  private isVenvCompatible(): Promise<boolean> {
+    return new Promise((resolve) => {
+      execFile(
+        VENV_PYTHON,
+        [
+          '-c',
+          'import sys; exit(0 if 3 <= sys.version_info[0] and (3,9) <= sys.version_info[:2] <= (3,11) else 1)'
+        ],
+        (err) => resolve(!err)
+      )
+    })
+  }
+
+  private async downloadStandalonePython(): Promise<boolean> {
+    try {
+      const arch = process.arch === 'arm64' ? 'aarch64' : 'x86_64'
+      const platform = isWin
+        ? 'pc-windows-msvc'
+        : process.platform === 'darwin'
+          ? 'apple-darwin'
+          : 'unknown-linux-gnu'
+      const url = `https://github.com/astral-sh/python-build-standalone/releases/download/20260623/cpython-3.11.15%2B20260623-${arch}-${platform}-install_only.tar.gz`
+      const tarPath = join(DATA_DIR, 'python3.11.tar.gz')
+
+      this.emit('python', 5, 'working', 'Downloading Python 3.11...')
+      await downloadHttps(url, tarPath, (pct) => {
+        const scaled = 5 + Math.round(pct * 0.35)
+        this.emit('python', scaled, 'working', `Downloading Python 3.11... ${pct}%`)
+      })
+
+      this.emit('python', 45, 'working', 'Extracting Python 3.11...')
+      if (existsSync(STANDALONE_DIR)) {
+        await rm(STANDALONE_DIR, { recursive: true, force: true })
+      }
+      await mkdir(DATA_DIR, { recursive: true })
+      const ok = await this.spawnAsync('tar', ['-xzf', tarPath, '-C', DATA_DIR], 'python', 120_000)
+      if (ok) {
+        const entries = await readdir(DATA_DIR)
+        const extracted = entries.find((e) => e.startsWith('cpython-'))
+        if (extracted) {
+          renameSync(join(DATA_DIR, extracted), STANDALONE_DIR)
+        }
+      }
+      await rm(tarPath, { force: true }).catch(() => {})
+      if (existsSync(STANDALONE_PYTHON)) {
+        this.compatiblePythonPath = STANDALONE_PYTHON
+        return true
+      }
+      return false
+    } catch {
+      return false
+    }
   }
 
   private tryCmd(cmd: string): Promise<boolean> {
@@ -230,15 +309,18 @@ export class SetupManager {
     }
   }
 
-  private createVenv(): Promise<boolean> {
-    return this.spawnAsync(PYTHON, ['-m', 'venv', VENV_DIR], 'venv', 120_000)
+  private async createVenv(): Promise<boolean> {
+    if (existsSync(VENV_DIR)) {
+      await rm(VENV_DIR, { recursive: true, force: true })
+    }
+    const python = this.compatiblePythonPath ?? PYTHON
+    return this.spawnAsync(python, ['-m', 'venv', VENV_DIR], 'venv', 120_000)
   }
 
   private installDemucs(): Promise<boolean> {
     const pip = existsSync(VENV_PIP) ? VENV_PIP : this.getPythonPath()
-    const args = existsSync(VENV_PIP)
-      ? ['install', 'demucs', 'torch', 'torchaudio']
-      : ['-m', 'pip', 'install', 'demucs', 'torch', 'torchaudio']
+    const pkgs = ['demucs', 'torch', 'torchaudio', 'tempocnn', 'librosa']
+    const args = existsSync(VENV_PIP) ? ['install', ...pkgs] : ['-m', 'pip', 'install', ...pkgs]
     return this.spawnAsync(pip, args, 'demucs', 900_000)
   }
 

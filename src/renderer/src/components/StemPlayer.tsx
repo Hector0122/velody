@@ -76,6 +76,9 @@ function StemPlayer({ stems, songName, onExportAll }: StemPlayerProps): React.JS
   const playbackRateRef = useRef(1)
   const durationRef = useRef(0)
 
+  // Beat offset ref (owned by component, written by useSongAnalysis, read by useMetronome)
+  const firstBeatOffsetRef = useRef(0)
+
   // Metronome hook
   const {
     bpm,
@@ -93,11 +96,12 @@ function StemPlayer({ stems, songName, onExportAll }: StemPlayerProps): React.JS
     playbackRateRef,
     masterPlaying,
     masterPlayingRef,
-    positionRef
+    positionRef,
+    firstBeatOffsetRef
   )
 
-  // Song analysis (BPM + key detection) — must come before stemItems
-  const originalBpmRef = useSongAnalysis(urls, stems, setBpm, setDetectedKey)
+  // Song analysis (BPM + key + beat offset detection)
+  const originalBpmRef = useSongAnalysis(urls, stems, setBpm, setDetectedKey, firstBeatOffsetRef)
   const {
     manualKey,
     effectiveKey,

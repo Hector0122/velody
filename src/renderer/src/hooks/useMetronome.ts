@@ -8,7 +8,8 @@ export function useMetronome(
   playbackRateRef: React.MutableRefObject<number>,
   masterPlaying: boolean,
   masterPlayingRef: React.MutableRefObject<boolean>,
-  positionRef: React.MutableRefObject<number>
+  positionRef: React.MutableRefObject<number>,
+  firstBeatOffsetRef: React.MutableRefObject<number>
 ): {
   bpm: number
   setBpm: (v: number | ((prev: number) => number)) => void
@@ -78,16 +79,30 @@ export function useMetronome(
     const els = Object.values(audioEls.current)
     const t = els.length > 0 ? els[0].currentTime : positionRef.current
     const currentBpm = bpmRef.current
-    let beat = Math.max(Math.floor((t * currentBpm) / 60) + 1, lastScheduledBeatRef.current + 1)
+    const offset = firstBeatOffsetRef.current
 
-    while ((beat * 60) / currentBpm - t < LOOKAHEAD) {
-      const delaySong = (beat * 60) / currentBpm - t
+    const beatTime = (beat: number): number => (beat - 1) * (60 / currentBpm) + offset
+    let beat = Math.max(
+      Math.floor(((t - offset) * currentBpm) / 60) + 1,
+      lastScheduledBeatRef.current + 1
+    )
+
+    while (beatTime(beat) - t < LOOKAHEAD) {
+      const delaySong = beatTime(beat) - t
       const delayReal = delaySong / playbackRateRef.current
       playClick(beat % 4 === 1, ctx.currentTime + Math.max(0, delayReal))
       lastScheduledBeatRef.current = beat
       beat++
     }
-  }, [audioCtxRef, audioEls, playbackRateRef, masterPlayingRef, positionRef, playClick])
+  }, [
+    audioCtxRef,
+    audioEls,
+    playbackRateRef,
+    masterPlayingRef,
+    positionRef,
+    playClick,
+    firstBeatOffsetRef
+  ])
 
   useEffect(() => {
     if (metronomeOn && masterPlaying) {

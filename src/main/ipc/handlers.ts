@@ -145,6 +145,39 @@ export function registerIpcHandlers(): void {
     }
   )
 
+  ipcMain.handle(
+    'song:detectBpm',
+    async (_event, stemPath: string): Promise<{ bpm: number; firstBeatOffset: number } | null> => {
+      const pythonPath = setupManager?.getPythonPath() ?? 'python3'
+      const scriptPath = join(getPythonWorkerDir(), 'detect_bpm.py')
+      const ffmpegPath = setupManager?.getFfmpegPath() ?? 'ffmpeg'
+      try {
+        const out = await new Promise<string>((resolve, reject) => {
+          execFile(
+            pythonPath,
+            [scriptPath, stemPath, '--ffmpeg-path', ffmpegPath],
+            { timeout: 600_000, maxBuffer: 65536 },
+            (err, stdout) => (err ? reject(err) : resolve(stdout))
+          )
+        })
+        const lines = out.trim().split('\n')
+        const last = lines[lines.length - 1]
+        const parsed = last ? JSON.parse(last.trim()) : null
+        if (
+          parsed &&
+          typeof parsed.bpm === 'number' &&
+          typeof parsed.firstBeatOffset === 'number'
+        ) {
+          return { bpm: parsed.bpm, firstBeatOffset: parsed.firstBeatOffset }
+        }
+        return null
+      } catch (err) {
+        console.error('[detectBpm]', err)
+        return null
+      }
+    }
+  )
+
   ipcMain.handle('separation:start', (_event, songPath: string) => {
     if (!jobManager) return { error: 'Job manager not ready' }
     const job = jobManager.enqueue(songPath)

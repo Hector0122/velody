@@ -123,8 +123,6 @@ velody/
 │           ├── hooks/
 │           │   ├── useMetronome.ts    ← Click track engine
 │           │   └── useRecording.ts    ← Recording flow
-│           └── workers/
-│               └── bpm.worker.ts      ← BPM detection worker
 │
 ├── python-worker/
 │   ├── separate.py              ← Demucs script
@@ -550,7 +548,7 @@ NOT on:
 
 | #   | Optimización                                                                                                 | Impacto                          | Estado  |
 | --- | ------------------------------------------------------------------------------------------------------------ | -------------------------------- | ------- |
-| R1  | BPM detection → Web Worker (`bpm.worker.ts`)                                                                 | UI no se congela 1-2s            | ✅ Done |
+| R1  | BPM detection → TempoCNN via Python IPC                                                                     | BPM preciso, align con beat       | ✅ Done |
 | R2  | `setProgress` throttle 60fps → 20fps                                                                         | -66% re-renders                  | ✅ Done |
 | R3  | WaveSurfer sync directo a Canvas                                                                             | 0 renders extra                  | ✅ Done |
 | R4  | Refs en `useLayoutEffect`                                                                                    | Sin ESLint warnings              | ✅ Done |

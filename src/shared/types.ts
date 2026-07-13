@@ -87,6 +87,7 @@ export interface VelodyAPI {
   saveMeta: (songDir: string, meta: Record<string, unknown>) => Promise<{ success: boolean }>
   loadMeta: (songDir: string) => Promise<Record<string, unknown> | null>
   detectKey: (songDir: string, stemPaths: string[]) => Promise<string | null>
+  detectBpm: (stemPath: string) => Promise<{ bpm: number; firstBeatOffset: number } | null>
   openInBrowser: (url: string) => void
   openExternal: (url: string) => Promise<void>
   deleteFile: (filePath: string) => Promise<{ success: boolean; error?: string }>
