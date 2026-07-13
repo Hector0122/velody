@@ -108,8 +108,20 @@ export function useRecording({
 
         const totalBeats = countInBars * 4
         if (totalBeats > 0) {
-          const ctx = audioCtxRef.current
-          if (!ctx) return
+          let ctx = audioCtxRef.current
+          if (!ctx) {
+            try {
+              ctx = new AudioContext()
+              audioCtxRef.current = ctx
+            } catch {
+              console.error('[useRecording] Failed to create AudioContext')
+              stream.getTracks().forEach((t) => t.stop())
+              return
+            }
+          }
+          if (ctx.state === 'suspended') {
+            ctx.resume()
+          }
           const interval = 60 / bpm / (playbackRateRef.current || 1)
 
           const nearStart = positionRef.current < 5
@@ -160,8 +172,8 @@ export function useRecording({
             })
           }, 1000)
         }
-      } catch {
-        // Permission denied or no mic
+      } catch (err) {
+        console.error('[useRecording] Permission denied or no mic:', err)
       }
     },
     [

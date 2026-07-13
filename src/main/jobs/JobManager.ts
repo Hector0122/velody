@@ -105,7 +105,7 @@ export class JobManager {
     job.progress = 0
     this.emit('separation:jobs-changed', this.getQueue())
 
-    const useRealDemucs = this.setupManager?.canUseRealDemucs() ?? false
+    const useRealDemucs = (await this.setupManager?.canUseRealDemucs()) ?? false
 
     try {
       if (useRealDemucs) {
@@ -213,7 +213,7 @@ export class JobManager {
 
     for (let i = 0; i < stemNames.length; i++) {
       const name = stemNames[i]
-      const filePath = join(stemsDir, `${name}.mp3`)
+      const filePath = join(stemsDir, `${name}.wav`)
       // Simulate work (minimum delay so queue shows progress)
       await new Promise((r) => setTimeout(r, 300))
 

@@ -5,7 +5,6 @@ import { registerIpcHandlers, setSetupManager, setJobManager } from './ipc/handl
 import { SetupManager } from './setup'
 import { JobManager } from './jobs/JobManager'
 import { startAudioServer, stopAudioServer, audioUrl } from './audio-server'
-import { exec } from 'child_process'
 
 let mainWindow: BrowserWindow | null = null
 let setupManager: SetupManager | null = null
@@ -30,9 +29,7 @@ function createWindow(): void {
   })
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
-    exec(`sensible-browser "${details.url}"`, (err) => {
-      if (err) shell.openExternal(details.url)
-    })
+    shell.openExternal(details.url)
     return { action: 'deny' }
   })
 
@@ -58,9 +55,9 @@ app.whenReady().then(async () => {
   jobManager = new JobManager(setupManager)
   setJobManager(jobManager)
 
-  ipcMain.handle('setup:status', () => {
+  ipcMain.handle('setup:status', async () => {
     return {
-      complete: setupManager?.isSetupComplete() ?? true
+      complete: (await setupManager?.isSetupComplete()) ?? true
     }
   })
 
