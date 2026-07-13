@@ -1,5 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, useCallback, useMemo } from 'react'
-import WaveSurfer from 'wavesurfer.js'
+import { useState, useMemo, useCallback, useRef } from 'react'
 import ExportModal from './ExportModal'
 import JamZone from './JamZone'
 import MarkerLabelInput from './MarkerLabelInput'
@@ -12,20 +11,11 @@ import { useRecording } from '../hooks/useRecording'
 import useSongAnalysis from '../hooks/useSongAnalysis'
 import useKeyPitch from '../hooks/useKeyPitch'
 import useMarkers from '../hooks/useMarkers'
-import {
-  stemNameFromPath,
-  formatTime,
-  extForFormat,
-  formatFilter,
-  BPM_MIN,
-  BPM_MAX,
-  PROGRESS_THROTTLE_MS,
-  AUDIO_START_THRESHOLD,
-  AUDIO_START_MAX_SCAN_SECS,
-  MASTER_WAVEFORM_HEIGHT,
-  MASTER_MIN_PX_PER_SEC,
-  STEM_WAVEFORM_HEIGHT
-} from '../utils'
+import { useExportState } from '../hooks/useExportState'
+import { usePanningGraph } from '../hooks/usePanningGraph'
+import { useWaveSurfers } from '../hooks/useWaveSurfers'
+import { usePlaybackEngine } from '../hooks/usePlaybackEngine'
+import { stemNameFromPath, formatTime, BPM_MIN, BPM_MAX } from '../utils'
 
 interface StemPlayerProps {
   stems: string[]
@@ -55,7 +45,6 @@ const RECORDING_COLORS = [
 
 function StemPlayer({ stems, songName, onExportAll }: StemPlayerProps): React.JSX.Element {
   const [progress, setProgress] = useState(0)
-  const [duration, setDuration] = useState(0)
   const [masterVolume, setMasterVolume] = useState(1)
   const [masterPlaying, setMasterPlaying] = useState(false)
   const [active, setActive] = useState<Record<string, boolean>>({})
@@ -63,13 +52,6 @@ function StemPlayer({ stems, songName, onExportAll }: StemPlayerProps): React.JS
   const [urls, setUrls] = useState<Record<string, string>>({})
   const [stemVolumes, setStemVolumes] = useState<Record<string, number>>({})
   const [stemPannings, setStemPannings] = useState<Record<string, number>>({})
-
-  // Export
-  const [showExportModal, setShowExportModal] = useState(false)
-  const [exportSelection, setExportSelection] = useState<Record<string, boolean>>({})
-  const [exportFormat, setExportFormat] = useState<'wav' | 'mp3'>('wav')
-  const [exportWithMetronome, setExportWithMetronome] = useState(false)
-  const [exporting, setExporting] = useState(false)
 
   // Recording — state owned by hook; recordedStems stays here for UI
   const [recordedStems, setRecordedStems] = useState<string[]>([])
@@ -80,12 +62,6 @@ function StemPlayer({ stems, songName, onExportAll }: StemPlayerProps): React.JS
   const allStems = useMemo(() => [...stems, ...recordedStems], [stems, recordedStems])
 
   const audioEls = useRef<Record<string, HTMLAudioElement>>({})
-  const stemWaves = useRef<Record<string, WaveSurfer>>({})
-  const waveUrlsRef = useRef<Record<string, string>>({})
-  const masterWaveRef = useRef<WaveSurfer | null>(null)
-  const masterWaveContainer = useRef<HTMLDivElement | null>(null)
-  const masterWaveReady = useRef(false)
-  const [masterWaveDuration, setMasterWaveDuration] = useState(0)
   const positionRef = useRef(0)
   const activeRef = useRef<Record<string, boolean>>({})
   const onAudioTimeRef = useRef<(time: number) => void>(() => {})
@@ -93,14 +69,6 @@ function StemPlayer({ stems, songName, onExportAll }: StemPlayerProps): React.JS
   const lastSeekRef = useRef(0)
 
   const audioStartRef = useRef<number | null>(null)
-
-  // Panning: per-stem graph nodes (source → panner → destination)
-  const panNodesRef = useRef<
-    Record<string, { source: MediaElementAudioSourceNode; panner: StereoPannerNode }>
-  >({})
-
-  // We create stem WaveSurfers eagerly when URLs load so mini-waveforms
-  // are ready before the user presses play.
 
   // Shared refs (used by metronome + recording hooks)
   const audioCtxRef = useRef<AudioContext | null>(null)
@@ -128,40 +96,7 @@ function StemPlayer({ stems, songName, onExportAll }: StemPlayerProps): React.JS
     positionRef
   )
 
-  // Recording hook
-  const {
-    recording,
-    recordingKey,
-    recordingCount,
-    recordingElapsed,
-    monitorVolume,
-    setMonitorVolume,
-    recordingFormat,
-    setRecordingFormat,
-    countInBars,
-    setCountInBars,
-    mediaStreamRef,
-    handleStartRecording,
-    handleStopRecording,
-    handleDiscardRecording,
-    handleSaveRecording
-  } = useRecording({
-    audioCtxRef,
-    audioEls,
-    stemWaves,
-    waveUrlsRef,
-    playbackRateRef,
-    bpm,
-    positionRef,
-    audioStartRef,
-    stems,
-    stemMeta: STEM_META,
-    playClick,
-    setRecordedStems,
-    setProgress
-  })
-
-  // Song analysis (BPM + key detection)
+  // Song analysis (BPM + key detection) — must come before stemItems
   const originalBpmRef = useSongAnalysis(urls, stems, setBpm, setDetectedKey)
   const {
     manualKey,
@@ -198,15 +133,32 @@ function StemPlayer({ stems, songName, onExportAll }: StemPlayerProps): React.JS
     handleRemoveMarker
   } = useMarkers()
 
-  // Sync shared refs to state
-  useLayoutEffect(() => {
-    stemsRef.current = allStems
-    activeRef.current = active
-    masterPlayingRef.current = masterPlaying
-    playbackRateRef.current = masterPlaying ? bpmRef.current / originalBpmRef.current : 1
-    durationRef.current = masterWaveDuration || duration
-  })
+  // Export state
+  const {
+    showExportModal,
+    setShowExportModal,
+    exportSelection,
+    exportFormat,
+    setExportFormat,
+    exportWithMetronome,
+    setExportWithMetronome,
+    exporting,
+    handleExportSingle,
+    handleExportMix,
+    toggleExportSelection
+  } = useExportState({ allStems, songName, bpm, stemMeta: STEM_META })
 
+  // Panning graph (AudioContext + StereoPannerNode routing)
+  const {
+    ensureAudioContext,
+    setupPanningForKey,
+    setupAllPanning,
+    panNodesRef,
+    disconnectPanner,
+    disconnectAllPanners
+  } = usePanningGraph({ audioCtxRef, audioEls, stemPannings })
+
+  // Stem item metadata (computed early for WaveSurfers)
   const stemItems = useMemo(() => {
     let recIdx = 0
     return allStems.map((path) => {
@@ -225,489 +177,129 @@ function StemPlayer({ stems, songName, onExportAll }: StemPlayerProps): React.JS
     })
   }, [allStems, recordedStems])
 
-  // Load audio URLs (use shifted paths if transposed)
-  useEffect(() => {
-    let cancelled = false
-    const load = async (): Promise<void> => {
-      if (!window.api) return
-      const result: Record<string, string> = {}
-      for (const stem of allStems) {
-        const key = stemNameFromPath(stem)
-        const actualPath = shiftedPaths[key] ?? stem
-        result[key] = await window.api.getAudioUrl(actualPath)
-      }
-      if (!cancelled) setUrls(result)
-    }
-    load()
-    return () => {
-      cancelled = true
-    }
-  }, [allStems, shiftedPaths])
-
-  // Assign audio src once URLs are ready
-  useEffect(() => {
-    for (const [key, el] of Object.entries(audioEls.current)) {
-      if (urls[key] && el.src !== urls[key]) {
-        el.src = urls[key]
-      }
-    }
-  }, [urls])
-
-  // Clean up WaveSurfers for stems that no longer exist
-  useEffect(() => {
-    const validKeys = new Set(stemItems.map((s) => s.key))
-    for (const [key, ws] of Object.entries(stemWaves.current)) {
-      if (!validKeys.has(key)) {
-        ws.destroy()
-        delete stemWaves.current[key]
-        delete waveUrlsRef.current[key]
-      }
-    }
-  }, [stemItems])
-
-  // Create a stem WaveSurfer on demand (lazy)
-  const ensureWaveSurfer = useCallback(
-    (key: string): WaveSurfer | undefined => {
-      if (stemWaves.current[key]) return stemWaves.current[key]
-
-      const container = document.querySelector(
-        `[data-stem-container="${key}"]`
-      ) as HTMLDivElement | null
-      if (!container) return undefined
-
-      const item = stemItems.find((s) => s.key === key)
-      const color = item?.meta.color ?? '#6b7280'
-
-      const ws = WaveSurfer.create({
-        container,
-        waveColor: color + '30',
-        progressColor: color,
-        cursorColor: 'transparent',
-        barWidth: 1,
-        barGap: 0,
-        height: STEM_WAVEFORM_HEIGHT,
-        normalize: true,
-        interact: false
-      })
-
-      stemWaves.current[key] = ws
-
-      const url = urls[key]
-      if (url) {
-        ws.load(url)
-        waveUrlsRef.current[key] = url
-      }
-
-      return ws
-    },
-    [urls, stemItems]
-  )
-
-  // Load pending waveform data when URLs become available
-  useEffect(() => {
-    for (const [key] of Object.entries(stemWaves.current)) {
-      const ws = stemWaves.current[key]
-      const url = urls[key]
-      if (ws && url && waveUrlsRef.current[key] !== url) {
-        ws.load(url)
-        waveUrlsRef.current[key] = url
-      }
-    }
-  }, [urls])
-
-  // Init master timeline WaveSurfer
-  const masterUrl = useMemo(() => {
-    const firstKey = Object.keys(urls)[0]
-    return firstKey ? urls[firstKey] : null
-  }, [urls])
-
-  useEffect(() => {
-    if (!masterUrl || !masterWaveContainer.current) return
-
-    if (masterWaveRef.current) {
-      masterWaveRef.current.destroy()
-      masterWaveRef.current = null
-    }
-    masterWaveReady.current = false
-
-    const ws = WaveSurfer.create({
-      container: masterWaveContainer.current,
-      waveColor: '#555',
-      progressColor: '#f97316',
-      cursorColor: '#f97316',
-      cursorWidth: 2,
-      barWidth: 2,
-      barGap: 1,
-      height: MASTER_WAVEFORM_HEIGHT,
-      normalize: true,
-      interact: true,
-      minPxPerSec: MASTER_MIN_PX_PER_SEC
-    })
-    ws.load(masterUrl)
-
-    ws.on('ready', () => {
-      masterWaveReady.current = true
-      setMasterWaveDuration(ws.getDuration())
-      setDuration(ws.getDuration())
-    })
-
-    ws.on('click', (relativeX: number) => {
-      const d = masterWaveReady.current ? ws.getDuration() : durationRef.current
-      const clickTime = relativeX * d
-      positionRef.current = clickTime
-      lastSeekRef.current = Date.now()
-      for (const el of Object.values(audioEls.current)) {
-        el.currentTime = clickTime
-      }
-      for (const sw of Object.values(stemWaves.current)) {
-        sw.seekTo(clickTime / d)
-      }
-      setProgress(clickTime)
-    })
-
-    ws.on('dblclick', (relativeX: number) => {
-      const d = ws.getDuration()
-      const clickTime = relativeX * d
-      setPendingMarkerTime(clickTime)
+  // WaveSurfers (master + stem waveform lifecycle)
+  const {
+    stemWaves,
+    waveUrlsRef,
+    masterWaveContainer,
+    masterWaveDuration,
+    duration,
+    ensureWaveSurfer,
+    syncStemCursors
+  } = useWaveSurfers({
+    stemItems,
+    urls,
+    audioEls,
+    durationRef,
+    positionRef,
+    lastSeekRef,
+    progress,
+    setProgress,
+    onMasterDblClick: (time) => {
+      setPendingMarkerTime(time)
       setShowMarkerInput(true)
-    })
-
-    masterWaveRef.current = ws
-
-    return () => {
-      ws.destroy()
-      masterWaveRef.current = null
-      masterWaveReady.current = false
     }
-  }, [masterUrl]) // eslint-disable-line react-hooks/exhaustive-deps
+  })
 
-  // Sync master WaveSurfer progress
-  useEffect(() => {
-    if (!masterWaveReady.current) return
-    const d = masterWaveDuration || duration || 1
-    masterWaveRef.current?.seekTo(progress / d)
-  }, [progress, masterWaveDuration, duration])
+  // Recording hook (needs stemWaves + waveUrlsRef from useWaveSurfers)
+  const {
+    recording,
+    recordingKey,
+    recordingCount,
+    recordingElapsed,
+    monitorVolume,
+    setMonitorVolume,
+    recordingFormat,
+    setRecordingFormat,
+    countInBars,
+    setCountInBars,
+    mediaStreamRef,
+    handleStartRecording,
+    handleStopRecording,
+    handleDiscardRecording,
+    handleSaveRecording
+  } = useRecording({
+    audioCtxRef,
+    audioEls,
+    stemWaves,
+    waveUrlsRef,
+    playbackRateRef,
+    bpm,
+    positionRef,
+    audioStartRef,
+    stems,
+    stemMeta: STEM_META,
+    playClick,
+    setRecordedStems,
+    setProgress
+  })
 
-  // Compute volume: solo overrides active (only soloed stem is heard)
-  const computeVolume = useCallback(
-    (key: string): number => {
-      if (!masterPlaying) return 0
-      if (!activeRef.current[key]) return 0
-      const stemVol = stemVolumes[key] ?? 1
-      const soloed = Object.keys(solo).find((k) => solo[k])
-      if (soloed) return soloed === key ? stemVol * masterVolume : 0
-      return stemVol * masterVolume
-    },
-    [masterPlaying, solo, masterVolume, stemVolumes]
-  )
+  // Playback engine (audio elements, volume, play/pause, timeupdate, cleanup)
+  const engine = usePlaybackEngine({
+    // Shared refs
+    audioEls,
+    audioCtxRef,
+    positionRef,
+    activeRef,
+    stemsRef,
+    lastSeekRef,
+    audioStartRef,
+    masterPlayingRef,
+    playbackRateRef,
+    durationRef,
+    onAudioTimeRef,
+    // State + setters
+    setProgress,
+    masterPlaying,
+    setMasterPlaying,
+    masterVolume,
+    setMasterVolume,
+    active,
+    setActive,
+    solo,
+    setSolo,
+    urls,
+    setUrls,
+    stemVolumes,
+    setStemVolumes,
+    setStemPannings,
+    // Other state
+    allStems,
+    shiftedPaths,
+    bpm,
+    bpmRef,
+    originalBpmRef,
+    loopEnabled,
+    loopStart,
+    loopEnd,
+    lastScheduledBeatRef,
+    setRecordedStems,
+    masterWaveDuration,
+    duration,
+    // Other hook outputs
+    ensureWaveSurfer,
+    ensureAudioContext,
+    setupAllPanning,
+    setupPanningForKey,
+    panNodesRef,
+    stemWaves,
+    waveUrlsRef,
+    disconnectPanner,
+    disconnectAllPanners,
+    syncStemCursors,
+    mediaStreamRef
+  })
 
-  const applyVolume = useCallback(
-    (key: string): void => {
-      const el = audioEls.current[key]
-      if (el) el.volume = computeVolume(key)
-    },
-    [computeVolume]
-  )
-
-  const applyAllVolumes = useCallback((): void => {
-    for (const key of Object.keys(audioEls.current)) applyVolume(key)
-  }, [applyVolume])
-
-  // Apply volumes reactively
-  useEffect(() => {
-    applyAllVolumes()
-  }, [masterPlaying, active, solo, masterVolume, applyAllVolumes])
-
-  // Apply playback rate when BPM changes or play state toggles
-  useEffect(() => {
-    const rate = masterPlaying ? bpm / originalBpmRef.current : 1
-    for (const el of Object.values(audioEls.current)) {
-      el.playbackRate = rate
-    }
-  }, [bpm, masterPlaying]) // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Clean up unused audio elements on stem change
-  useEffect(() => {
-    const validKeys = new Set(allStems.map(stemNameFromPath))
-    for (const key of Object.keys(audioEls.current)) {
-      if (!validKeys.has(key)) {
-        const el = audioEls.current[key]
-        if (el) {
-          el.pause()
-          el.src = ''
-        }
-        delete audioEls.current[key]
-      }
-    }
-  }, [allStems])
-
-  // --- Audio start detection ---
-  const detectAudioStart = useCallback(async (url: string): Promise<number> => {
-    try {
-      const res = await fetch(url)
-      const buf = await res.arrayBuffer()
-      const ctx = new AudioContext()
-      const ab = await ctx.decodeAudioData(buf)
-      await ctx.close()
-      const ch = ab.getChannelData(0)
-      const sr = ab.sampleRate
-      const threshold = AUDIO_START_THRESHOLD
-      const maxFrames = Math.min(ch.length, AUDIO_START_MAX_SCAN_SECS * sr)
-      for (let i = 0; i < maxFrames; i++) {
-        if (Math.abs(ch[i]) > threshold) {
-          const t = i / sr
-          return t > 0 ? t : 0
-        }
-      }
-      return 0
-    } catch {
-      return 0
-    }
-  }, [])
-
-  // Detect audio start when a new song loads
-  useEffect(() => {
-    if (!masterUrl) return
-    audioStartRef.current = null
-    detectAudioStart(masterUrl).then((t) => {
-      audioStartRef.current = t
-    })
-  }, [masterUrl, detectAudioStart])
-
-  // Close AudioContext on unmount
-  useEffect(() => {
-    return () => {
-      for (const nodes of Object.values(panNodesRef.current)) {
-        try {
-          nodes.panner.disconnect()
-        } catch {
-          /* ignore */
-        }
-      }
-      panNodesRef.current = {}
-      audioCtxRef.current?.close()
-      audioCtxRef.current = null
-      if (mediaStreamRef.current) {
-        mediaStreamRef.current.getTracks().forEach((t) => t.stop())
-        mediaStreamRef.current = null
-      }
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
-
-  // Audio timeupdate → update counter + WaveSurfer cursors
-  const onAudioTime = useCallback(
-    (time: number): void => {
-      positionRef.current = time
-
-      // Loop: if enabled and past loopEnd, seek back to loopStart
-      if (loopEnabled && loopStart !== null && loopEnd !== null && time >= loopEnd) {
-        const seekTime = loopStart
-        positionRef.current = seekTime
-        for (const el of Object.values(audioEls.current)) {
-          el.currentTime = seekTime
-        }
-        setProgress(seekTime)
-        return
-      }
-
-      // Sync WaveSurfer cursors every call (Canvas-only, no React render)
-      const d = durationRef.current || duration || 1
-      for (const sw of Object.values(stemWaves.current)) {
-        sw.seekTo(time / d)
-      }
-
-      // Throttle React setProgress to ~20fps to reduce re-renders
-      const now = Date.now()
-      if (now - lastSeekRef.current < PROGRESS_THROTTLE_MS) return
-      lastSeekRef.current = now
-
-      setProgress(time)
-    },
-    [duration, loopEnabled, loopStart, loopEnd]
-  )
-
-  // eslint-disable-next-line react-hooks/refs
-  onAudioTimeRef.current = onAudioTime
-
-  // --- AudioContext panning helpers ---
-  // Ensure AudioContext exists and is running. Must be called from a user-gesture handler.
-  const ensureAudioContext = useCallback((): AudioContext | null => {
-    if (!audioCtxRef.current) {
-      try {
-        audioCtxRef.current = new AudioContext()
-      } catch (e) {
-        console.error('[pan] AudioContext creation failed', e)
-        return null
-      }
-    }
-    if (audioCtxRef.current.state === 'suspended') {
-      audioCtxRef.current.resume()
-    }
-    return audioCtxRef.current
-  }, [])
-
-  // Set up AudioContext routing for a single stem. Called after ensureAudioContext.
-  const setupPanningForKey = useCallback(
-    (key: string): void => {
-      if (panNodesRef.current[key]) {
-        return
-      }
-      const ctx = audioCtxRef.current
-      if (!ctx) {
-        return
-      }
-      const el = audioEls.current[key]
-      if (!el) {
-        return
-      }
-      try {
-        const source = ctx.createMediaElementSource(el)
-        const panner = ctx.createStereoPanner()
-        panner.pan.value = stemPannings[key] ?? 0
-        source.connect(panner)
-        panner.connect(ctx.destination)
-        panNodesRef.current[key] = { source, panner }
-      } catch (err) {
-        console.error('[pan] FAILED for', key, err)
-      }
-    },
-    [stemPannings]
-  )
-
-  // Set up panning for all stems that have a non-zero pan configured.
-  const setupAllPanning = useCallback((): void => {
-    for (const key of Object.keys(stemPannings)) {
-      setupPanningForKey(key)
-    }
-  }, [stemPannings, setupPanningForKey])
-
-  // Sync panner values reactively when sliders move after graph is wired.
-  useEffect(() => {
-    for (const [key, nodes] of Object.entries(panNodesRef.current)) {
-      nodes.panner.pan.value = stemPannings[key] ?? 0
-    }
-  }, [stemPannings])
-
-  // Toggle stem active
-  const toggleStem = useCallback(
-    (key: string): void => {
-      const el = audioEls.current[key]
-      if (!el) return
-
-      const isActive = !!activeRef.current[key]
-
-      if (!masterPlaying) {
-        if (isActive) return // stopped + already active → nothing
-        lastScheduledBeatRef.current = -1
-        ensureAudioContext()
-        setupAllPanning()
-        ensureWaveSurfer(key)
-        // Start with only this stem
-        setActive({ [key]: true })
-        for (const k of Object.keys(audioEls.current)) {
-          const e = audioEls.current[k]
-          if (e) {
-            e.currentTime = positionRef.current
-            e.play()
-          }
-        }
-        setMasterPlaying(true)
-      } else {
-        // Toggle while playing
-        setActive((prev) => ({ ...prev, [key]: !prev[key] }))
-      }
-    },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [masterPlaying, ensureWaveSurfer]
-  )
-
-  // Master play: enable all / Master stop: disable all
-  const toggleMasterPlay = useCallback((): void => {
-    if (masterPlaying) {
-      for (const el of Object.values(audioEls.current)) el.pause()
-      setActive({})
-      setMasterPlaying(false)
-    } else {
-      lastScheduledBeatRef.current = -1
-      ensureAudioContext()
-      setupAllPanning()
-      // Master play: enable all stems
-      const all: Record<string, boolean> = {}
-      for (const path of stemsRef.current) {
-        const key = stemNameFromPath(path)
-        all[key] = true
-        ensureWaveSurfer(key)
-      }
-      setActive(all)
-      for (const key of Object.keys(audioEls.current)) {
-        const el = audioEls.current[key]
-        if (el) {
-          el.volume = masterVolume
-          el.currentTime = positionRef.current
-          el.play()
-        }
-      }
-      setMasterPlaying(true)
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [masterPlaying, ensureWaveSurfer])
-
-  const handleRestart = useCallback((): void => {
-    positionRef.current = 0
-    setProgress(0)
-    for (const el of Object.values(audioEls.current)) {
-      el.currentTime = 0
-    }
-    for (const sw of Object.values(stemWaves.current)) {
-      sw.seekTo(0)
-    }
-  }, [])
-
-  // Solo: only one stem at a time, toggle on/off
-  const toggleSolo = useCallback((key: string): void => {
-    setSolo((prev) => {
-      if (prev[key]) return {} // un-solo
-      return { [key]: true } // solo this one, clear others
-    })
-  }, [])
-
-  const handleExportSingle = useCallback(
-    async (key: string): Promise<void> => {
-      if (!window.api) return
-      const stemPath = allStems.find((p) => stemNameFromPath(p) === key)
-      if (!stemPath) return
-      const stemLabel = STEM_META[key]?.label ?? key
-      const outPath = await window.api.saveFileDialog(
-        `${songName} - ${stemLabel}${extForFormat(exportFormat)}`,
-        [formatFilter(exportFormat)]
-      )
-      if (!outPath) return
-      setExporting(true)
-      await window.api.exportSingle(stemPath, outPath)
-      setExporting(false)
-    },
-    [allStems, songName, exportFormat]
-  )
-
-  const handleExportMix = useCallback(async (): Promise<void> => {
-    if (!window.api) return
-    const selected = Object.entries(exportSelection)
-      .filter(([, v]) => v)
-      .map(([k]) => k)
-    if (selected.length === 0) return
-    const stemPaths = selected
-      .map((k) => allStems.find((p) => stemNameFromPath(p) === k))
-      .filter((p): p is string => !!p)
-    const outPath = await window.api.saveFileDialog(
-      `${songName} - Mix${extForFormat(exportFormat)}`,
-      [formatFilter(exportFormat)]
-    )
-    if (!outPath) return
-    setExporting(true)
-    await window.api.exportMix(stemPaths, outPath, exportWithMetronome ? { bpm } : undefined)
-    setExporting(false)
-  }, [exportSelection, allStems, songName, exportFormat, exportWithMetronome, bpm])
+  const {
+    toggleStem,
+    toggleMasterPlay,
+    handleRestart,
+    toggleSolo,
+    handleDeleteRecording,
+    handleMasterVolume,
+    handleStemVolume,
+    handleStemPanning
+  } = engine
 
   const handleOpenTab = useCallback(
     (stemKey: string): void => {
@@ -719,47 +311,6 @@ function StemPlayer({ stems, songName, onExportAll }: StemPlayerProps): React.JS
     },
     [songName]
   )
-
-  const toggleExportSelection = useCallback((key: string): void => {
-    setExportSelection((prev) => ({ ...prev, [key]: !prev[key] }))
-  }, [])
-
-  const handleDeleteRecording = useCallback(async (path: string): Promise<void> => {
-    const key = stemNameFromPath(path)
-    const el = audioEls.current[key]
-    if (el) {
-      el.pause()
-      el.src = ''
-      el.onerror = null
-      delete audioEls.current[key]
-    }
-    if (stemWaves.current[key]) {
-      stemWaves.current[key].destroy()
-      delete stemWaves.current[key]
-      delete waveUrlsRef.current[key]
-    }
-    if (panNodesRef.current[key]) {
-      try {
-        panNodesRef.current[key].panner.disconnect()
-      } catch {
-        /* ignore */
-      }
-      delete panNodesRef.current[key]
-    }
-    setRecordedStems((prev) => prev.filter((p) => p !== path))
-    setActive((prev) => {
-      const next = { ...prev }
-      delete next[key]
-      return next
-    })
-    if (window.api) {
-      window.api.deleteFile(path)
-    }
-  }, [])
-
-  const handleMasterVolume = useCallback((e: React.ChangeEvent<HTMLInputElement>): void => {
-    setMasterVolume(parseFloat(e.target.value))
-  }, [])
 
   // BPM callbacks
   const handleBpmDecrement = useCallback((): void => {
@@ -811,22 +362,6 @@ function StemPlayer({ stems, songName, onExportAll }: StemPlayerProps): React.JS
       setCountInBars(bars)
     },
     [setCountInBars]
-  )
-
-  const handleStemVolume = useCallback((key: string, value: number): void => {
-    setStemVolumes((prev) => ({ ...prev, [key]: value }))
-  }, [])
-  const handleStemPanning = useCallback(
-    (key: string, value: number): void => {
-      setStemPannings((prev) => ({ ...prev, [key]: value }))
-
-      // If graph not yet wired, set it up now (slider change is a user gesture)
-      if (!panNodesRef.current[key]) {
-        ensureAudioContext()
-        setupPanningForKey(key)
-      }
-    },
-    [ensureAudioContext, setupPanningForKey]
   )
 
   return (

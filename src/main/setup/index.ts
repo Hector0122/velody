@@ -1,4 +1,4 @@
-import { execSync, spawn } from 'child_process'
+import { execFile, spawn } from 'child_process'
 import { createWriteStream, existsSync, mkdirSync, readdirSync, renameSync } from 'fs'
 import { mkdir, rm } from 'fs/promises'
 import https from 'https'
@@ -127,7 +127,7 @@ export class SetupManager {
       this.emit(step, 0, 'working', `Checking ${step}...`)
 
       if (step === 'python') {
-        if (!this.checkPython()) {
+        if (!(await this.checkPython())) {
           this.emit(step, 0, 'error', HELP[step])
           throw new Error(`python not found.\n${HELP[step]}`)
         }
@@ -135,7 +135,7 @@ export class SetupManager {
         continue
       }
 
-      if (this.check(step)) {
+      if (await this.check(step)) {
         this.emit(step, 100, 'done', `${step} ready`)
         continue
       }
@@ -159,56 +159,62 @@ export class SetupManager {
 
   getFfmpegPath(): string {
     if (existsSync(FFMPEG_BIN)) return FFMPEG_BIN
-    try {
-      execSync('ffmpeg -version', { stdio: 'ignore' })
-      return 'ffmpeg'
-    } catch {
-      return ''
-    }
+    return 'ffmpeg'
   }
 
-  isSetupComplete(): boolean {
+  async isSetupComplete(): Promise<boolean> {
     if (this.simMode) return true
-    return STEPS.every((s) => (s === 'python' ? this.checkPython() : this.check(s)))
+    for (const s of STEPS) {
+      if (s === 'python') {
+        if (!(await this.checkPython())) return false
+      } else {
+        if (!(await this.check(s))) return false
+      }
+    }
+    return true
   }
 
-  canUseRealDemucs(): boolean {
+  async canUseRealDemucs(): Promise<boolean> {
     if (this.simMode) return false
     return this.isSetupComplete()
   }
 
-  private checkPython(): boolean {
+  private async checkPython(): Promise<boolean> {
     return this.tryCmd(`${PYTHON} --version`)
   }
 
-  private check(step: string): boolean {
+  private async check(step: string): Promise<boolean> {
     switch (step) {
       case 'venv':
         return existsSync(VENV_PYTHON)
       case 'demucs':
         return this.checkDemucs()
-      case 'ffmpeg':
-        return this.getFfmpegPath() !== ''
+      case 'ffmpeg': {
+        const ffmpeg = this.getFfmpegPath()
+        return ffmpeg !== '' && (await this.tryCmd(`${ffmpeg} -version`))
+      }
       default:
         return false
     }
   }
 
-  private checkDemucs(): boolean {
+  private async checkDemucs(): Promise<boolean> {
     const python = this.getPythonPath()
     for (const pkg of ['demucs', 'torch', 'torchaudio']) {
-      if (!this.tryCmd(`"${python}" -m pip show ${pkg}`)) return false
+      if (!(await this.tryCmd(`${python} -m pip show ${pkg}`))) return false
     }
     return true
   }
 
-  private tryCmd(cmd: string): boolean {
-    try {
-      execSync(cmd, { stdio: 'ignore' })
-      return true
-    } catch {
-      return false
-    }
+  private tryCmd(cmd: string): Promise<boolean> {
+    return new Promise((resolve) => {
+      const parts = cmd.trim().split(/\s+/)
+      const file = parts[0].replace(/^["']|["']$/g, '')
+      const args = parts.slice(1)
+      execFile(file, args, (err) => {
+        resolve(!err)
+      })
+    })
   }
 
   private async install(step: string): Promise<boolean> {

@@ -5,6 +5,7 @@ import { tmpdir } from 'os'
 import { createWriteStream } from 'fs'
 import { mkdir, writeFile, readFile, rm, readdir, stat, mkdtemp, access } from 'fs/promises'
 import { constants } from 'fs'
+import crypto from 'crypto'
 import { SetupManager } from '../setup'
 import { JobManager } from '../jobs/JobManager'
 
@@ -137,7 +138,8 @@ export function registerIpcHandlers(): void {
         const last = lines[lines.length - 1]
         const parsed = last ? JSON.parse(last.trim()) : null
         return parsed && typeof parsed.key === 'string' ? parsed.key : null
-      } catch {
+      } catch (err) {
+        console.error('[detectKey]', err)
         return null
       }
     }
@@ -277,8 +279,8 @@ export function registerIpcHandlers(): void {
         })
         const d = parseFloat(out.trim())
         if (d > maxDur) maxDur = d
-      } catch {
-        /* skip */
+      } catch (err) {
+        console.error('[song:getDuration]', err)
       }
     }
     return maxDur || 60
@@ -326,7 +328,7 @@ export function registerIpcHandlers(): void {
             try {
               await rm(td, { recursive: true, force: true })
             } catch {
-              /* ignore */
+              console.warn('[export:mix] temp dir cleanup failed')
             }
           }
           if (code === 0) resolve({ success: true })
@@ -339,7 +341,7 @@ export function registerIpcHandlers(): void {
             try {
               await rm(td, { recursive: true, force: true })
             } catch {
-              /* ignore */
+              console.warn('[export:mix] temp dir cleanup failed')
             }
           }
           resolve({ success: false, error: err.message })
@@ -362,7 +364,7 @@ export function registerIpcHandlers(): void {
       const ext = isMp3 ? '.mp3' : '.wav'
       const fileName = `${name}${ext}`
       const destPath = join(songDir, fileName)
-      const tempPath = join(songDir, `_tmp_rec.wav`)
+      const tempPath = join(songDir, `_tmp_rec_${crypto.randomUUID()}.wav`)
       await writeFile(tempPath, Buffer.from(data))
 
       const ffmpeg = setupManager?.getFfmpegPath() ?? 'ffmpeg'
@@ -398,7 +400,7 @@ export function registerIpcHandlers(): void {
           try {
             await rm(tempPath, { force: true })
           } catch {
-            /* ignore */
+            console.warn('[record:save] temp file cleanup failed')
           }
           if (code === 0) resolve({ success: true, path: destPath })
           else resolve({ success: false, error: 'Conversion failed' })
@@ -408,7 +410,7 @@ export function registerIpcHandlers(): void {
           try {
             await rm(tempPath, { force: true })
           } catch {
-            /* ignore */
+            console.warn('[record:save] temp file cleanup failed')
           }
           resolve({ success: false, error: err.message })
         })
@@ -446,6 +448,7 @@ export function registerIpcHandlers(): void {
   })
 
   ipcMain.handle('stems:transpose', async (_event, stemPaths: string[], semitones: number) => {
+    if (!stemPaths.length) return []
     const baseDir = join(stemPaths[0], '../../_transposed')
     const suffix = semitones >= 0 ? `+${semitones}` : `${semitones}`
     const absDir = join(baseDir, suffix)

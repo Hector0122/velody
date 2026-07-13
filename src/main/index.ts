@@ -55,9 +55,9 @@ app.whenReady().then(async () => {
   jobManager = new JobManager(setupManager)
   setJobManager(jobManager)
 
-  ipcMain.handle('setup:status', () => {
+  ipcMain.handle('setup:status', async () => {
     return {
-      complete: setupManager?.isSetupComplete() ?? true
+      complete: (await setupManager?.isSetupComplete()) ?? true
     }
   })
 
