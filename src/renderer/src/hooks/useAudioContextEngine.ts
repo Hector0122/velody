@@ -160,21 +160,23 @@ export function useAudioContextEngine(params: UseAudioContextEngineParams): {
 
   const decodeStems = useCallback(async (): Promise<void> => {
     const ctx = ensureCtx()
-    for (const stemPath of allStems) {
-      const key = stemNameFromPath(stemPath)
-      if (buffersRef.current[key]) continue
-      const url = urls[key]
-      if (!url) continue
-      try {
-        const res = await fetch(url)
-        const buf = await res.arrayBuffer()
-        const audioBuf = await ctx.decodeAudioData(buf)
-        buffersRef.current[key] = audioBuf
-        ensureNodes(key)
-      } catch (err) {
-        console.error('[audioEngine] decode failed for', key, err)
-      }
-    }
+    await Promise.all(
+      allStems.map(async (stemPath) => {
+        const key = stemNameFromPath(stemPath)
+        if (buffersRef.current[key]) return
+        const url = urls[key]
+        if (!url) return
+        try {
+          const res = await fetch(url)
+          const buf = await res.arrayBuffer()
+          const audioBuf = await ctx.decodeAudioData(buf)
+          buffersRef.current[key] = audioBuf
+          ensureNodes(key)
+        } catch (err) {
+          console.error('[audioEngine] decode failed for', key, err)
+        }
+      })
+    )
   }, [allStems, urls, ensureCtx, ensureNodes])
 
   useEffect(() => {
