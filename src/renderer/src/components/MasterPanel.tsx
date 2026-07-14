@@ -50,7 +50,6 @@ function MasterPanel({
   onCountInBarsChange,
   onShowExportModal
 }: MasterPanelProps): React.JSX.Element {
-
   return (
     <div className="w-44 shrink-0 bg-neutral-900/80 rounded-xl border border-neutral-800 p-4 flex flex-col items-center gap-5 self-start order-1">
       <h3 className="text-sm font-semibold text-neutral-400 uppercase tracking-wide">Master</h3>

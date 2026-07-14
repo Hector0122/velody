@@ -2,10 +2,9 @@ import { useState, useRef, useCallback } from 'react'
 
 interface UseRecordingParams {
   audioCtxRef: React.MutableRefObject<AudioContext | null>
-  audioEls: React.MutableRefObject<Record<string, HTMLAudioElement>>
+  seek: (time: number) => void
   stemWaves: React.MutableRefObject<Record<string, unknown>>
   waveUrlsRef: React.MutableRefObject<Record<string, string>>
-  playbackRateRef: React.MutableRefObject<number>
   bpm: number
   positionRef: React.MutableRefObject<number>
   audioStartRef: React.MutableRefObject<number | null>
@@ -18,8 +17,7 @@ interface UseRecordingParams {
 
 export function useRecording({
   audioCtxRef,
-  audioEls,
-  playbackRateRef,
+  seek,
   bpm,
   positionRef,
   audioStartRef,
@@ -37,7 +35,6 @@ export function useRecording({
   recordingFormat: 'wav' | 'mp3'
   recordingTake: number
   countInBars: number
-  mediaStreamRef: React.MutableRefObject<MediaStream | null>
   setMonitorVolume: (v: number) => void
   setRecordingFormat: (v: 'wav' | 'mp3') => void
   setCountInBars: (v: number) => void
@@ -59,7 +56,6 @@ export function useRecording({
   const [countInBars, setCountInBars] = useState(1)
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
-  const mediaStreamRef = useRef<MediaStream | null>(null)
   const recordingChunksRef = useRef<Blob[]>([])
   const recordingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const recordingStartTimeRef = useRef(0)
@@ -102,7 +98,6 @@ export function useRecording({
       if (!window.api) return
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-        mediaStreamRef.current = stream
         setRecordingKey(key)
         recordingChunksRef.current = []
 
@@ -122,7 +117,7 @@ export function useRecording({
           if (ctx.state === 'suspended') {
             ctx.resume()
           }
-          const interval = 60 / bpm / (playbackRateRef.current || 1)
+          const interval = 60 / bpm
 
           const nearStart = positionRef.current < 5
           const audioStart = audioStartRef.current
@@ -130,9 +125,7 @@ export function useRecording({
           if (nearStart && audioStart !== null && audioStart > 0) {
             const countInDur = totalBeats * interval
             seekStart = Math.max(0, audioStart - countInDur)
-            for (const el of Object.values(audioEls.current)) {
-              el.currentTime = seekStart
-            }
+            seek(seekStart)
             positionRef.current = seekStart
             setProgress(seekStart)
           }
@@ -178,8 +171,7 @@ export function useRecording({
     },
     [
       audioCtxRef,
-      audioEls,
-      playbackRateRef,
+      seek,
       bpm,
       countInBars,
       positionRef,
@@ -199,10 +191,6 @@ export function useRecording({
     }
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
       mediaRecorderRef.current.stop()
-    }
-    if (mediaStreamRef.current) {
-      mediaStreamRef.current.getTracks().forEach((t) => t.stop())
-      mediaStreamRef.current = null
     }
   }, [])
 
@@ -266,7 +254,6 @@ export function useRecording({
     recordingFormat,
     recordingTake,
     countInBars,
-    mediaStreamRef,
     setMonitorVolume,
     setRecordingFormat,
     setCountInBars,

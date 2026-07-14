@@ -1,0 +1,480 @@
+import { useEffect, useLayoutEffect, useCallback, useRef } from 'react'
+import type WaveSurfer from 'wavesurfer.js'
+import { stemNameFromPath } from '../utils'
+
+interface UseAudioContextEngineParams {
+  allStems: string[]
+  urls: Record<string, string>
+  setUrls: (
+    v: Record<string, string> | ((prev: Record<string, string>) => Record<string, string>)
+  ) => void
+  active: Record<string, boolean>
+  solo: Record<string, boolean>
+  stemVolumes: Record<string, number>
+  stemPannings: Record<string, number>
+  masterVolume: number
+  masterPlaying: boolean
+  loopEnabled: boolean
+  loopStart: number | null
+  loopEnd: number | null
+  masterWaveDuration: number
+  duration: number
+
+  positionRef: React.MutableRefObject<number>
+  masterPlayingRef: React.MutableRefObject<boolean>
+  durationRef: React.MutableRefObject<number>
+  onAudioTimeRef: React.MutableRefObject<(time: number) => void>
+  lastScheduledBeatRef: React.MutableRefObject<number>
+
+  setProgress: (v: number | ((prev: number) => number)) => void
+  setMasterPlaying: (v: boolean | ((prev: boolean) => boolean)) => void
+  setActive: (
+    v: Record<string, boolean> | ((prev: Record<string, boolean>) => Record<string, boolean>)
+  ) => void
+  setSolo: (
+    v: Record<string, boolean> | ((prev: Record<string, boolean>) => Record<string, boolean>)
+  ) => void
+  setMasterVolume: (v: number | ((prev: number) => number)) => void
+  setStemVolumes: (
+    v: Record<string, number> | ((prev: Record<string, number>) => Record<string, number>)
+  ) => void
+  setStemPannings: (
+    v: Record<string, number> | ((prev: Record<string, number>) => Record<string, number>)
+  ) => void
+  setRecordedStems: (v: string[] | ((prev: string[]) => string[])) => void
+
+  ensureWaveSurfer: (key: string) => WaveSurfer | undefined
+  stemWaves: React.MutableRefObject<Record<string, WaveSurfer>>
+  waveUrlsRef: React.MutableRefObject<Record<string, string>>
+  mediaStreamRef: React.MutableRefObject<MediaStream | null>
+}
+
+export function useAudioContextEngine(params: UseAudioContextEngineParams): {
+  toggleStem: (key: string) => void
+  toggleMasterPlay: () => void
+  handleRestart: () => void
+  toggleSolo: (key: string) => void
+  handleDeleteRecording: (path: string) => Promise<void>
+  handleMasterVolume: (e: React.ChangeEvent<HTMLInputElement>) => void
+  handleStemVolume: (key: string, value: number) => void
+  handleStemPanning: (key: string, value: number) => void
+  seek: (time: number) => void
+  audioCtxRef: React.MutableRefObject<AudioContext | null>
+} {
+  const {
+    allStems,
+    urls,
+    setUrls,
+    active,
+    solo,
+    stemVolumes,
+    stemPannings,
+    masterVolume,
+    masterPlaying,
+    loopEnabled,
+    loopStart,
+    loopEnd,
+    masterWaveDuration,
+    duration,
+    positionRef,
+    masterPlayingRef,
+    durationRef,
+    onAudioTimeRef,
+    lastScheduledBeatRef,
+    setProgress,
+    setMasterPlaying,
+    setActive,
+    setSolo,
+    setMasterVolume,
+    setStemVolumes,
+    setStemPannings,
+    setRecordedStems,
+    ensureWaveSurfer,
+    stemWaves,
+    waveUrlsRef,
+    mediaStreamRef
+  } = params
+
+  const audioCtxRef = useRef<AudioContext | null>(null)
+  const buffersRef = useRef<Record<string, AudioBuffer>>({})
+  const gainNodesRef = useRef<Record<string, GainNode>>({})
+  const panNodesRef = useRef<Record<string, StereoPannerNode>>({})
+  const masterGainRef = useRef<GainNode | null>(null)
+  const sourcesRef = useRef<Record<string, AudioBufferSourceNode>>({})
+  const isPlayingRef = useRef(false)
+  const startRef = useRef(0)
+  const startTimeRef = useRef(0)
+  const rafRef = useRef(0)
+
+  const activeRef = useRef(active)
+  const soloRef = useRef(solo)
+  const stemVolumesRef = useRef(stemVolumes)
+  const stemPanningsRef = useRef(stemPannings)
+  const masterVolumeRef = useRef(masterVolume)
+  const loopRef = useRef({ enabled: loopEnabled, start: loopStart, end: loopEnd })
+
+  useLayoutEffect(() => {
+    activeRef.current = active
+    soloRef.current = solo
+    stemVolumesRef.current = stemVolumes
+    stemPanningsRef.current = stemPannings
+    masterVolumeRef.current = masterVolume
+    loopRef.current = { enabled: loopEnabled, start: loopStart, end: loopEnd }
+    masterPlayingRef.current = masterPlaying
+    durationRef.current = masterWaveDuration || duration
+  })
+
+  const ensureCtx = useCallback((): AudioContext => {
+    if (!audioCtxRef.current) {
+      audioCtxRef.current = new AudioContext()
+      masterGainRef.current = audioCtxRef.current.createGain()
+      masterGainRef.current.connect(audioCtxRef.current.destination)
+    }
+    if (audioCtxRef.current.state === 'suspended') audioCtxRef.current.resume()
+    return audioCtxRef.current
+  }, [])
+
+  const computeGain = useCallback((key: string): number => {
+    if (!masterPlayingRef.current) return 0
+    if (!activeRef.current[key]) return 0
+    const stemVol = stemVolumesRef.current[key] ?? 1
+    const hasSolo = Object.values(soloRef.current).some((v) => v)
+    if (hasSolo && !soloRef.current[key]) return 0
+    return stemVol * masterVolumeRef.current
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const ensureNodes = useCallback((key: string): void => {
+    const ctx = audioCtxRef.current
+    if (!ctx || !masterGainRef.current) return
+    if (gainNodesRef.current[key]) return
+
+    const gain = ctx.createGain()
+    const pan = ctx.createStereoPanner()
+    pan.pan.value = stemPanningsRef.current[key] ?? 0
+    gain.connect(pan)
+    pan.connect(masterGainRef.current)
+    gainNodesRef.current[key] = gain
+    panNodesRef.current[key] = pan
+  }, [])
+
+  const decodeStems = useCallback(async (): Promise<void> => {
+    const ctx = ensureCtx()
+    for (const stemPath of allStems) {
+      const key = stemNameFromPath(stemPath)
+      if (buffersRef.current[key]) continue
+      const url = urls[key]
+      if (!url) continue
+      try {
+        const res = await fetch(url)
+        const buf = await res.arrayBuffer()
+        const audioBuf = await ctx.decodeAudioData(buf)
+        buffersRef.current[key] = audioBuf
+        ensureNodes(key)
+      } catch (err) {
+        console.error('[audioEngine] decode failed for', key, err)
+      }
+    }
+  }, [allStems, urls, ensureCtx, ensureNodes])
+
+  useEffect(() => {
+    decodeStems()
+  }, [decodeStems])
+
+  const stopSources = useCallback((): void => {
+    for (const source of Object.values(sourcesRef.current)) {
+      try {
+        source.stop()
+      } catch {
+        /* already stopped */
+      }
+    }
+    sourcesRef.current = {}
+  }, [])
+
+  const startSources = useCallback(
+    (position: number): void => {
+      const ctx = audioCtxRef.current
+      if (!ctx) return
+
+      startTimeRef.current = ctx.currentTime
+      startRef.current = position
+      positionRef.current = position
+
+      for (const [key, buffer] of Object.entries(buffersRef.current)) {
+        if (!buffer) continue
+        ensureNodes(key)
+        const source = ctx.createBufferSource()
+        source.buffer = buffer
+        source.connect(gainNodesRef.current[key])
+
+        const gain = computeGain(key)
+        gainNodesRef.current[key].gain.setValueAtTime(gain, ctx.currentTime)
+
+        if (gain > 0) {
+          source.start(0, position)
+        }
+        sourcesRef.current[key] = source
+      }
+
+      isPlayingRef.current = true
+    },
+    [computeGain, ensureNodes, positionRef]
+  )
+
+  const seek = useCallback(
+    (time: number): void => {
+      positionRef.current = time
+      if (isPlayingRef.current) {
+        stopSources()
+        startSources(time)
+      }
+    },
+    [positionRef, stopSources, startSources]
+  )
+
+  const tick = useCallback((): void => {
+    const ctx = audioCtxRef.current
+    if (!ctx || !isPlayingRef.current) return
+
+    const position = startRef.current + (ctx.currentTime - startTimeRef.current)
+
+    const loop = loopRef.current
+    if (loop.enabled && loop.start !== null && loop.end !== null && position >= loop.end) {
+      lastScheduledBeatRef.current = -1
+      stopSources()
+      startSources(loop.start)
+      positionRef.current = loop.start
+      onAudioTimeRef.current(loop.start)
+      rafRef.current = requestAnimationFrame(tick)
+      return
+    }
+
+    positionRef.current = position
+    onAudioTimeRef.current(position)
+
+    rafRef.current = requestAnimationFrame(tick)
+  }, [stopSources, startSources, onAudioTimeRef, lastScheduledBeatRef, positionRef])
+
+  useEffect(() => {
+    if (!masterPlaying && isPlayingRef.current) {
+      stopSources()
+      isPlayingRef.current = false
+      cancelAnimationFrame(rafRef.current)
+    }
+  }, [masterPlaying, stopSources])
+
+  useEffect(() => {
+    if (!audioCtxRef.current || !isPlayingRef.current) return
+    for (const [key, gainNode] of Object.entries(gainNodesRef.current)) {
+      const targetGain = computeGain(key)
+      gainNode.gain.setTargetAtTime(targetGain, audioCtxRef.current.currentTime, 0.01)
+    }
+  }, [active, solo, stemVolumes, masterVolume, computeGain])
+
+  useEffect(() => {
+    for (const [key, panNode] of Object.entries(panNodesRef.current)) {
+      panNode.pan.value = stemPannings[key] ?? 0
+    }
+  }, [stemPannings])
+
+  useEffect(() => {
+    let cancelled = false
+    const load = async (): Promise<void> => {
+      if (!window.api) return
+      const result: Record<string, string> = {}
+      for (const stem of allStems) {
+        const key = stemNameFromPath(stem)
+        result[key] = await window.api.getAudioUrl(stem)
+      }
+      if (!cancelled) setUrls(result)
+    }
+    load()
+    return () => {
+      cancelled = true
+    }
+  }, [allStems, setUrls])
+
+  useEffect(() => {
+    return () => {
+      stopSources()
+      cancelAnimationFrame(rafRef.current)
+      if (masterGainRef.current) {
+        try {
+          masterGainRef.current.disconnect()
+        } catch {
+          /* ignore */
+        }
+      }
+      audioCtxRef.current?.close()
+      audioCtxRef.current = null
+      if (mediaStreamRef.current) {
+        mediaStreamRef.current.getTracks().forEach((t) => t.stop())
+        mediaStreamRef.current = null
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const toggleStem = useCallback(
+    (key: string): void => {
+      if (!masterPlayingRef.current) {
+        if (activeRef.current[key]) return
+        lastScheduledBeatRef.current = -1
+        ensureCtx()
+        ensureWaveSurfer(key)
+        isPlayingRef.current = true
+        startSources(positionRef.current)
+        rafRef.current = requestAnimationFrame(tick)
+        setActive({ [key]: true })
+        setMasterPlaying(true)
+      } else {
+        setActive((prev) => ({ ...prev, [key]: !prev[key] }))
+      }
+    },
+    [
+      ensureCtx,
+      ensureWaveSurfer,
+      startSources,
+      tick,
+      setActive,
+      setMasterPlaying,
+      lastScheduledBeatRef,
+      positionRef,
+      masterPlayingRef
+    ]
+  )
+
+  const toggleMasterPlay = useCallback((): void => {
+    if (masterPlaying) {
+      setMasterPlaying(false)
+    } else {
+      lastScheduledBeatRef.current = -1
+      ensureCtx()
+      const all: Record<string, boolean> = {}
+      for (const path of allStems) {
+        const key = stemNameFromPath(path)
+        all[key] = true
+        ensureWaveSurfer(key)
+      }
+      setActive(all)
+      isPlayingRef.current = true
+      startSources(positionRef.current)
+      rafRef.current = requestAnimationFrame(tick)
+      setMasterPlaying(true)
+    }
+  }, [
+    masterPlaying,
+    ensureCtx,
+    ensureWaveSurfer,
+    startSources,
+    tick,
+    setActive,
+    setMasterPlaying,
+    lastScheduledBeatRef,
+    allStems,
+    positionRef
+  ])
+
+  const handleRestart = useCallback((): void => {
+    lastScheduledBeatRef.current = -1
+    if (isPlayingRef.current) {
+      stopSources()
+      startSources(0)
+    } else {
+      positionRef.current = 0
+    }
+    setProgress(0)
+    for (const sw of Object.values(stemWaves.current)) {
+      sw.seekTo(0)
+    }
+  }, [stopSources, startSources, positionRef, setProgress, stemWaves, lastScheduledBeatRef])
+
+  const toggleSolo = useCallback(
+    (key: string): void => {
+      setSolo((prev) => {
+        if (prev[key]) return {}
+        return { [key]: true }
+      })
+    },
+    [setSolo]
+  )
+
+  const handleDeleteRecording = useCallback(
+    async (path: string): Promise<void> => {
+      const key = stemNameFromPath(path)
+
+      if (sourcesRef.current[key]) {
+        try {
+          sourcesRef.current[key].stop()
+        } catch {
+          /* already stopped */
+        }
+        delete sourcesRef.current[key]
+      }
+
+      if (gainNodesRef.current[key]) {
+        gainNodesRef.current[key].disconnect()
+        delete gainNodesRef.current[key]
+      }
+      if (panNodesRef.current[key]) {
+        panNodesRef.current[key].disconnect()
+        delete panNodesRef.current[key]
+      }
+
+      delete buffersRef.current[key]
+
+      if (stemWaves.current[key]) {
+        stemWaves.current[key].destroy()
+        delete stemWaves.current[key]
+        delete waveUrlsRef.current[key]
+      }
+
+      setRecordedStems((prev) => prev.filter((p) => p !== path))
+      setActive((prev) => {
+        const next = { ...prev }
+        delete next[key]
+        return next
+      })
+      if (window.api) {
+        window.api.deleteFile(path)
+      }
+    },
+    [stemWaves, waveUrlsRef, setRecordedStems, setActive]
+  )
+
+  const handleMasterVolume = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>): void => {
+      setMasterVolume(parseFloat(e.target.value))
+    },
+    [setMasterVolume]
+  )
+
+  const handleStemVolume = useCallback(
+    (key: string, value: number): void => {
+      setStemVolumes((prev) => ({ ...prev, [key]: value }))
+    },
+    [setStemVolumes]
+  )
+
+  const handleStemPanning = useCallback(
+    (key: string, value: number): void => {
+      setStemPannings((prev) => ({ ...prev, [key]: value }))
+      ensureNodes(key)
+    },
+    [ensureNodes, setStemPannings]
+  )
+
+  return {
+    toggleStem,
+    toggleMasterPlay,
+    handleRestart,
+    toggleSolo,
+    handleDeleteRecording,
+    handleMasterVolume,
+    handleStemVolume,
+    handleStemPanning,
+    seek,
+    audioCtxRef
+  }
+}

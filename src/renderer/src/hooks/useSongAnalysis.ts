@@ -19,7 +19,6 @@ export default function useSongAnalysis(
   useEffect(() => {
     const allUrls = Object.values(urls)
     if (allUrls.length === 0 || stems.length === 0) return
-
     ;(async (): Promise<void> => {
       if (!window.api) return
 

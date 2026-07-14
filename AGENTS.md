@@ -9,7 +9,7 @@ El flujo principal:
 - Importar una canción
 - Separar stems con Demucs
 - Tocar sobre los stems aislados
-- Usar herramientas visuales (escalas, diapasón, marcadores) para aprender y practicar
+- Usar herramientas visuales (marcadores, loops) para aprender y practicar
 - Exportar stems
 
 ---
@@ -571,6 +571,12 @@ NOT on:
 | P2  | Lazy WaveSurfer (crear waveform solo al activar stem)                                                        | -50% WaveSurfer, -40% RAM        | ✅ Done |
 | P8  | Volumen por track (slider individual por stem)                                                               | Mezcla más cómoda                | ✅ Done |
 | P9  | Per-track panning (control stereo L/R por stem via Web Audio API)                                            | Mezcla más profesional           | ✅ Done |
+| R21 | AudioContext engine: AudioBufferSourceNode + GainNode + StereoPannerNode per stem (replaces `<audio>` elements) | Zero desync, instant mute/unmute | ✅ Done |
+| R22 | Metronome uses own AudioContext (no shared AudioContext dependency)                                           | Metronome independent of engine  | ✅ Done |
+| R23 | useWaveSurfers uses seekRef (breaks circular dependency with engine)                                          | Clean hook architecture          | ✅ Done |
+| R24 | useRecording uses seek function (no audioEls dependency)                                                      | Recording independent of audio   | ✅ Done |
+| R25 | Metronome drift correction: lastScheduledBeatRef reset on seek/restart/loop                                   | Metronome stays in sync          | ✅ Done |
+| R26 | Metronome beat offset alignment (firstBeatOffsetRef from TempoCNN)                                            | Click aligns with first beat     | ✅ Done |
 
 ## Pending
 
@@ -584,7 +590,9 @@ NOT on:
 ## Notas técnicas
 
 - **P3 Virtualización StemGrid**: ✅ Ya implementado con `react-window`
-- **Cache de pitch shift**: ✅ Ya implementado (`_transposed/`), solo falta persistencia
 - **Lazy WaveSurfer**: ✅ Implementado — `ensureWaveSurfer()` crea waveforms on-demand al dar play
-- **Per-stem panning**: ✅ Implementado via Web Audio API `StereoPannerNode` + `crossOrigin = 'anonymous'` en `<audio>` para sortear CORS
-- **Web Worker pool**: El más complejo; requiere refactor del JobManager
+- **Per-stem panning**: ✅ Implementado via `StereoPannerNode` en AudioContext engine
+- **Per-stem volume**: ✅ Implementado via `GainNode` en AudioContext engine con rampa `setTargetAtTime`
+- **Audio engine**: `useAudioContextEngine` — AudioContext + AudioBufferSourceNode per stem, preloaded buffers, RAF loop for position
+- **Metronome**: Own AudioContext, reads `positionRef` directly, uses `firstBeatOffsetRef` from TempoCNN for beat alignment
+- **Muting = GainNode 0**: Source keeps playing silently, stays in perfect sync. No recreate/reconnect needed.

@@ -10,7 +10,7 @@ interface StemItem {
 interface UseWaveSurfersParams {
   stemItems: StemItem[]
   urls: Record<string, string>
-  audioEls: React.MutableRefObject<Record<string, HTMLAudioElement>>
+  seekRef: React.MutableRefObject<(time: number) => void>
   durationRef: React.MutableRefObject<number>
   positionRef: React.MutableRefObject<number>
   lastSeekRef: React.MutableRefObject<number>
@@ -23,7 +23,6 @@ interface UseWaveSurfersParams {
 interface UseWaveSurfersReturn {
   stemWaves: React.MutableRefObject<Record<string, WaveSurfer>>
   waveUrlsRef: React.MutableRefObject<Record<string, string>>
-  masterWaveRef: React.MutableRefObject<WaveSurfer | null>
   masterWaveContainer: React.MutableRefObject<HTMLDivElement | null>
   masterWaveDuration: number
   duration: number
@@ -34,7 +33,7 @@ interface UseWaveSurfersReturn {
 export function useWaveSurfers({
   stemItems,
   urls,
-  audioEls,
+  seekRef,
   durationRef,
   positionRef,
   lastSeekRef,
@@ -45,13 +44,12 @@ export function useWaveSurfers({
 }: UseWaveSurfersParams): UseWaveSurfersReturn {
   const stemWaves = useRef<Record<string, WaveSurfer>>({})
   const waveUrlsRef = useRef<Record<string, string>>({})
-  const masterWaveRef = useRef<WaveSurfer | null>(null)
   const masterWaveContainer = useRef<HTMLDivElement | null>(null)
+  const masterWaveRef = useRef<WaveSurfer | null>(null)
   const masterWaveReady = useRef(false)
   const [masterWaveDuration, setMasterWaveDuration] = useState(0)
   const [duration, setDuration] = useState(0)
 
-  // Clean up WaveSurfers for stems that no longer exist
   useEffect(() => {
     const validKeys = new Set(stemItems.map((s) => s.key))
     for (const [key, ws] of Object.entries(stemWaves.current)) {
@@ -63,7 +61,6 @@ export function useWaveSurfers({
     }
   }, [stemItems])
 
-  // Create a stem WaveSurfer on demand (lazy)
   const ensureWaveSurfer = useCallback(
     (key: string): WaveSurfer | undefined => {
       if (stemWaves.current[key]) return stemWaves.current[key]
@@ -101,7 +98,6 @@ export function useWaveSurfers({
     [urls, stemItems]
   )
 
-  // Load pending waveform data when URLs become available
   useEffect(() => {
     for (const [key] of Object.entries(stemWaves.current)) {
       const ws = stemWaves.current[key]
@@ -113,13 +109,11 @@ export function useWaveSurfers({
     }
   }, [urls])
 
-  // Master URL
   const masterUrl = useMemo(() => {
     const firstKey = Object.keys(urls)[0]
     return firstKey ? urls[firstKey] : null
   }, [urls])
 
-  // Init master timeline WaveSurfer
   useEffect(() => {
     if (!masterUrl || !masterWaveContainer.current) return
 
@@ -153,12 +147,10 @@ export function useWaveSurfers({
     ws.on('click', (relativeX: number) => {
       const d = masterWaveReady.current ? ws.getDuration() : durationRef.current
       const clickTime = relativeX * d
+      lastScheduledBeatRef.current = -1
       positionRef.current = clickTime
       lastSeekRef.current = Date.now()
-      lastScheduledBeatRef.current = -1
-      for (const el of Object.values(audioEls.current)) {
-        el.currentTime = clickTime
-      }
+      seekRef.current(clickTime)
       for (const sw of Object.values(stemWaves.current)) {
         sw.seekTo(clickTime / d)
       }
@@ -181,14 +173,12 @@ export function useWaveSurfers({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [masterUrl])
 
-  // Sync master WaveSurfer progress
   useEffect(() => {
     if (!masterWaveReady.current) return
     const d = masterWaveDuration || duration || 1
     masterWaveRef.current?.seekTo(progress / d)
   }, [progress, masterWaveDuration, duration])
 
-  // Sync stem cursors (called from onAudioTime — avoids React render)
   const syncStemCursors = useCallback((time: number, dur: number): void => {
     for (const sw of Object.values(stemWaves.current)) {
       sw.seekTo(time / (dur || 1))
@@ -198,7 +188,6 @@ export function useWaveSurfers({
   return {
     stemWaves,
     waveUrlsRef,
-    masterWaveRef,
     masterWaveContainer,
     masterWaveDuration,
     duration,

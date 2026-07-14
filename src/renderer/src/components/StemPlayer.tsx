@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, useRef } from 'react'
+import { useState, useMemo, useCallback, useRef, useLayoutEffect } from 'react'
 import ExportModal from './ExportModal'
 import MarkerLabelInput from './MarkerLabelInput'
 import RecordingConfirmationModal from './RecordingConfirmationModal'
@@ -10,10 +10,16 @@ import { useRecording } from '../hooks/useRecording'
 import useSongAnalysis from '../hooks/useSongAnalysis'
 import useMarkers from '../hooks/useMarkers'
 import { useExportState } from '../hooks/useExportState'
-import { usePanningGraph } from '../hooks/usePanningGraph'
 import { useWaveSurfers } from '../hooks/useWaveSurfers'
-import { usePlaybackEngine } from '../hooks/usePlaybackEngine'
-import { stemNameFromPath, formatTime, BPM_MIN, BPM_MAX } from '../utils'
+import { useAudioContextEngine } from '../hooks/useAudioContextEngine'
+import {
+  stemNameFromPath,
+  formatTime,
+  BPM_MIN,
+  BPM_MAX,
+  CURSOR_THROTTLE_MS,
+  PROGRESS_THROTTLE_MS
+} from '../utils'
 
 interface StemPlayerProps {
   stems: string[]
@@ -49,58 +55,25 @@ function StemPlayer({ stems, songName }: StemPlayerProps): React.JSX.Element {
   const [urls, setUrls] = useState<Record<string, string>>({})
   const [stemVolumes, setStemVolumes] = useState<Record<string, number>>({})
   const [stemPannings, setStemPannings] = useState<Record<string, number>>({})
-
-  // Recording — state owned by hook; recordedStems stays here for UI
   const [recordedStems, setRecordedStems] = useState<string[]>([])
 
   const allStems = useMemo(() => [...stems, ...recordedStems], [stems, recordedStems])
 
-  const audioEls = useRef<Record<string, HTMLAudioElement>>({})
   const positionRef = useRef(0)
-  const activeRef = useRef<Record<string, boolean>>({})
   const onAudioTimeRef = useRef<(time: number) => void>(() => {})
-  const stemsRef = useRef<string[]>([])
   const lastSeekRef = useRef(0)
+  const lastCursorSyncRef = useRef(0)
+  const lastScheduledBeatRef = useRef(-1)
+  const seekRef = useRef<(time: number) => void>(() => {})
 
-  const audioStartRef = useRef<number | null>(null)
-
-  // Shared refs (used by metronome + recording hooks)
-  const audioCtxRef = useRef<AudioContext | null>(null)
   const masterPlayingRef = useRef(masterPlaying)
-  const playbackRateRef = useRef(1)
   const durationRef = useRef(0)
-
-  // Beat offset (ref for useMetronome)
   const firstBeatOffsetRef = useRef(0)
+  const audioStartRef = useRef<number | null>(null)
+  const mediaStreamRef = useRef<MediaStream | null>(null)
 
-  // Metronome hook
-  const {
-    bpm,
-    setBpm,
-    metronomeOn,
-    setMetronomeOn,
-    metroVolume,
-    setMetroVolume,
-    lastScheduledBeatRef,
-    bpmRef,
-    playClick
-  } = useMetronome(
-    audioCtxRef,
-    audioEls,
-    playbackRateRef,
-    masterPlaying,
-    masterPlayingRef,
-    positionRef,
-    firstBeatOffsetRef
-  )
+  useSongAnalysis(urls, stems, () => {}, firstBeatOffsetRef)
 
-  // Song analysis (BPM + beat offset detection)
-  const { originalBpmRef } = useSongAnalysis(
-    urls,
-    stems,
-    setBpm,
-    firstBeatOffsetRef
-  )
   const {
     markers,
     loopStart,
@@ -118,7 +91,9 @@ function StemPlayer({ stems, songName }: StemPlayerProps): React.JSX.Element {
     handleRemoveMarker
   } = useMarkers()
 
-  // Export state
+  const { bpm, setBpm, metronomeOn, setMetronomeOn, metroVolume, setMetroVolume, playClick } =
+    useMetronome(masterPlaying, masterPlayingRef, positionRef, firstBeatOffsetRef)
+
   const {
     showExportModal,
     setShowExportModal,
@@ -133,17 +108,6 @@ function StemPlayer({ stems, songName }: StemPlayerProps): React.JSX.Element {
     toggleExportSelection
   } = useExportState({ allStems, songName, bpm, stemMeta: STEM_META })
 
-  // Panning graph (AudioContext + StereoPannerNode routing)
-  const {
-    ensureAudioContext,
-    setupPanningForKey,
-    setupAllPanning,
-    panNodesRef,
-    disconnectPanner,
-    disconnectAllPanners
-  } = usePanningGraph({ audioCtxRef, audioEls, stemPannings })
-
-  // Stem item metadata (computed early for WaveSurfers)
   const stemItems = useMemo(() => {
     let recIdx = 0
     return allStems.map((path) => {
@@ -162,7 +126,6 @@ function StemPlayer({ stems, songName }: StemPlayerProps): React.JSX.Element {
     })
   }, [allStems, recordedStems])
 
-  // WaveSurfers (master + stem waveform lifecycle)
   const {
     stemWaves,
     waveUrlsRef,
@@ -174,7 +137,7 @@ function StemPlayer({ stems, songName }: StemPlayerProps): React.JSX.Element {
   } = useWaveSurfers({
     stemItems,
     urls,
-    audioEls,
+    seekRef,
     durationRef,
     positionRef,
     lastSeekRef,
@@ -187,7 +150,78 @@ function StemPlayer({ stems, songName }: StemPlayerProps): React.JSX.Element {
     }
   })
 
-  // Recording hook (needs stemWaves + waveUrlsRef from useWaveSurfers)
+  const {
+    toggleStem,
+    toggleMasterPlay,
+    handleRestart,
+    toggleSolo,
+    handleDeleteRecording,
+    handleMasterVolume,
+    handleStemVolume,
+    handleStemPanning,
+    seek,
+    audioCtxRef
+  } = useAudioContextEngine({
+    allStems,
+    urls,
+    setUrls,
+    active,
+    solo,
+    stemVolumes,
+    stemPannings,
+    masterVolume,
+    masterPlaying,
+    loopEnabled,
+    loopStart,
+    loopEnd,
+    masterWaveDuration,
+    duration,
+    positionRef,
+    masterPlayingRef,
+    durationRef,
+    onAudioTimeRef,
+    lastScheduledBeatRef,
+    setProgress,
+    setMasterPlaying,
+    setActive,
+    setSolo,
+    setMasterVolume,
+    setStemVolumes,
+    setStemPannings,
+    setRecordedStems,
+    ensureWaveSurfer,
+    stemWaves,
+    waveUrlsRef,
+    mediaStreamRef
+  })
+
+  useLayoutEffect(() => {
+    seekRef.current = seek
+  })
+
+  const onAudioTime = useCallback(
+    (time: number): void => {
+      const now = Date.now()
+      if (now - lastCursorSyncRef.current >= CURSOR_THROTTLE_MS) {
+        lastCursorSyncRef.current = now
+        const d = durationRef.current || duration || 1
+        syncStemCursors(time, d)
+      }
+      if (now - lastSeekRef.current < PROGRESS_THROTTLE_MS) return
+      lastSeekRef.current = now
+      setProgress(time)
+    },
+    [duration, syncStemCursors, durationRef, lastSeekRef, setProgress]
+  )
+
+  const onAudioTimeRefCurrent = useRef(onAudioTime)
+  useLayoutEffect(() => {
+    onAudioTimeRefCurrent.current = onAudioTime
+  })
+  useLayoutEffect(() => {
+    onAudioTimeRef.current = (time: number) => onAudioTimeRefCurrent.current(time)
+  }, [])
+
   const {
     recording,
     recordingKey,
@@ -199,17 +233,15 @@ function StemPlayer({ stems, songName }: StemPlayerProps): React.JSX.Element {
     setRecordingFormat,
     countInBars,
     setCountInBars,
-    mediaStreamRef,
     handleStartRecording,
     handleStopRecording,
     handleDiscardRecording,
     handleSaveRecording
   } = useRecording({
     audioCtxRef,
-    audioEls,
+    seek,
     stemWaves,
     waveUrlsRef,
-    playbackRateRef,
     bpm,
     positionRef,
     audioStartRef,
@@ -219,70 +251,6 @@ function StemPlayer({ stems, songName }: StemPlayerProps): React.JSX.Element {
     setRecordedStems,
     setProgress
   })
-
-  // Playback engine (audio elements, volume, play/pause, timeupdate, cleanup)
-  const engine = usePlaybackEngine({
-    // Shared refs
-    audioEls,
-    audioCtxRef,
-    positionRef,
-    activeRef,
-    stemsRef,
-    lastSeekRef,
-    masterPlayingRef,
-    playbackRateRef,
-    durationRef,
-    onAudioTimeRef,
-    // State + setters
-    setProgress,
-    masterPlaying,
-    setMasterPlaying,
-    masterVolume,
-    setMasterVolume,
-    active,
-    setActive,
-    solo,
-    setSolo,
-    urls,
-    setUrls,
-    stemVolumes,
-    setStemVolumes,
-    setStemPannings,
-    // Other state
-    allStems,
-    bpmRef,
-    originalBpmRef,
-    loopEnabled,
-    loopStart,
-    loopEnd,
-    lastScheduledBeatRef,
-    setRecordedStems,
-    masterWaveDuration,
-    duration,
-    // Other hook outputs
-    ensureWaveSurfer,
-    ensureAudioContext,
-    setupAllPanning,
-    setupPanningForKey,
-    panNodesRef,
-    stemWaves,
-    waveUrlsRef,
-    disconnectPanner,
-    disconnectAllPanners,
-    syncStemCursors,
-    mediaStreamRef
-  })
-
-  const {
-    toggleStem,
-    toggleMasterPlay,
-    handleRestart,
-    toggleSolo,
-    handleDeleteRecording,
-    handleMasterVolume,
-    handleStemVolume,
-    handleStemPanning
-  } = engine
 
   const handleOpenTab = useCallback(
     (stemKey: string): void => {
@@ -295,30 +263,28 @@ function StemPlayer({ stems, songName }: StemPlayerProps): React.JSX.Element {
     [songName]
   )
 
-  // BPM callbacks
   const handleBpmDecrement = useCallback((): void => {
     setBpm((prev) => {
       const next = Math.max(BPM_MIN, prev - 1)
       lastScheduledBeatRef.current = -1
       return next
     })
-  }, [setBpm, lastScheduledBeatRef])
+  }, [setBpm])
   const handleBpmIncrement = useCallback((): void => {
     setBpm((prev) => {
       const next = Math.min(BPM_MAX, prev + 1)
       lastScheduledBeatRef.current = -1
       return next
     })
-  }, [setBpm, lastScheduledBeatRef])
+  }, [setBpm])
   const handleBpmChange = useCallback(
     (v: number): void => {
       setBpm(v)
       lastScheduledBeatRef.current = -1
     },
-    [setBpm, lastScheduledBeatRef]
+    [setBpm]
   )
 
-  // Search for "setBpm" calls to also handle lastScheduledBeatRef
   const handleMetronomeToggle = useCallback((): void => {
     setMetronomeOn((prev) => !prev)
   }, [setMetronomeOn])
@@ -358,7 +324,6 @@ function StemPlayer({ stems, songName }: StemPlayerProps): React.JSX.Element {
             </div>
           </div>
 
-          {/* Master Timeline */}
           <TimelinePanel
             markers={markers}
             loopStart={loopStart}
@@ -402,33 +367,32 @@ function StemPlayer({ stems, songName }: StemPlayerProps): React.JSX.Element {
           />
         </div>
 
-          <MasterPanel
-            masterPlaying={masterPlaying}
-            masterVolume={masterVolume}
-            progress={progress}
-            duration={duration}
-            bpm={bpm}
-            metronomeOn={metronomeOn}
-            metroVolume={metroVolume}
-            monitorVolume={monitorVolume}
-            recordingFormat={recordingFormat}
-            countInBars={countInBars}
-            onToggleMasterPlay={toggleMasterPlay}
-            onRestart={handleRestart}
-            onMasterVolumeChange={handleMasterVolume}
-            onBpmDecrement={handleBpmDecrement}
-            onBpmChange={handleBpmChange}
-            onBpmIncrement={handleBpmIncrement}
-            onMetronomeToggle={handleMetronomeToggle}
-            onMetroVolumeChange={handleMetroVolumeChange}
-            onMonitorVolumeChange={handleMonitorVolumeChange}
-            onRecordingFormatChange={handleRecordingFormatChange}
-            onCountInBarsChange={handleCountInBarsChange}
-            onShowExportModal={() => setShowExportModal(true)}
-          />
+        <MasterPanel
+          masterPlaying={masterPlaying}
+          masterVolume={masterVolume}
+          progress={progress}
+          duration={duration}
+          bpm={bpm}
+          metronomeOn={metronomeOn}
+          metroVolume={metroVolume}
+          monitorVolume={monitorVolume}
+          recordingFormat={recordingFormat}
+          countInBars={countInBars}
+          onToggleMasterPlay={toggleMasterPlay}
+          onRestart={handleRestart}
+          onMasterVolumeChange={handleMasterVolume}
+          onBpmDecrement={handleBpmDecrement}
+          onBpmChange={handleBpmChange}
+          onBpmIncrement={handleBpmIncrement}
+          onMetronomeToggle={handleMetronomeToggle}
+          onMetroVolumeChange={handleMetroVolumeChange}
+          onMonitorVolumeChange={handleMonitorVolumeChange}
+          onRecordingFormatChange={handleRecordingFormatChange}
+          onCountInBarsChange={handleCountInBarsChange}
+          onShowExportModal={() => setShowExportModal(true)}
+        />
       </div>
 
-      {/* Countdown overlay */}
       {recording === 'countdown' && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70">
           <span className="text-8xl font-bold text-white animate-pulse drop-shadow-2xl">
@@ -437,7 +401,6 @@ function StemPlayer({ stems, songName }: StemPlayerProps): React.JSX.Element {
         </div>
       )}
 
-      {/* Confirmation modal */}
       {recording === 'confirming' && (
         <RecordingConfirmationModal
           elapsed={recordingElapsed}
@@ -448,7 +411,6 @@ function StemPlayer({ stems, songName }: StemPlayerProps): React.JSX.Element {
         />
       )}
 
-      {/* Export Mix modal */}
       <ExportModal
         show={showExportModal}
         stemItems={stemItems}
@@ -467,26 +429,6 @@ function StemPlayer({ stems, songName }: StemPlayerProps): React.JSX.Element {
         }}
       />
 
-      {/* Audio elements (always mounted, not virtualized) */}
-      <div className="hidden" aria-hidden="true">
-        {stemItems.map(({ key, isRecording }) => (
-          <audio
-            key={key}
-            ref={(el) => {
-              if (el) {
-                audioEls.current[key] = el
-                el.preload = 'none'
-                el.crossOrigin = 'anonymous'
-                if (!isRecording) {
-                  el.ontimeupdate = () => onAudioTimeRef.current(el.currentTime)
-                }
-              }
-            }}
-          />
-        ))}
-      </div>
-
-      {/* Marker label input */}
       {showMarkerInput && (
         <MarkerLabelInput
           time={pendingMarkerTime}

@@ -3,9 +3,6 @@ import { useState, useRef, useEffect, useCallback, useLayoutEffect } from 'react
 const LOOKAHEAD = 0.3
 
 export function useMetronome(
-  audioCtxRef: React.MutableRefObject<AudioContext | null>,
-  audioEls: React.MutableRefObject<Record<string, HTMLAudioElement>>,
-  playbackRateRef: React.MutableRefObject<number>,
   masterPlaying: boolean,
   masterPlayingRef: React.MutableRefObject<boolean>,
   positionRef: React.MutableRefObject<number>,
@@ -29,6 +26,7 @@ export function useMetronome(
   const bpmRef = useRef(bpm)
   const metroVolumeRef = useRef(metroVolume)
   const lastScheduledBeatRef = useRef(-1)
+  const audioCtxRef = useRef<AudioContext | null>(null)
 
   useLayoutEffect(() => {
     metronomeOnRef.current = metronomeOn
@@ -46,26 +44,23 @@ export function useMetronome(
     }
     if (audioCtxRef.current.state === 'suspended') audioCtxRef.current.resume()
     return audioCtxRef.current
-  }, [audioCtxRef])
+  }, [])
 
-  const playClick = useCallback(
-    (accent: boolean, scheduledTime: number): void => {
-      const ctx = audioCtxRef.current
-      if (!ctx) return
-      const vol = metroVolumeRef.current
-      const osc = ctx.createOscillator()
-      const gain = ctx.createGain()
-      osc.type = 'triangle'
-      osc.frequency.value = accent ? 1600 : 900
-      gain.gain.setValueAtTime(vol * (accent ? 0.5 : 0.35), scheduledTime)
-      gain.gain.exponentialRampToValueAtTime(0.001, scheduledTime + 0.06)
-      osc.connect(gain)
-      gain.connect(ctx.destination)
-      osc.start(scheduledTime)
-      osc.stop(scheduledTime + 0.06)
-    },
-    [audioCtxRef]
-  )
+  const playClick = useCallback((accent: boolean, scheduledTime: number): void => {
+    const ctx = audioCtxRef.current
+    if (!ctx) return
+    const vol = metroVolumeRef.current
+    const osc = ctx.createOscillator()
+    const gain = ctx.createGain()
+    osc.type = 'triangle'
+    osc.frequency.value = accent ? 1600 : 900
+    gain.gain.setValueAtTime(vol * (accent ? 0.5 : 0.35), scheduledTime)
+    gain.gain.exponentialRampToValueAtTime(0.001, scheduledTime + 0.06)
+    osc.connect(gain)
+    gain.connect(ctx.destination)
+    osc.start(scheduledTime)
+    osc.stop(scheduledTime + 0.06)
+  }, [])
 
   const schedulerTick = useCallback((): void => {
     if (!metronomeOnRef.current || !masterPlayingRef.current) return
@@ -76,33 +71,19 @@ export function useMetronome(
       return
     }
 
-    const els = Object.values(audioEls.current)
-    const t = els.length > 0 ? els[0].currentTime : positionRef.current
+    const t = positionRef.current
     const currentBpm = bpmRef.current
     const offset = firstBeatOffsetRef.current
+    const tAdj = Math.max(0, t - offset)
+    let beat = Math.max(Math.floor((tAdj * currentBpm) / 60) + 1, lastScheduledBeatRef.current + 1)
 
-    const beatTime = (beat: number): number => (beat - 1) * (60 / currentBpm) + offset
-    let beat = Math.max(
-      Math.floor(((t - offset) * currentBpm) / 60) + 1,
-      lastScheduledBeatRef.current + 1
-    )
-
-    while (beatTime(beat) - t < LOOKAHEAD) {
-      const delaySong = beatTime(beat) - t
-      const delayReal = delaySong / playbackRateRef.current
-      playClick(beat % 4 === 1, ctx.currentTime + Math.max(0, delayReal))
+    while ((beat * 60) / currentBpm - tAdj < LOOKAHEAD) {
+      const delaySong = (beat * 60) / currentBpm - tAdj
+      playClick(beat % 4 === 1, ctx.currentTime + Math.max(0, delaySong))
       lastScheduledBeatRef.current = beat
       beat++
     }
-  }, [
-    audioCtxRef,
-    audioEls,
-    playbackRateRef,
-    masterPlayingRef,
-    positionRef,
-    playClick,
-    firstBeatOffsetRef
-  ])
+  }, [masterPlayingRef, positionRef, firstBeatOffsetRef, playClick])
 
   useEffect(() => {
     if (metronomeOn && masterPlaying) {
