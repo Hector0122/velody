@@ -17,8 +17,8 @@ import {
   formatTime,
   BPM_MIN,
   BPM_MAX,
-  CURSOR_THROTTLE_MS,
-  PROGRESS_THROTTLE_MS
+  updateTimeDisplays,
+  updateCursors
 } from '../utils'
 
 interface StemPlayerProps {
@@ -47,7 +47,7 @@ const RECORDING_COLORS = [
 ]
 
 function StemPlayer({ stems, songName }: StemPlayerProps): React.JSX.Element {
-  const [progress, setProgress] = useState(0)
+  const progressRef = useRef(0)
   const [masterVolume, setMasterVolume] = useState(1)
   const [masterPlaying, setMasterPlaying] = useState(false)
   const [active, setActive] = useState<Record<string, boolean>>({})
@@ -61,8 +61,6 @@ function StemPlayer({ stems, songName }: StemPlayerProps): React.JSX.Element {
 
   const positionRef = useRef(0)
   const onAudioTimeRef = useRef<(time: number) => void>(() => {})
-  const lastSeekRef = useRef(0)
-  const lastCursorSyncRef = useRef(0)
   const lastScheduledBeatRef = useRef(-1)
   const seekRef = useRef<(time: number) => void>(() => {})
 
@@ -72,7 +70,10 @@ function StemPlayer({ stems, songName }: StemPlayerProps): React.JSX.Element {
   const audioStartRef = useRef<number | null>(null)
   const mediaStreamRef = useRef<MediaStream | null>(null)
 
-  useSongAnalysis(urls, stems, () => {}, firstBeatOffsetRef)
+  const { bpm, setBpm, metronomeOn, setMetronomeOn, metroVolume, setMetroVolume, playClick } =
+    useMetronome(masterPlaying, masterPlayingRef, positionRef, firstBeatOffsetRef)
+
+  useSongAnalysis(urls, stems, setBpm, firstBeatOffsetRef)
 
   const {
     markers,
@@ -90,9 +91,6 @@ function StemPlayer({ stems, songName }: StemPlayerProps): React.JSX.Element {
     handleClearMarkers,
     handleRemoveMarker
   } = useMarkers()
-
-  const { bpm, setBpm, metronomeOn, setMetronomeOn, metroVolume, setMetroVolume, playClick } =
-    useMetronome(masterPlaying, masterPlayingRef, positionRef, firstBeatOffsetRef)
 
   const {
     showExportModal,
@@ -133,17 +131,15 @@ function StemPlayer({ stems, songName }: StemPlayerProps): React.JSX.Element {
     masterWaveDuration,
     duration,
     ensureWaveSurfer,
-    syncStemCursors
+    seekMasterFraction
   } = useWaveSurfers({
     stemItems,
     urls,
     seekRef,
     durationRef,
     positionRef,
-    lastSeekRef,
     lastScheduledBeatRef,
-    progress,
-    setProgress,
+    progressRef,
     onMasterDblClick: (time) => {
       setPendingMarkerTime(time)
       setShowMarkerInput(true)
@@ -181,7 +177,7 @@ function StemPlayer({ stems, songName }: StemPlayerProps): React.JSX.Element {
     durationRef,
     onAudioTimeRef,
     lastScheduledBeatRef,
-    setProgress,
+    progressRef,
     setMasterPlaying,
     setActive,
     setSolo,
@@ -201,17 +197,13 @@ function StemPlayer({ stems, songName }: StemPlayerProps): React.JSX.Element {
 
   const onAudioTime = useCallback(
     (time: number): void => {
-      const now = Date.now()
-      if (now - lastCursorSyncRef.current >= CURSOR_THROTTLE_MS) {
-        lastCursorSyncRef.current = now
-        const d = durationRef.current || duration || 1
-        syncStemCursors(time, d)
-      }
-      if (now - lastSeekRef.current < PROGRESS_THROTTLE_MS) return
-      lastSeekRef.current = now
-      setProgress(time)
+      progressRef.current = time
+      const d = durationRef.current || duration || 1
+      seekMasterFraction(time / d)
+      updateTimeDisplays(time)
+      updateCursors(time, d)
     },
-    [duration, syncStemCursors, durationRef, lastSeekRef, setProgress]
+    [duration, seekMasterFraction, durationRef]
   )
 
   const onAudioTimeRefCurrent = useRef(onAudioTime)
@@ -249,7 +241,7 @@ function StemPlayer({ stems, songName }: StemPlayerProps): React.JSX.Element {
     stemMeta: STEM_META,
     playClick,
     setRecordedStems,
-    setProgress
+    progressRef
   })
 
   const handleOpenTab = useCallback(
@@ -331,7 +323,6 @@ function StemPlayer({ stems, songName }: StemPlayerProps): React.JSX.Element {
             loopEnabled={loopEnabled}
             masterWaveDuration={masterWaveDuration}
             duration={duration}
-            progress={progress}
             masterWaveContainerRef={masterWaveContainer}
             onSetLoopStart={handleSetLoopStart}
             onSetLoopEnd={handleSetLoopEnd}
@@ -345,7 +336,6 @@ function StemPlayer({ stems, songName }: StemPlayerProps): React.JSX.Element {
             masterPlaying={masterPlaying}
             active={active}
             solo={solo}
-            progress={progress}
             duration={duration}
             exporting={exporting}
             recording={recording}
@@ -370,7 +360,6 @@ function StemPlayer({ stems, songName }: StemPlayerProps): React.JSX.Element {
         <MasterPanel
           masterPlaying={masterPlaying}
           masterVolume={masterVolume}
-          progress={progress}
           duration={duration}
           bpm={bpm}
           metronomeOn={metronomeOn}

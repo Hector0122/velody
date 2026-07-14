@@ -135,6 +135,7 @@ export class JobManager {
       const scriptDir = getPythonWorkerDir()
       const pythonScript = join(scriptDir, 'separate.py')
       const outputDir = getOutputStemsDir()
+      let settled = false
 
       const proc = spawn(
         pythonPath,
@@ -145,6 +146,17 @@ export class JobManager {
       )
 
       job.process = proc
+
+      const DEMUCS_TIMEOUT_MS = 600_000
+      const timeout = setTimeout(() => {
+        if (!settled) {
+          settled = true
+          proc.kill('SIGTERM')
+          reject(new Error('Separation timed out (10 min limit)'))
+        }
+      }, DEMUCS_TIMEOUT_MS)
+
+      let lastEmittedBucket = -1
 
       proc.stdout.on('data', (data: Buffer) => {
         const lines = data.toString().trim().split('\n')
@@ -160,11 +172,19 @@ export class JobManager {
             if (parsed.type === 'progress' && typeof parsed.percent === 'number') {
               job.progress = parsed.percent
               this.emit('separation:progress', { jobId: job.id, percent: parsed.percent })
-              this.emit('separation:jobs-changed', this.getQueue())
+              const bucket = Math.floor(parsed.percent / 10)
+              if (bucket !== lastEmittedBucket) {
+                lastEmittedBucket = bucket
+                this.emit('separation:jobs-changed', this.getQueue())
+              }
             } else if (parsed.type === 'complete' && Array.isArray(parsed.stems)) {
               job.stems = parsed.stems
             } else if (parsed.type === 'error') {
-              reject(new Error(parsed.message))
+              if (!settled) {
+                settled = true
+                clearTimeout(timeout)
+                reject(new Error(parsed.message))
+              }
             }
           } catch {
             // non-JSON output, ignore (Demucs logging)
@@ -178,6 +198,9 @@ export class JobManager {
 
       proc.on('close', (code) => {
         job.process = null
+        if (settled) return
+        settled = true
+        clearTimeout(timeout)
         if (job.status === 'cancelled') return
         if (code === 0 && job.stems) {
           resolve()
@@ -188,6 +211,9 @@ export class JobManager {
 
       proc.on('error', (err) => {
         job.process = null
+        if (settled) return
+        settled = true
+        clearTimeout(timeout)
         reject(err)
       })
     })

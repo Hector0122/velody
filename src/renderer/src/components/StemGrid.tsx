@@ -19,7 +19,6 @@ interface StemGridCellProps {
   masterPlaying: boolean
   active: Record<string, boolean>
   solo: Record<string, boolean>
-  progress: number
   duration: number
   exporting: boolean
   recording: string
@@ -57,7 +56,6 @@ function StemGridCell({
     masterPlaying,
     active,
     solo,
-    progress,
     duration,
     exporting,
     recording,
@@ -96,7 +94,6 @@ function StemGridCell({
         isInactive={isInactive}
         isActive={!!active[key]}
         isSolo={!!solo[key]}
-        progress={progress}
         duration={duration}
         exporting={exporting}
         isRecordingThis={isRecordingThis}
@@ -119,7 +116,14 @@ function StemGridCell({
           if (recPath) onDeleteRecording(recPath)
         }}
       >
-        <div data-stem-container={key} className="h-8 rounded overflow-hidden cursor-pointer" />
+        <div className="relative h-8">
+          <div data-stem-container={key} className="h-8 rounded overflow-hidden cursor-pointer" />
+          <div
+            data-stem-cursor
+            className="absolute top-0 bottom-0 w-[2px] bg-white/70 pointer-events-none z-10"
+            style={{ left: '0%', willChange: 'left' }}
+          />
+        </div>
       </StemCard>
     </div>
   )

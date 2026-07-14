@@ -12,7 +12,6 @@ interface StemCardProps {
   isInactive: boolean
   isActive: boolean
   isSolo: boolean
-  progress: number
   duration: number
   exporting: boolean
   isRecordingThis: boolean
@@ -41,7 +40,6 @@ function StemCard({
   isInactive,
   isActive,
   isSolo,
-  progress,
   duration,
   exporting,
   isRecordingThis,
@@ -142,7 +140,7 @@ function StemCard({
       </div>
 
       <div className="flex items-center justify-between text-[10px] text-neutral-500">
-        <span>{formatTime(progress)}</span>
+        <span data-live-time>0:00</span>
         <span>{duration > 0 ? formatTime(duration) : '0:00'}</span>
       </div>
 

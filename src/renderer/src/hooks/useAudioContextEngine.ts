@@ -26,7 +26,7 @@ interface UseAudioContextEngineParams {
   onAudioTimeRef: React.MutableRefObject<(time: number) => void>
   lastScheduledBeatRef: React.MutableRefObject<number>
 
-  setProgress: (v: number | ((prev: number) => number)) => void
+  progressRef: React.MutableRefObject<number>
   setMasterPlaying: (v: boolean | ((prev: boolean) => boolean)) => void
   setActive: (
     v: Record<string, boolean> | ((prev: Record<string, boolean>) => Record<string, boolean>)
@@ -81,7 +81,7 @@ export function useAudioContextEngine(params: UseAudioContextEngineParams): {
     durationRef,
     onAudioTimeRef,
     lastScheduledBeatRef,
-    setProgress,
+    progressRef,
     setMasterPlaying,
     setActive,
     setSolo,
@@ -324,6 +324,8 @@ export function useAudioContextEngine(params: UseAudioContextEngineParams): {
         ensureCtx()
         ensureWaveSurfer(key)
         isPlayingRef.current = true
+        activeRef.current = { ...activeRef.current, [key]: true }
+        masterPlayingRef.current = true
         startSources(positionRef.current)
         rafRef.current = requestAnimationFrame(tick)
         setActive({ [key]: true })
@@ -357,10 +359,12 @@ export function useAudioContextEngine(params: UseAudioContextEngineParams): {
         all[key] = true
         ensureWaveSurfer(key)
       }
-      setActive(all)
       isPlayingRef.current = true
+      activeRef.current = all
+      masterPlayingRef.current = true
       startSources(positionRef.current)
       rafRef.current = requestAnimationFrame(tick)
+      setActive(all)
       setMasterPlaying(true)
     }
   }, [
@@ -384,11 +388,20 @@ export function useAudioContextEngine(params: UseAudioContextEngineParams): {
     } else {
       positionRef.current = 0
     }
-    setProgress(0)
+    progressRef.current = 0
+    onAudioTimeRef.current(0)
     for (const sw of Object.values(stemWaves.current)) {
       sw.seekTo(0)
     }
-  }, [stopSources, startSources, positionRef, setProgress, stemWaves, lastScheduledBeatRef])
+  }, [
+    stopSources,
+    startSources,
+    positionRef,
+    progressRef,
+    onAudioTimeRef,
+    lastScheduledBeatRef,
+    stemWaves
+  ])
 
   const toggleSolo = useCallback(
     (key: string): void => {

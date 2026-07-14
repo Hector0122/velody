@@ -8,7 +8,6 @@ import {
   BPM_MAX,
   PITCH_SHIFT_MIN,
   PITCH_SHIFT_MAX,
-  PROGRESS_THROTTLE_MS,
   DEFAULT_SAMPLE_RATE,
   AUDIO_START_THRESHOLD,
   AUDIO_START_MAX_SCAN_SECS,
@@ -108,11 +107,6 @@ describe('constants', () => {
     expect(PITCH_SHIFT_MIN).toBe(-12)
     expect(PITCH_SHIFT_MAX).toBe(12)
     expect(PITCH_SHIFT_MIN).toBeLessThan(PITCH_SHIFT_MAX)
-  })
-
-  it('has reasonable throttle', () => {
-    expect(PROGRESS_THROTTLE_MS).toBeGreaterThan(0)
-    expect(PROGRESS_THROTTLE_MS).toBeLessThanOrEqual(100)
   })
 
   it('has correct sample rate', () => {

@@ -198,6 +198,36 @@ Allow exporting:
 
 ---
 
+# BPM Detection
+
+## How It Works
+
+`python-worker/detect_bpm.py` detecta el BPM usando TempoCNN + librosa:
+
+1. TempoCNN (TensorFlow): estima el tempo base a partir de features MFCC
+2. librosa `beat.beat_track()`: refina el BPM y calcula el `firstBeatOffset` (tiempo del primer golpe)
+3. Fallback: si librosa no está instalado, usa solo el estimado de TempoCNN
+
+## IPC Concurrency
+
+El handler `song:detectBpm` usa un patrón **singleflight**: solo un proceso de Python puede correr a la vez. Si se llama mientras ya hay una detección en progreso, reutiliza la misma promesa (mismo resultado). Esto evita spawne múltiples procesos de TensorFlow que causan OOM.
+
+## Caché BPM
+
+- Resultado guardado en `.velody` (sidecar JSON) con `CACHE_VERSION`
+- Solo se guarda al caché cuando la detección fue **exitosa** (result no null)
+- Si la detección falla, NO se guarda el fallback (120) — la próxima vez reintenta
+- Si `CACHE_VERSION` cambia, el caché anterior se invalida forzando re-detección
+- `useSongAnalysis` usa un `detectedRef` para no re-ejecutar si ya detectó (el singleflight del backend maneja la deduplicación de procesos)
+
+## Known Issues
+
+- TempoCNN depende de TensorFlow que es pesado (~1-2GB RAM por proceso)
+- En Windows con poca RAM, múltiples procesos simultáneos causaban crash (exit code `0xC0000409`)
+- Solucionado con singleflight en el backend + caché que no envenena con fallbacks
+
+---
+
 # Key Detection
 
 ## How It Works

@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react'
 
-const CACHE_VERSION = 15
+const CACHE_VERSION = 16
 export { CACHE_VERSION }
 
 export interface SongAnalysis {
@@ -15,10 +15,14 @@ export default function useSongAnalysis(
   firstBeatOffsetRef: React.MutableRefObject<number>
 ): SongAnalysis {
   const originalBpmRef = useRef(120)
+  const detectedRef = useRef(false)
 
   useEffect(() => {
+    if (detectedRef.current) return
     const allUrls = Object.values(urls)
     if (allUrls.length === 0 || stems.length === 0) return
+
+    detectedRef.current = true
     ;(async (): Promise<void> => {
       if (!window.api) return
 
@@ -37,13 +41,14 @@ export default function useSongAnalysis(
       try {
         const firstStem = stems[0]
         const result = await window.api.detectBpm(firstStem)
-        const finalBpm = result?.bpm ?? 120
-        firstBeatOffsetRef.current = result?.firstBeatOffset ?? 0
-        originalBpmRef.current = finalBpm
-        setBpm(finalBpm)
-        window.api.saveMeta(songDir, { bpm: finalBpm, _version: CACHE_VERSION })
+        if (result) {
+          originalBpmRef.current = result.bpm
+          firstBeatOffsetRef.current = result.firstBeatOffset
+          setBpm(result.bpm)
+          window.api.saveMeta(songDir, { bpm: result.bpm, _version: CACHE_VERSION })
+        }
       } catch {
-        /* detection failed */
+        /* detection failed — do NOT cache fallback */
       }
     })()
   }, [urls, stems, setBpm, firstBeatOffsetRef])

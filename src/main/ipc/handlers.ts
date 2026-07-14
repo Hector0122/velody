@@ -1,4 +1,4 @@
-import { ipcMain, dialog, shell, app } from 'electron'
+import { ipcMain, dialog, shell, app, BrowserWindow } from 'electron'
 import { spawn, execFile } from 'child_process'
 import { join, dirname } from 'path'
 import { tmpdir } from 'os'
@@ -8,6 +8,8 @@ import { constants } from 'fs'
 import crypto from 'crypto'
 import { SetupManager } from '../setup'
 import { JobManager } from '../jobs/JobManager'
+
+let bpmDetectionRunning: Promise<{ bpm: number; firstBeatOffset: number } | null> | null = null
 
 const STEM_NAMES = ['vocals', 'drums', 'bass', 'other', 'piano', 'guitar']
 
@@ -129,33 +131,41 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     'song:detectBpm',
     async (_event, stemPath: string): Promise<{ bpm: number; firstBeatOffset: number } | null> => {
-      const pythonPath = setupManager?.getPythonPath() ?? 'python3'
-      const scriptPath = join(getPythonWorkerDir(), 'detect_bpm.py')
-      const ffmpegPath = setupManager?.getFfmpegPath() ?? 'ffmpeg'
-      try {
-        const out = await new Promise<string>((resolve, reject) => {
-          execFile(
-            pythonPath,
-            [scriptPath, stemPath, '--ffmpeg-path', ffmpegPath],
-            { timeout: 600_000, maxBuffer: 65536 },
-            (err, stdout) => (err ? reject(err) : resolve(stdout))
-          )
-        })
-        const lines = out.trim().split('\n')
-        const last = lines[lines.length - 1]
-        const parsed = last ? JSON.parse(last.trim()) : null
-        if (
-          parsed &&
-          typeof parsed.bpm === 'number' &&
-          typeof parsed.firstBeatOffset === 'number'
-        ) {
-          return { bpm: parsed.bpm, firstBeatOffset: parsed.firstBeatOffset }
+      if (bpmDetectionRunning) return bpmDetectionRunning
+
+      bpmDetectionRunning = (async (): Promise<{ bpm: number; firstBeatOffset: number } | null> => {
+        const pythonPath = setupManager?.getPythonPath() ?? 'python3'
+        const scriptPath = join(getPythonWorkerDir(), 'detect_bpm.py')
+        const ffmpegPath = setupManager?.getFfmpegPath() ?? 'ffmpeg'
+        try {
+          const out = await new Promise<string>((resolve, reject) => {
+            execFile(
+              pythonPath,
+              [scriptPath, stemPath, '--ffmpeg-path', ffmpegPath],
+              { timeout: 600_000, maxBuffer: 65536 },
+              (err, stdout) => (err ? reject(err) : resolve(stdout))
+            )
+          })
+          const lines = out.trim().split('\n')
+          const last = lines[lines.length - 1]
+          const parsed = last ? JSON.parse(last.trim()) : null
+          if (
+            parsed &&
+            typeof parsed.bpm === 'number' &&
+            typeof parsed.firstBeatOffset === 'number'
+          ) {
+            return { bpm: parsed.bpm, firstBeatOffset: parsed.firstBeatOffset }
+          }
+          return null
+        } catch (err) {
+          console.error('[detectBpm]', err)
+          return null
+        } finally {
+          bpmDetectionRunning = null
         }
-        return null
-      } catch (err) {
-        console.error('[detectBpm]', err)
-        return null
-      }
+      })()
+
+      return bpmDetectionRunning
     }
   )
 
@@ -504,5 +514,116 @@ export function registerIpcHandlers(): void {
     }
 
     return newPaths
+  })
+
+  ipcMain.handle('url:checkYtDlp', async () => {
+    const pythonPath = setupManager?.getPythonPath() ?? 'python3'
+    try {
+      await new Promise<void>((resolve, reject) => {
+        execFile(pythonPath, ['-m', 'pip', 'show', 'yt-dlp'], { timeout: 5000 }, (err) =>
+          err ? reject(err) : resolve()
+        )
+      })
+      return { available: true }
+    } catch {
+      return { available: false }
+    }
+  })
+
+  ipcMain.handle('url:import', async (_event, url: string) => {
+    const pythonPath = setupManager?.getPythonPath() ?? 'python3'
+    const scriptPath = join(getPythonWorkerDir(), 'download.py')
+    const ffmpegPath = setupManager?.getFfmpegPath() ?? 'ffmpeg'
+
+    const downloadResult = await new Promise<{ path: string; title: string }>((resolve, reject) => {
+      const proc = spawn(pythonPath, [scriptPath, url, '--ffmpeg-path', ffmpegPath], {
+        cwd: getPythonWorkerDir()
+      })
+
+      const jobId = `dl-${Date.now()}`
+      let title = 'Untitled'
+      let stderr = ''
+      let settled = false
+
+      const broadcastFailed = (msg: string): void => {
+        for (const win of BrowserWindow.getAllWindows()) {
+          if (!win.isDestroyed()) {
+            win.webContents.send('url:download-failed', { jobId, error: msg })
+          }
+        }
+      }
+
+      const timeout = setTimeout(() => {
+        if (!settled) {
+          settled = true
+          proc.kill('SIGTERM')
+          broadcastFailed('Download timed out')
+          reject(new Error('Download timed out'))
+        }
+      }, 600_000)
+
+      proc.stdout.on('data', (data: Buffer) => {
+        const lines = data.toString().trim().split('\n')
+        for (const line of lines) {
+          if (!line) continue
+          try {
+            const parsed = JSON.parse(line)
+            if (parsed.type === 'metadata') {
+              title = parsed.title || title
+            } else if (parsed.type === 'progress') {
+              for (const win of BrowserWindow.getAllWindows()) {
+                if (!win.isDestroyed()) {
+                  win.webContents.send('url:download-progress', {
+                    jobId,
+                    percent: parsed.percent,
+                    title
+                  })
+                }
+              }
+            } else if (parsed.type === 'complete' && !settled) {
+              settled = true
+              clearTimeout(timeout)
+              resolve({ path: parsed.path, title: parsed.title || title })
+            } else if (parsed.type === 'error' && !settled) {
+              settled = true
+              clearTimeout(timeout)
+              broadcastFailed(parsed.message)
+              reject(new Error(parsed.message))
+            }
+          } catch {
+            // non-JSON output, ignore
+          }
+        }
+      })
+
+      proc.stderr.on('data', (data: Buffer) => {
+        stderr += data.toString()
+      })
+
+      proc.on('close', (code) => {
+        if (!settled) {
+          settled = true
+          clearTimeout(timeout)
+          if (code !== 0) {
+            const msg = `Download process failed (code ${code}): ${stderr.slice(0, 300)}`
+            broadcastFailed(msg)
+            reject(new Error(msg))
+          }
+        }
+      })
+
+      proc.on('error', (err) => {
+        if (!settled) {
+          settled = true
+          clearTimeout(timeout)
+          broadcastFailed(err.message)
+          reject(err)
+        }
+      })
+    })
+
+    if (!jobManager) return { error: 'Job manager not ready' }
+    const job = jobManager.enqueue(downloadResult.path)
+    return { jobId: job.id, songName: downloadResult.title || job.songName }
   })
 }

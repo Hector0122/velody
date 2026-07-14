@@ -4,7 +4,6 @@ import { formatTime, BPM_MIN, BPM_MAX } from '../utils'
 interface MasterPanelProps {
   masterPlaying: boolean
   masterVolume: number
-  progress: number
   duration: number
   bpm: number
   metronomeOn: boolean
@@ -29,7 +28,6 @@ interface MasterPanelProps {
 function MasterPanel({
   masterPlaying,
   masterVolume,
-  progress,
   duration,
   bpm,
   metronomeOn,
@@ -73,7 +71,7 @@ function MasterPanel({
         </button>
       </div>
       <span className="text-[10px] font-mono text-neutral-500 -mt-2">
-        {formatTime(progress)} / {formatTime(duration)}
+        <span data-live-time>0:00</span> / {formatTime(duration)}
       </span>
       <div className="flex flex-col items-center gap-2 w-full">
         <span className="text-xs text-neutral-500">Volume</span>

@@ -34,6 +34,17 @@ export interface SeparationCancelledEvent {
   jobId: string
 }
 
+export interface DownloadProgressEvent {
+  jobId: string
+  percent: number
+  title?: string
+}
+
+export interface DownloadFailedEvent {
+  jobId: string
+  error: string
+}
+
 export interface SeparationJob {
   id: string
   songPath: string
@@ -89,4 +100,8 @@ export interface VelodyAPI {
   detectBpm: (stemPath: string) => Promise<{ bpm: number; firstBeatOffset: number } | null>
   openExternal: (url: string) => Promise<void>
   deleteFile: (filePath: string) => Promise<{ success: boolean; error?: string }>
+  importFromUrl: (url: string) => Promise<{ jobId: string; songName: string }>
+  onDownloadProgress: (callback: (e: DownloadProgressEvent) => void) => () => void
+  onDownloadFailed: (callback: (e: DownloadFailedEvent) => void) => () => void
+  checkYtDlp: () => Promise<{ available: boolean }>
 }

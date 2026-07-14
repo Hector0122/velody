@@ -1,4 +1,5 @@
 import { useState, useRef, useCallback } from 'react'
+import { updateTimeDisplays } from '../utils'
 
 interface UseRecordingParams {
   audioCtxRef: React.MutableRefObject<AudioContext | null>
@@ -12,7 +13,7 @@ interface UseRecordingParams {
   stemMeta: Record<string, { color: string; label: string }>
   playClick: (accent: boolean, scheduledTime: number) => void
   setRecordedStems: React.Dispatch<React.SetStateAction<string[]>>
-  setProgress: React.Dispatch<React.SetStateAction<number>>
+  progressRef: React.MutableRefObject<number>
 }
 
 export function useRecording({
@@ -25,7 +26,7 @@ export function useRecording({
   stemMeta,
   playClick,
   setRecordedStems,
-  setProgress
+  progressRef
 }: UseRecordingParams): {
   recording: 'idle' | 'countdown' | 'recording' | 'confirming'
   recordingKey: string | null
@@ -127,7 +128,8 @@ export function useRecording({
             seekStart = Math.max(0, audioStart - countInDur)
             seek(seekStart)
             positionRef.current = seekStart
-            setProgress(seekStart)
+            progressRef.current = seekStart
+            updateTimeDisplays(seekStart)
           }
 
           const now = ctx.currentTime
@@ -169,17 +171,8 @@ export function useRecording({
         console.error('[useRecording] Permission denied or no mic:', err)
       }
     },
-    [
-      audioCtxRef,
-      seek,
-      bpm,
-      countInBars,
-      positionRef,
-      audioStartRef,
-      playClick,
-      setProgress,
-      beginCapture
-    ]
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [audioCtxRef, seek, bpm, countInBars, positionRef, audioStartRef, playClick, beginCapture]
   )
 
   const handleStopRecording = useCallback((): void => {

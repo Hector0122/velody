@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useLayoutEffect } from 'react'
 import AudioUploader from '../components/AudioUploader'
+import UrlImporter from '../components/UrlImporter'
 import StemPlayer from '../components/StemPlayer'
 
 interface RecentSong {
@@ -30,6 +31,7 @@ function Home(): React.JSX.Element {
   const [recentSongs, setRecentSongs] = useState<RecentSong[]>([])
   const [toasts, setToasts] = useState<Toast[]>([])
   const [error, setError] = useState<string | null>(null)
+  const [importMode, setImportMode] = useState<'local' | 'url'>('local')
   const jobQueueRef = useRef<SeparationJob[]>([])
 
   useLayoutEffect(() => {
@@ -39,7 +41,12 @@ function Home(): React.JSX.Element {
   const addToast = useCallback((message: string, type: 'error' | 'success' = 'error') => {
     const id = ++toastCounter
     setToasts((prev) => [...prev, { id, message, type }])
-    setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 4000)
+    const duration = type === 'error' ? 8000 : 4000
+    setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), duration)
+  }, [])
+
+  const dismissToast = useCallback((id: number) => {
+    setToasts((prev) => prev.filter((t) => t.id !== id))
   }, [])
 
   // Subscribe to backend events
@@ -77,12 +84,29 @@ function Home(): React.JSX.Element {
       setJobQueue(jobs)
     })
 
+    const unsubDlProgress = window.api.onDownloadProgress((e) => {
+      setJobQueue((prev) =>
+        prev.map((j) =>
+          j.id === e.jobId ? { ...j, progress: e.percent, songName: e.title ?? j.songName } : j
+        )
+      )
+    })
+
+    const unsubDlFailed = window.api.onDownloadFailed((e) => {
+      setJobQueue((prev) =>
+        prev.map((j) => (j.id === e.jobId ? { ...j, status: 'failed', error: e.error } : j))
+      )
+      addToast(`Download failed: ${e.error}`, 'error')
+    })
+
     return () => {
       unsubProgress()
       unsubComplete()
       unsubFailed()
       unsubCancelled()
       unsubChanged()
+      unsubDlProgress()
+      unsubDlFailed()
     }
   }, [addToast])
 
@@ -115,6 +139,7 @@ function Home(): React.JSX.Element {
 
   const handleProcessAll = async (): Promise<void> => {
     if (!window.api || pendingFiles.length === 0) return
+    setError(null)
 
     const files = [...pendingFiles]
     setPendingFiles([])
@@ -145,7 +170,15 @@ function Home(): React.JSX.Element {
   }
 
   const handleSelectRecent = (song: RecentSong): void => {
+    setError(null)
     setCurrentSong({ stems: song.stems, songName: song.name })
+  }
+
+  const handleUrlImport = (url: string, jobId: string, songName: string): void => {
+    setJobQueue((prev) => {
+      if (prev.some((j) => j.id === jobId)) return prev
+      return [...prev, { id: jobId, songPath: url, songName, status: 'queued', progress: 0 }]
+    })
   }
 
   const handleCancelJob = async (jobId: string): Promise<void> => {
@@ -174,7 +207,13 @@ function Home(): React.JSX.Element {
     if (currentSong?.songName === song.name) setCurrentSong(null)
   }
 
-  const queuedJobs = jobQueue.filter((j) => j.status === 'queued' || j.status === 'running')
+  const queuedJobs = jobQueue.filter(
+    (j) =>
+      j.status === 'queued' ||
+      j.status === 'running' ||
+      j.status === 'failed' ||
+      j.status === 'cancelled'
+  )
 
   return (
     <div className="min-h-screen bg-neutral-950 flex">
@@ -203,19 +242,35 @@ function Home(): React.JSX.Element {
               {queuedJobs.map((job) => (
                 <div
                   key={job.id}
-                  className="rounded-lg bg-neutral-900 border border-neutral-800 p-2 flex flex-col gap-1"
+                  className={`rounded-lg border p-2 flex flex-col gap-1 ${
+                    job.status === 'failed'
+                      ? 'bg-red-950/50 border-red-800/50'
+                      : job.status === 'cancelled'
+                        ? 'bg-neutral-900/50 border-neutral-800/50'
+                        : 'bg-neutral-900 border-neutral-800'
+                  }`}
                 >
                   <div className="flex items-center gap-1.5">
-                    <span className="text-[10px] text-neutral-300 truncate flex-1">
+                    <span
+                      className={`text-[10px] truncate flex-1 ${
+                        job.status === 'failed'
+                          ? 'text-red-400'
+                          : job.status === 'cancelled'
+                            ? 'text-neutral-600'
+                            : 'text-neutral-300'
+                      }`}
+                    >
                       {job.songName}
                     </span>
-                    <button
-                      onClick={() => handleCancelJob(job.id)}
-                      className="text-[9px] text-neutral-600 hover:text-red-400 transition-colors shrink-0"
-                      title="Cancel"
-                    >
-                      ✕
-                    </button>
+                    {job.status !== 'failed' && job.status !== 'cancelled' && (
+                      <button
+                        onClick={() => handleCancelJob(job.id)}
+                        className="text-[9px] text-neutral-600 hover:text-red-400 transition-colors shrink-0"
+                        title="Cancel"
+                      >
+                        ✕
+                      </button>
+                    )}
                   </div>
                   {job.status === 'running' && (
                     <div className="w-full bg-neutral-800 rounded-full h-1.5 overflow-hidden">
@@ -227,6 +282,14 @@ function Home(): React.JSX.Element {
                   )}
                   {job.status === 'queued' && (
                     <span className="text-[9px] text-neutral-600">Waiting...</span>
+                  )}
+                  {job.status === 'failed' && (
+                    <span className="text-[9px] text-red-400/80 truncate" title={job.error}>
+                      Failed: {job.error ?? 'Unknown error'}
+                    </span>
+                  )}
+                  {job.status === 'cancelled' && (
+                    <span className="text-[9px] text-neutral-600">Cancelled</span>
                   )}
                 </div>
               ))}
@@ -280,12 +343,40 @@ function Home(): React.JSX.Element {
           <div className="flex-1 flex items-center justify-center">
             <div className="text-center max-w-md">
               <p className="text-neutral-500 mb-4">Import a song to get started</p>
-              <AudioUploader
-                files={pendingFiles}
-                onFilesAdded={handleFilesAdded}
-                onRemoveFile={handleRemoveFile}
-                onProcessAll={handleProcessAll}
-              />
+
+              <div className="flex gap-1 mb-6 bg-neutral-900 rounded-xl p-1 border border-neutral-800">
+                <button
+                  onClick={() => setImportMode('local')}
+                  className={`flex-1 py-2 px-3 rounded-lg text-sm font-medium transition-colors ${
+                    importMode === 'local'
+                      ? 'bg-neutral-800 text-white'
+                      : 'text-neutral-500 hover:text-neutral-300'
+                  }`}
+                >
+                  Local Files
+                </button>
+                <button
+                  onClick={() => setImportMode('url')}
+                  className={`flex-1 py-2 px-3 rounded-lg text-sm font-medium transition-colors ${
+                    importMode === 'url'
+                      ? 'bg-neutral-800 text-white'
+                      : 'text-neutral-500 hover:text-neutral-300'
+                  }`}
+                >
+                  From URL
+                </button>
+              </div>
+
+              {importMode === 'local' ? (
+                <AudioUploader
+                  files={pendingFiles}
+                  onFilesAdded={handleFilesAdded}
+                  onRemoveFile={handleRemoveFile}
+                  onProcessAll={handleProcessAll}
+                />
+              ) : (
+                <UrlImporter onImportStarted={handleUrlImport} />
+              )}
             </div>
           </div>
         )}
@@ -297,13 +388,22 @@ function Home(): React.JSX.Element {
           {toasts.map((t) => (
             <div
               key={t.id}
-              className={`px-4 py-3 rounded-xl text-sm font-medium shadow-lg animate-[slideUp_0.3s_ease-out] ${
+              className={`px-4 py-3 pr-8 rounded-xl text-sm font-medium shadow-lg animate-[slideUp_0.3s_ease-out] relative ${
                 t.type === 'error'
                   ? 'bg-red-900/90 text-red-300 border border-red-700'
                   : 'bg-green-900/90 text-green-300 border border-green-700'
               }`}
             >
               {t.message}
+              {t.type === 'error' && (
+                <button
+                  onClick={() => dismissToast(t.id)}
+                  className="absolute top-1.5 right-1.5 w-5 h-5 rounded flex items-center justify-center text-red-400/60 hover:text-red-300 hover:bg-red-800/40 transition-colors text-xs"
+                  title="Dismiss"
+                >
+                  ✕
+                </button>
+              )}
             </div>
           ))}
         </div>

@@ -29,6 +29,17 @@ export interface SeparationJob {
   error?: string
 }
 
+export interface DownloadProgressEvent {
+  jobId: string
+  percent: number
+  title?: string
+}
+
+export interface DownloadFailedEvent {
+  jobId: string
+  error: string
+}
+
 const api = {
   openFileDialog: () => ipcRenderer.invoke('dialog:openFile'),
   startSeparation: (songPath: string) =>
@@ -117,7 +128,31 @@ const api = {
       firstBeatOffset: number
     } | null>,
   openExternal: (url: string) => ipcRenderer.invoke('shell:openExternal', url),
-  deleteFile: (filePath: string) => ipcRenderer.invoke('file:delete', filePath)
+  deleteFile: (filePath: string) => ipcRenderer.invoke('file:delete', filePath),
+  importFromUrl: (url: string) =>
+    ipcRenderer.invoke('url:import', url) as Promise<{
+      jobId: string
+      songName: string
+    }>,
+  onDownloadProgress: (callback: (e: DownloadProgressEvent) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, e: DownloadProgressEvent): void => {
+      callback(e)
+    }
+    ipcRenderer.on('url:download-progress', handler)
+    return (): void => {
+      ipcRenderer.removeListener('url:download-progress', handler)
+    }
+  },
+  onDownloadFailed: (callback: (e: DownloadFailedEvent) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, e: DownloadFailedEvent): void => {
+      callback(e)
+    }
+    ipcRenderer.on('url:download-failed', handler)
+    return (): void => {
+      ipcRenderer.removeListener('url:download-failed', handler)
+    }
+  },
+  checkYtDlp: () => ipcRenderer.invoke('url:checkYtDlp') as Promise<{ available: boolean }>
 }
 
 if (process.contextIsolated) {

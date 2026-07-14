@@ -1,6 +1,12 @@
 import { useState, useRef, useCallback, useEffect, useMemo } from 'react'
 import WaveSurfer from 'wavesurfer.js'
-import { STEM_WAVEFORM_HEIGHT, MASTER_WAVEFORM_HEIGHT, MASTER_MIN_PX_PER_SEC } from '../utils'
+import {
+  STEM_WAVEFORM_HEIGHT,
+  MASTER_WAVEFORM_HEIGHT,
+  MASTER_MIN_PX_PER_SEC,
+  updateTimeDisplays,
+  updateCursors
+} from '../utils'
 
 interface StemItem {
   key: string
@@ -13,10 +19,8 @@ interface UseWaveSurfersParams {
   seekRef: React.MutableRefObject<(time: number) => void>
   durationRef: React.MutableRefObject<number>
   positionRef: React.MutableRefObject<number>
-  lastSeekRef: React.MutableRefObject<number>
   lastScheduledBeatRef: React.MutableRefObject<number>
-  progress: number
-  setProgress: (v: number) => void
+  progressRef: React.MutableRefObject<number>
   onMasterDblClick?: (time: number) => void
 }
 
@@ -27,7 +31,7 @@ interface UseWaveSurfersReturn {
   masterWaveDuration: number
   duration: number
   ensureWaveSurfer: (key: string) => WaveSurfer | undefined
-  syncStemCursors: (time: number, dur: number) => void
+  seekMasterFraction: (fraction: number) => void
 }
 
 export function useWaveSurfers({
@@ -36,10 +40,8 @@ export function useWaveSurfers({
   seekRef,
   durationRef,
   positionRef,
-  lastSeekRef,
   lastScheduledBeatRef,
-  progress,
-  setProgress,
+  progressRef,
   onMasterDblClick
 }: UseWaveSurfersParams): UseWaveSurfersReturn {
   const stemWaves = useRef<Record<string, WaveSurfer>>({})
@@ -149,12 +151,13 @@ export function useWaveSurfers({
       const clickTime = relativeX * d
       lastScheduledBeatRef.current = -1
       positionRef.current = clickTime
-      lastSeekRef.current = Date.now()
       seekRef.current(clickTime)
       for (const sw of Object.values(stemWaves.current)) {
         sw.seekTo(clickTime / d)
       }
-      setProgress(clickTime)
+      progressRef.current = clickTime
+      updateTimeDisplays(clickTime)
+      updateCursors(clickTime, d)
     })
 
     ws.on('dblclick', (relativeX: number) => {
@@ -173,15 +176,9 @@ export function useWaveSurfers({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [masterUrl])
 
-  useEffect(() => {
-    if (!masterWaveReady.current) return
-    const d = masterWaveDuration || duration || 1
-    masterWaveRef.current?.seekTo(progress / d)
-  }, [progress, masterWaveDuration, duration])
-
-  const syncStemCursors = useCallback((time: number, dur: number): void => {
-    for (const sw of Object.values(stemWaves.current)) {
-      sw.seekTo(time / (dur || 1))
+  const seekMasterFraction = useCallback((fraction: number): void => {
+    if (masterWaveReady.current) {
+      masterWaveRef.current?.seekTo(fraction)
     }
   }, [])
 
@@ -192,6 +189,6 @@ export function useWaveSurfers({
     masterWaveDuration,
     duration,
     ensureWaveSurfer,
-    syncStemCursors
+    seekMasterFraction
   }
 }

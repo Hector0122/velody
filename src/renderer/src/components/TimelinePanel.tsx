@@ -14,7 +14,6 @@ interface TimelinePanelProps {
   loopEnabled: boolean
   masterWaveDuration: number
   duration: number
-  progress: number
   masterWaveContainerRef: React.RefObject<HTMLDivElement | null>
   onSetLoopStart: (time: number | null) => void
   onSetLoopEnd: (time: number | null) => void
@@ -30,7 +29,6 @@ function TimelinePanel({
   loopEnabled,
   masterWaveDuration,
   duration,
-  progress,
   masterWaveContainerRef,
   onSetLoopStart,
   onSetLoopEnd,
@@ -46,7 +44,7 @@ function TimelinePanel({
             Timeline
           </span>
           <span className="text-[10px] font-mono text-neutral-500">
-            {formatTime(progress)} / {formatTime(masterWaveDuration || duration)}
+            <span data-live-time>0:00</span> / {formatTime(masterWaveDuration || duration)}
           </span>
         </div>
         <div className="flex items-center gap-2">

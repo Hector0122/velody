@@ -28,11 +28,7 @@ const FFMPEG_BIN = join(FFMPEG_DIR, 'bin', isWin ? 'ffmpeg.exe' : 'ffmpeg')
 const STEPS = ['python', 'venv', 'demucs', 'ffmpeg'] as const
 
 const STANDALONE_DIR = join(DATA_DIR, 'python')
-const STANDALONE_PYTHON = join(
-  STANDALONE_DIR,
-  isWin ? 'python.exe' : 'bin',
-  isWin ? 'python.exe' : 'python3'
-)
+const STANDALONE_PYTHON = join(STANDALONE_DIR, isWin ? 'python.exe' : 'bin/python3')
 
 const COMPATIBLE_PYTHON_VERSIONS = ['3.11', '3.10', '3.9']
 
@@ -42,7 +38,7 @@ const HELP: Record<string, string> = isWin
         'Compatible Python (3.9-3.11) not found.\nDownload and install Python from:\nhttps://python.org/downloads/\nMake sure to check "Add Python to PATH" during installation.',
       venv: 'Failed to create virtual environment.',
       demucs:
-        'Failed to install dependencies.\nTry running manually:\n  python -m pip install demucs torch torchaudio tempocnn librosa',
+        'Failed to install dependencies.\nTry running manually:\n  python -m pip install demucs torch torchaudio tempocnn librosa yt-dlp',
       ffmpeg:
         'FFmpeg not found.\nDownload FFmpeg from:\nhttps://ffmpeg.org/download.html\nOr install with winget:\n  winget install ffmpeg'
     }
@@ -50,7 +46,7 @@ const HELP: Record<string, string> = isWin
       python:
         'Compatible Python (3.9-3.11) not found.\nInstall Python 3.11:\n  brew install python@3.11\nor download from:\n  https://www.python.org/downloads/',
       venv: 'Failed to create virtual environment.',
-      demucs: `Failed to install dependencies.\nTry running manually:\n  python3 -m venv ${VENV_DIR}\n  ${VENV_DIR}/bin/pip install demucs torch torchaudio tempocnn librosa`,
+      demucs: `Failed to install dependencies.\nTry running manually:\n  python3 -m venv ${VENV_DIR}\n  ${VENV_DIR}/bin/pip install demucs torch torchaudio tempocnn librosa yt-dlp`,
       ffmpeg: 'FFmpeg not found.\nInstall FFmpeg:\n  brew install ffmpeg'
     }
 
@@ -151,8 +147,8 @@ export class SetupManager {
       }
 
       this.emit(step, 10, 'working', `Installing ${step}...`)
-      const ok = await this.install(step)
-      if (!ok) {
+      const result = await this.install(step)
+      if (!result) {
         this.emit(step, 0, 'error', HELP[step])
         throw new Error(`${step} install failed.\n${HELP[step]}`)
       }
@@ -189,11 +185,29 @@ export class SetupManager {
     return this.isSetupComplete()
   }
 
+  private async parsePythonVersion(name: string): Promise<string | null> {
+    return new Promise((resolve) => {
+      execFile(name, ['--version'], (err, stdout) => {
+        if (err) {
+          resolve(null)
+          return
+        }
+        const match = stdout.trim().match(/^Python\s+(\d+)\.(\d+)/)
+        if (match) {
+          resolve(`${match[1]}.${match[2]}`)
+        } else {
+          resolve(null)
+        }
+      })
+    })
+  }
+
   private async checkPython(): Promise<boolean> {
     // Try compatible Python versions on PATH
     for (const ver of COMPATIBLE_PYTHON_VERSIONS) {
       const name = isWin ? 'python' : `python${ver}`
-      if (await this.tryCmd(`${name} --version`)) {
+      const actualVersion = await this.parsePythonVersion(name)
+      if (actualVersion && COMPATIBLE_PYTHON_VERSIONS.includes(actualVersion)) {
         this.compatiblePythonPath = name
         return true
       }
@@ -225,7 +239,7 @@ export class SetupManager {
 
   private async checkDemucs(): Promise<boolean> {
     const python = this.getPythonPath()
-    for (const pkg of ['demucs', 'torch', 'torchaudio', 'tempocnn', 'librosa']) {
+    for (const pkg of ['demucs', 'torch', 'torchaudio', 'tempocnn', 'librosa', 'yt-dlp']) {
       if (!(await this.tryCmd(`${python} -m pip show ${pkg}`))) return false
     }
     return true
@@ -266,7 +280,12 @@ export class SetupManager {
         await rm(STANDALONE_DIR, { recursive: true, force: true })
       }
       await mkdir(DATA_DIR, { recursive: true })
-      const ok = await this.spawnAsync('tar', ['-xzf', tarPath, '-C', DATA_DIR], 'python', 120_000)
+      const { ok } = await this.spawnAsync(
+        'tar',
+        ['-xzf', tarPath, '-C', DATA_DIR],
+        'python',
+        120_000
+      )
       if (ok) {
         const entries = await readdir(DATA_DIR)
         const extracted = entries.find((e) => e.startsWith('cpython-'))
@@ -314,14 +333,22 @@ export class SetupManager {
       await rm(VENV_DIR, { recursive: true, force: true })
     }
     const python = this.compatiblePythonPath ?? PYTHON
-    return this.spawnAsync(python, ['-m', 'venv', VENV_DIR], 'venv', 120_000)
+    const { ok } = await this.spawnAsync(python, ['-m', 'venv', VENV_DIR], 'venv', 120_000)
+    return ok
   }
 
-  private installDemucs(): Promise<boolean> {
+  private async installDemucs(): Promise<boolean> {
     const pip = existsSync(VENV_PIP) ? VENV_PIP : this.getPythonPath()
-    const pkgs = ['demucs', 'torch', 'torchaudio', 'tempocnn', 'librosa']
+    const pkgs = ['demucs', 'torch', 'torchaudio', 'tempocnn', 'librosa', 'yt-dlp']
     const args = existsSync(VENV_PIP) ? ['install', ...pkgs] : ['-m', 'pip', 'install', ...pkgs]
-    return this.spawnAsync(pip, args, 'demucs', 900_000)
+    if (isWin) {
+      args.push('--extra-index-url', 'https://download.pytorch.org/whl/cpu')
+    }
+    const { ok, stderr } = await this.spawnAsync(pip, args, 'demucs', 900_000)
+    if (!ok) {
+      this.emit('demucs', 0, 'error', `pip install failed:\n${stderr}`)
+    }
+    return ok
   }
 
   private async downloadFfmpeg(): Promise<boolean> {
@@ -346,7 +373,7 @@ export class SetupManager {
         await rm(FFMPEG_DIR, { recursive: true, force: true })
       }
 
-      const extracted = await this.spawnAsync(
+      const { ok: extracted } = await this.spawnAsync(
         'powershell',
         ['-Command', `Expand-Archive -Path '${zipPath}' -DestinationPath '${FFMPEG_DIR}' -Force`],
         'ffmpeg',
@@ -382,7 +409,7 @@ export class SetupManager {
     args: string[],
     step: string,
     timeout: number
-  ): Promise<boolean> {
+  ): Promise<{ ok: boolean; stderr: string }> {
     return new Promise((resolve) => {
       const proc = spawn(command, args, {
         shell: isWin,
@@ -391,11 +418,13 @@ export class SetupManager {
 
       const timer = setTimeout(() => {
         proc.kill()
-        resolve(false)
+        resolve({ ok: false, stderr: 'Process timed out' })
       }, timeout)
 
       let buffer = ''
       let lastProgress = 0
+      const stderrLines: string[] = []
+      const MAX_STDERR_LINES = 10
 
       const handleData = (data: Buffer): void => {
         buffer += data.toString()
@@ -415,16 +444,28 @@ export class SetupManager {
       }
 
       proc.stdout?.on('data', handleData)
-      proc.stderr?.on('data', handleData)
+      proc.stderr?.on('data', (data: Buffer) => {
+        handleData(data)
+        const lines = data
+          .toString()
+          .split('\n')
+          .filter((l: string) => l.trim())
+        for (const line of lines) {
+          stderrLines.push(line)
+          if (stderrLines.length > MAX_STDERR_LINES) {
+            stderrLines.shift()
+          }
+        }
+      })
 
       proc.on('close', (code) => {
         clearTimeout(timer)
-        resolve(code === 0)
+        resolve({ ok: code === 0, stderr: stderrLines.join('\n') })
       })
 
       proc.on('error', () => {
         clearTimeout(timer)
-        resolve(false)
+        resolve({ ok: false, stderr: stderrLines.join('\n') })
       })
     })
   }
