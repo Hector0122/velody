@@ -152,7 +152,9 @@ const api = {
       ipcRenderer.removeListener('url:download-failed', handler)
     }
   },
-  checkYtDlp: () => ipcRenderer.invoke('url:checkYtDlp') as Promise<{ available: boolean }>
+  checkYtDlp: () => ipcRenderer.invoke('url:checkYtDlp') as Promise<{ available: boolean }>,
+  updateYtDlp: () =>
+    ipcRenderer.invoke('url:updateYtDlp') as Promise<{ success: boolean; error?: string }>
 }
 
 if (process.contextIsolated) {

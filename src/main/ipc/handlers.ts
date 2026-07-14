@@ -530,6 +530,24 @@ export function registerIpcHandlers(): void {
     }
   })
 
+  ipcMain.handle('url:updateYtDlp', async () => {
+    const pythonPath = setupManager?.getPythonPath() ?? 'python3'
+    try {
+      const { ok, stderr } = await new Promise<{ ok: boolean; stderr: string }>((resolve) => {
+        execFile(
+          pythonPath,
+          ['-m', 'pip', 'install', '-U', 'yt-dlp'],
+          { timeout: 120_000 },
+          (err, _stdout, stderr) =>
+            resolve({ ok: !err, stderr: err?.message ?? stderr })
+        )
+      })
+      return { success: ok, error: ok ? undefined : stderr.slice(0, 500) }
+    } catch (e) {
+      return { success: false, error: String(e).slice(0, 500) }
+    }
+  })
+
   ipcMain.handle('url:import', async (_event, url: string) => {
     const pythonPath = setupManager?.getPythonPath() ?? 'python3'
     const scriptPath = join(getPythonWorkerDir(), 'download.py')

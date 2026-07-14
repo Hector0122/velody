@@ -334,6 +334,33 @@ https://ffmpeg.org
 
 ---
 
+# Build & Release
+
+## Commands
+
+| Command | Descripción |
+| --- | --- |
+| `pnpm dev` | Desarrollo con hot-reload |
+| `pnpm build` | Typecheck + vite build (sin empaquetar) |
+| `pnpm build:win` | Build completo → genera `dist/velody-<version>-setup.exe` |
+| `pnpm build:unpack` | Build sin instalador (solo carpeta `dist/win-unpacked/`) |
+
+## Installer
+
+- **NSIS one-click**: se ejecuta el `.exe` y se instala silenciosamente en `%LOCALAPPDATA%\Programs\velody`
+- Crea acceso directo en el escritorio
+- Incluye `python-worker/` como extra resource (empaquetado dentro del `.exe`)
+- Configuración: `electron-builder.yml`
+
+## Flujo para release
+
+1. Actualizar `version` en `package.json`
+2. Ejecutar `pnpm build:win`
+3. El instalador se genera en `dist/velody-<version>-setup.exe`
+4. Distribuir el `.exe` directamente (no requiere firma de código para uso local)
+
+---
+
 # Electron Responsibilities
 
 ## Main Process

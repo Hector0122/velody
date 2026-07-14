@@ -126,7 +126,7 @@ if __name__ == "__main__":
         elif "Sign in" in error_msg:
             _emit({"type": "error", "message": "This video requires sign-in (age-restricted or private)"})
         elif "403" in error_msg or "Forbidden" in error_msg:
-            _emit({"type": "error", "message": "YouTube blocked the download. Try updating yt-dlp: python -m pip install -U yt-dlp"})
+            _emit({"type": "error", "message": "[UPDATE_YTDLP] YouTube blocked the download. yt-dlp needs to be updated."})
         elif "format" in error_msg.lower() and "not available" in error_msg.lower():
             _emit({"type": "error", "message": "No downloadable audio format found for this video"})
         else:

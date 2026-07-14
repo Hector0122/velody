@@ -104,4 +104,5 @@ export interface VelodyAPI {
   onDownloadProgress: (callback: (e: DownloadProgressEvent) => void) => () => void
   onDownloadFailed: (callback: (e: DownloadFailedEvent) => void) => () => void
   checkYtDlp: () => Promise<{ available: boolean }>
+  updateYtDlp: () => Promise<{ success: boolean; error?: string }>
 }

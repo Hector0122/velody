@@ -12,6 +12,7 @@ interface Toast {
   id: number
   message: string
   type: 'error' | 'success'
+  action?: { label: string; onClick: () => void }
 }
 
 interface PendingFile {
@@ -40,12 +41,15 @@ function Home(): React.JSX.Element {
     jobQueueRef.current = jobQueue
   })
 
-  const addToast = useCallback((message: string, type: 'error' | 'success' = 'error') => {
-    const id = ++toastCounter
-    setToasts((prev) => [...prev, { id, message, type }])
-    const duration = type === 'error' ? 8000 : 4000
-    setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), duration)
-  }, [])
+  const addToast = useCallback(
+    (message: string, type: 'error' | 'success' = 'error', action?: Toast['action']) => {
+      const id = ++toastCounter
+      setToasts((prev) => [...prev, { id, message, type, action }])
+      const duration = type === 'error' ? 8000 : 4000
+      setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), duration)
+    },
+    []
+  )
 
   const dismissToast = useCallback((id: number) => {
     setToasts((prev) => prev.filter((t) => t.id !== id))
@@ -98,7 +102,22 @@ function Home(): React.JSX.Element {
       setJobQueue((prev) =>
         prev.map((j) => (j.id === e.jobId ? { ...j, status: 'failed', error: e.error } : j))
       )
-      addToast(`Download failed: ${e.error}`, 'error')
+      if (e.error.includes('[UPDATE_YTDLP]')) {
+        addToast('YouTube blocked the download. yt-dlp needs to be updated.', 'error', {
+          label: 'Update yt-dlp',
+          onClick: async () => {
+            addToast('Updating yt-dlp...', 'success')
+            const result = await window.api.updateYtDlp()
+            if (result.success) {
+              addToast('yt-dlp updated successfully. Try downloading again.', 'success')
+            } else {
+              addToast(`Update failed: ${result.error ?? 'unknown error'}`, 'error')
+            }
+          }
+        })
+      } else {
+        addToast(`Download failed: ${e.error}`, 'error')
+      }
     })
 
     return () => {
@@ -444,6 +463,17 @@ function Home(): React.JSX.Element {
               }`}
             >
               {t.message}
+              {t.action && (
+                <button
+                  onClick={() => {
+                    t.action!.onClick()
+                    dismissToast(t.id)
+                  }}
+                  className="ml-3 px-2 py-0.5 rounded bg-white/10 hover:bg-white/20 text-xs font-semibold transition-colors"
+                >
+                  {t.action.label}
+                </button>
+              )}
               {t.type === 'error' && (
                 <button
                   onClick={() => dismissToast(t.id)}

@@ -340,7 +340,9 @@ export class SetupManager {
   private async installDemucs(): Promise<boolean> {
     const pip = existsSync(VENV_PIP) ? VENV_PIP : this.getPythonPath()
     const pkgs = ['demucs', 'torch', 'torchaudio', 'tempocnn', 'librosa', 'yt-dlp']
-    const args = existsSync(VENV_PIP) ? ['install', ...pkgs] : ['-m', 'pip', 'install', ...pkgs]
+    const args = existsSync(VENV_PIP)
+      ? ['install', '--upgrade', ...pkgs]
+      : ['-m', 'pip', 'install', '--upgrade', ...pkgs]
     if (isWin) {
       args.push('--extra-index-url', 'https://download.pytorch.org/whl/cpu')
     }
