@@ -1,6 +1,5 @@
 import { useState, useMemo, useCallback, useRef } from 'react'
 import ExportModal from './ExportModal'
-import JamZone from './JamZone'
 import MarkerLabelInput from './MarkerLabelInput'
 import RecordingConfirmationModal from './RecordingConfirmationModal'
 import StemGrid from './StemGrid'
@@ -9,7 +8,6 @@ import TimelinePanel from './TimelinePanel'
 import { useMetronome } from '../hooks/useMetronome'
 import { useRecording } from '../hooks/useRecording'
 import useSongAnalysis from '../hooks/useSongAnalysis'
-import useKeyPitch from '../hooks/useKeyPitch'
 import useMarkers from '../hooks/useMarkers'
 import { useExportState } from '../hooks/useExportState'
 import { usePanningGraph } from '../hooks/usePanningGraph'
@@ -20,7 +18,6 @@ import { stemNameFromPath, formatTime, BPM_MIN, BPM_MAX } from '../utils'
 interface StemPlayerProps {
   stems: string[]
   songName: string
-  onExportAll: () => Promise<void>
 }
 
 const STEM_META: Record<string, { color: string; label: string }> = {
@@ -43,7 +40,7 @@ const RECORDING_COLORS = [
   '#f97316'
 ]
 
-function StemPlayer({ stems, songName, onExportAll }: StemPlayerProps): React.JSX.Element {
+function StemPlayer({ stems, songName }: StemPlayerProps): React.JSX.Element {
   const [progress, setProgress] = useState(0)
   const [masterVolume, setMasterVolume] = useState(1)
   const [masterPlaying, setMasterPlaying] = useState(false)
@@ -55,9 +52,6 @@ function StemPlayer({ stems, songName, onExportAll }: StemPlayerProps): React.JS
 
   // Recording — state owned by hook; recordedStems stays here for UI
   const [recordedStems, setRecordedStems] = useState<string[]>([])
-
-  // Key (detectedKey owned here — passed to useSongAnalysis + useKeyPitch)
-  const [detectedKey, setDetectedKey] = useState<string | null>(null)
 
   const allStems = useMemo(() => [...stems, ...recordedStems], [stems, recordedStems])
 
@@ -76,7 +70,7 @@ function StemPlayer({ stems, songName, onExportAll }: StemPlayerProps): React.JS
   const playbackRateRef = useRef(1)
   const durationRef = useRef(0)
 
-  // Beat offset ref (owned by component, written by useSongAnalysis, read by useMetronome)
+  // Beat offset (ref for useMetronome)
   const firstBeatOffsetRef = useRef(0)
 
   // Metronome hook
@@ -100,26 +94,13 @@ function StemPlayer({ stems, songName, onExportAll }: StemPlayerProps): React.JS
     firstBeatOffsetRef
   )
 
-  // Song analysis (BPM + key + beat offset detection)
-  const originalBpmRef = useSongAnalysis(urls, stems, setBpm, setDetectedKey, firstBeatOffsetRef)
-  const {
-    manualKey,
-    effectiveKey,
-    pitchShift,
-    shiftedPaths,
-    transposing,
-    showKeyPicker,
-    showJamZone,
-    selectedScaleIdx,
-    scalesMaxH,
-    fretboardColRef,
-    setShowJamZone,
-    setSelectedScaleIdx,
-    handleKeySelect,
-    handleKeyReset,
-    handlePitchShift,
-    handleToggleKeyPicker
-  } = useKeyPitch(stems, allStems, detectedKey)
+  // Song analysis (BPM + beat offset detection)
+  const { originalBpmRef } = useSongAnalysis(
+    urls,
+    stems,
+    setBpm,
+    firstBeatOffsetRef
+  )
   const {
     markers,
     loopStart,
@@ -197,6 +178,7 @@ function StemPlayer({ stems, songName, onExportAll }: StemPlayerProps): React.JS
     durationRef,
     positionRef,
     lastSeekRef,
+    lastScheduledBeatRef,
     progress,
     setProgress,
     onMasterDblClick: (time) => {
@@ -247,7 +229,6 @@ function StemPlayer({ stems, songName, onExportAll }: StemPlayerProps): React.JS
     activeRef,
     stemsRef,
     lastSeekRef,
-    audioStartRef,
     masterPlayingRef,
     playbackRateRef,
     durationRef,
@@ -269,8 +250,6 @@ function StemPlayer({ stems, songName, onExportAll }: StemPlayerProps): React.JS
     setStemPannings,
     // Other state
     allStems,
-    shiftedPaths,
-    bpm,
     bpmRef,
     originalBpmRef,
     loopEnabled,
@@ -311,7 +290,7 @@ function StemPlayer({ stems, songName, onExportAll }: StemPlayerProps): React.JS
       const label = STEM_META[stemKey]?.label ?? stemKey
       const query = encodeURIComponent(`${songName} ${label} tab`)
       const url = `https://www.ultimate-guitar.com/search.php?search_type=title&value=${query}`
-      window.api.openInBrowser(url)
+      window.api.openExternal(url)
     },
     [songName]
   )
@@ -375,26 +354,7 @@ function StemPlayer({ stems, songName, onExportAll }: StemPlayerProps): React.JS
           <div className="bg-neutral-900/80 rounded-xl border border-neutral-800 p-5">
             <div className="flex items-center justify-between">
               <h2 className="text-xl font-bold text-white">{songName}</h2>
-              <div className="flex items-center gap-2">
-                {effectiveKey && (
-                  <button
-                    onClick={() => setShowJamZone(!showJamZone)}
-                    className={`px-4 py-2 text-sm font-semibold rounded-lg transition-colors ${
-                      showJamZone
-                        ? 'bg-orange-600 text-white'
-                        : 'bg-neutral-800 text-neutral-400 hover:text-white hover:bg-neutral-700'
-                    }`}
-                  >
-                    Jam Zone {showJamZone ? '▲' : '▼'}
-                  </button>
-                )}
-                <button
-                  onClick={onExportAll}
-                  className="px-4 py-2 text-sm font-semibold bg-green-600 hover:bg-green-500 text-white rounded-lg transition-colors"
-                >
-                  Export All
-                </button>
-              </div>
+              <div />
             </div>
           </div>
 
@@ -414,16 +374,6 @@ function StemPlayer({ stems, songName, onExportAll }: StemPlayerProps): React.JS
             onClearMarkers={handleClearMarkers}
             onRemoveMarker={handleRemoveMarker}
           />
-
-          {showJamZone && effectiveKey && (
-            <JamZone
-              effectiveKey={effectiveKey}
-              selectedScaleIdx={selectedScaleIdx}
-              scalesMaxH={scalesMaxH}
-              fretboardColRef={fretboardColRef}
-              onSelectScale={setSelectedScaleIdx}
-            />
-          )}
 
           <StemGrid
             items={stemItems}
@@ -452,40 +402,30 @@ function StemPlayer({ stems, songName, onExportAll }: StemPlayerProps): React.JS
           />
         </div>
 
-        <MasterPanel
-          masterPlaying={masterPlaying}
-          masterVolume={masterVolume}
-          progress={progress}
-          duration={duration}
-          effectiveKey={effectiveKey}
-          manualKey={manualKey}
-          detectedKey={detectedKey}
-          pitchShift={pitchShift}
-          transposing={transposing}
-          bpm={bpm}
-          metronomeOn={metronomeOn}
-          metroVolume={metroVolume}
-          monitorVolume={monitorVolume}
-          recordingFormat={recordingFormat}
-          countInBars={countInBars}
-          showKeyPicker={showKeyPicker}
-          onToggleMasterPlay={toggleMasterPlay}
-          onRestart={handleRestart}
-          onMasterVolumeChange={handleMasterVolume}
-          onPitchShift={handlePitchShift}
-          onBpmDecrement={handleBpmDecrement}
-          onBpmChange={handleBpmChange}
-          onBpmIncrement={handleBpmIncrement}
-          onMetronomeToggle={handleMetronomeToggle}
-          onMetroVolumeChange={handleMetroVolumeChange}
-          onMonitorVolumeChange={handleMonitorVolumeChange}
-          onRecordingFormatChange={handleRecordingFormatChange}
-          onCountInBarsChange={handleCountInBarsChange}
-          onShowExportModal={() => setShowExportModal(true)}
-          onToggleKeyPicker={handleToggleKeyPicker}
-          onKeySelect={handleKeySelect}
-          onKeyReset={handleKeyReset}
-        />
+          <MasterPanel
+            masterPlaying={masterPlaying}
+            masterVolume={masterVolume}
+            progress={progress}
+            duration={duration}
+            bpm={bpm}
+            metronomeOn={metronomeOn}
+            metroVolume={metroVolume}
+            monitorVolume={monitorVolume}
+            recordingFormat={recordingFormat}
+            countInBars={countInBars}
+            onToggleMasterPlay={toggleMasterPlay}
+            onRestart={handleRestart}
+            onMasterVolumeChange={handleMasterVolume}
+            onBpmDecrement={handleBpmDecrement}
+            onBpmChange={handleBpmChange}
+            onBpmIncrement={handleBpmIncrement}
+            onMetronomeToggle={handleMetronomeToggle}
+            onMetroVolumeChange={handleMetroVolumeChange}
+            onMonitorVolumeChange={handleMonitorVolumeChange}
+            onRecordingFormatChange={handleRecordingFormatChange}
+            onCountInBarsChange={handleCountInBarsChange}
+            onShowExportModal={() => setShowExportModal(true)}
+          />
       </div>
 
       {/* Countdown overlay */}

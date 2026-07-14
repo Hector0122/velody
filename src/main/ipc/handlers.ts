@@ -104,7 +104,14 @@ export function registerIpcHandlers(): void {
     'song:saveMeta',
     async (_event, songDir: string, meta: Record<string, unknown>) => {
       const metaPath = join(songDir, '.velody')
-      await writeFile(metaPath, JSON.stringify(meta), 'utf-8')
+      let existing: Record<string, unknown> = {}
+      try {
+        const raw = await readFile(metaPath, 'utf-8')
+        existing = JSON.parse(raw)
+      } catch {
+        /* file doesn't exist or invalid JSON */
+      }
+      await writeFile(metaPath, JSON.stringify({ ...existing, ...meta }), 'utf-8')
       return { success: true }
     }
   )
@@ -118,32 +125,6 @@ export function registerIpcHandlers(): void {
       return null
     }
   })
-
-  ipcMain.handle(
-    'song:detectKey',
-    async (_event, songDir: string, stemPaths: string[]): Promise<string | null> => {
-      const pythonPath = setupManager?.getPythonPath() ?? 'python3'
-      const scriptPath = join(getPythonWorkerDir(), 'detect_key.py')
-      const ffmpegPath = setupManager?.getFfmpegPath() ?? 'ffmpeg'
-      try {
-        const out = await new Promise<string>((resolve, reject) => {
-          execFile(
-            pythonPath,
-            [scriptPath, songDir, ...stemPaths, '--ffmpeg-path', ffmpegPath],
-            { timeout: 600_000, maxBuffer: 65536 },
-            (err, stdout) => (err ? reject(err) : resolve(stdout))
-          )
-        })
-        const lines = out.trim().split('\n')
-        const last = lines[lines.length - 1]
-        const parsed = last ? JSON.parse(last.trim()) : null
-        return parsed && typeof parsed.key === 'string' ? parsed.key : null
-      } catch (err) {
-        console.error('[detectKey]', err)
-        return null
-      }
-    }
-  )
 
   ipcMain.handle(
     'song:detectBpm',

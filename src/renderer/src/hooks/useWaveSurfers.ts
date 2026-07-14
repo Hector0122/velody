@@ -14,6 +14,7 @@ interface UseWaveSurfersParams {
   durationRef: React.MutableRefObject<number>
   positionRef: React.MutableRefObject<number>
   lastSeekRef: React.MutableRefObject<number>
+  lastScheduledBeatRef: React.MutableRefObject<number>
   progress: number
   setProgress: (v: number) => void
   onMasterDblClick?: (time: number) => void
@@ -37,6 +38,7 @@ export function useWaveSurfers({
   durationRef,
   positionRef,
   lastSeekRef,
+  lastScheduledBeatRef,
   progress,
   setProgress,
   onMasterDblClick
@@ -153,6 +155,7 @@ export function useWaveSurfers({
       const clickTime = relativeX * d
       positionRef.current = clickTime
       lastSeekRef.current = Date.now()
+      lastScheduledBeatRef.current = -1
       for (const el of Object.values(audioEls.current)) {
         el.currentTime = clickTime
       }

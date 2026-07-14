@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef } from 'react'
+import { memo } from 'react'
 import { formatTime, BPM_MIN, BPM_MAX } from '../utils'
 
 interface MasterPanelProps {
@@ -6,22 +6,15 @@ interface MasterPanelProps {
   masterVolume: number
   progress: number
   duration: number
-  effectiveKey: string | null
-  manualKey: string | null
-  detectedKey: string | null
-  pitchShift: number
-  transposing: boolean
   bpm: number
   metronomeOn: boolean
   metroVolume: number
   monitorVolume: number
   recordingFormat: 'wav' | 'mp3'
   countInBars: number
-  showKeyPicker: boolean
   onToggleMasterPlay: () => void
   onRestart: () => void
   onMasterVolumeChange: (e: React.ChangeEvent<HTMLInputElement>) => void
-  onPitchShift: (delta: number) => void
   onBpmDecrement: () => void
   onBpmChange: (v: number) => void
   onBpmIncrement: () => void
@@ -31,36 +24,22 @@ interface MasterPanelProps {
   onRecordingFormatChange: (fmt: 'wav' | 'mp3') => void
   onCountInBarsChange: (bars: number) => void
   onShowExportModal: () => void
-  onToggleKeyPicker: () => void
-  onKeySelect: (key: string) => void
-  onKeyReset: () => void
 }
-
-const NOTE = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
-const ALL_KEYS: string[] = []
-for (const n of NOTE) for (const t of ['Major', 'Minor']) ALL_KEYS.push(`${n} ${t}`)
 
 function MasterPanel({
   masterPlaying,
   masterVolume,
   progress,
   duration,
-  effectiveKey,
-  manualKey,
-  detectedKey,
-  pitchShift,
-  transposing,
   bpm,
   metronomeOn,
   metroVolume,
   monitorVolume,
   recordingFormat,
   countInBars,
-  showKeyPicker,
   onToggleMasterPlay,
   onRestart,
   onMasterVolumeChange,
-  onPitchShift,
   onBpmDecrement,
   onBpmChange,
   onBpmIncrement,
@@ -69,23 +48,8 @@ function MasterPanel({
   onMonitorVolumeChange,
   onRecordingFormatChange,
   onCountInBarsChange,
-  onShowExportModal,
-  onToggleKeyPicker,
-  onKeySelect,
-  onKeyReset
+  onShowExportModal
 }: MasterPanelProps): React.JSX.Element {
-  const keyPickerRef = useRef<HTMLDivElement | null>(null)
-
-  useEffect(() => {
-    if (!showKeyPicker) return
-    const handler = (e: MouseEvent): void => {
-      if (keyPickerRef.current && !keyPickerRef.current.contains(e.target as Node)) {
-        onToggleKeyPicker()
-      }
-    }
-    document.addEventListener('mousedown', handler)
-    return () => document.removeEventListener('mousedown', handler)
-  }, [showKeyPicker, onToggleKeyPicker])
 
   return (
     <div className="w-44 shrink-0 bg-neutral-900/80 rounded-xl border border-neutral-800 p-4 flex flex-col items-center gap-5 self-start order-1">
@@ -189,74 +153,6 @@ function MasterPanel({
         >
           Export Mix...
         </button>
-      </div>
-
-      <div className="border-t border-neutral-800 pt-4 w-full flex flex-col gap-3">
-        <h3 className="text-sm font-semibold text-neutral-400 uppercase tracking-wide text-center">
-          Key
-        </h3>
-        <div className="text-center relative">
-          <button
-            onClick={onToggleKeyPicker}
-            className="text-lg font-bold text-white hover:text-orange-400 transition-colors cursor-pointer"
-            title="Click to change key"
-          >
-            {effectiveKey || '...'}
-            {manualKey && <span className="text-[10px] text-orange-400 ml-1">✎</span>}
-          </button>
-          {showKeyPicker && (
-            <div
-              ref={keyPickerRef}
-              className="absolute z-50 top-full mt-2 left-1/2 -translate-x-1/2 bg-neutral-900 border border-neutral-700 rounded-xl p-3 shadow-2xl w-48 max-h-64 overflow-y-auto"
-            >
-              <div className="grid grid-cols-2 gap-1">
-                {ALL_KEYS.map((k) => (
-                  <button
-                    key={k}
-                    onClick={() => onKeySelect(k)}
-                    className={`px-2 py-1 rounded text-xs font-medium transition-colors ${
-                      effectiveKey === k
-                        ? 'bg-orange-600 text-white'
-                        : 'bg-neutral-800 text-neutral-400 hover:text-white hover:bg-neutral-700'
-                    }`}
-                  >
-                    {k}
-                  </button>
-                ))}
-              </div>
-              {manualKey && (
-                <button
-                  onClick={onKeyReset}
-                  className="w-full mt-2 px-2 py-1 rounded text-xs font-medium bg-neutral-800 text-neutral-500 hover:text-white transition-colors"
-                >
-                  Reset to detected ({detectedKey ?? '...'})
-                </button>
-              )}
-            </div>
-          )}
-        </div>
-        <div className="flex items-center justify-center gap-1.5">
-          <button
-            onClick={() => onPitchShift(-1)}
-            disabled={transposing || pitchShift <= -12}
-            className="w-8 h-8 rounded bg-neutral-800 text-neutral-400 hover:text-white disabled:text-neutral-600 disabled:cursor-not-allowed text-sm flex items-center justify-center"
-          >
-            −
-          </button>
-          <span className="w-14 text-center text-sm font-mono text-orange-400">
-            {pitchShift === 0 ? '±0' : pitchShift > 0 ? `+${pitchShift}` : `${pitchShift}`}
-          </span>
-          <button
-            onClick={() => onPitchShift(1)}
-            disabled={transposing || pitchShift >= 12}
-            className="w-8 h-8 rounded bg-neutral-800 text-neutral-400 hover:text-white disabled:text-neutral-600 disabled:cursor-not-allowed text-sm flex items-center justify-center"
-          >
-            +
-          </button>
-        </div>
-        <span className="text-[10px] text-neutral-500 text-center">
-          {transposing ? 'Transposing...' : 'semitone steps'}
-        </span>
       </div>
 
       <div className="border-t border-neutral-800 pt-4 w-full flex flex-col gap-3">

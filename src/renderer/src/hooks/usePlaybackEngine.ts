@@ -1,10 +1,11 @@
-import { useEffect, useLayoutEffect, useCallback } from 'react'
+import { useEffect, useLayoutEffect, useCallback, useRef } from 'react'
 import type WaveSurfer from 'wavesurfer.js'
 import {
   stemNameFromPath,
   PROGRESS_THROTTLE_MS,
-  AUDIO_START_THRESHOLD,
-  AUDIO_START_MAX_SCAN_SECS
+  CURSOR_THROTTLE_MS,
+  DRIFT_THRESHOLD,
+  DRIFT_CORRECTION_INTERVAL_MS
 } from '../utils'
 
 interface UsePlaybackEngineParams {
@@ -14,7 +15,6 @@ interface UsePlaybackEngineParams {
   activeRef: React.MutableRefObject<Record<string, boolean>>
   stemsRef: React.MutableRefObject<string[]>
   lastSeekRef: React.MutableRefObject<number>
-  audioStartRef: React.MutableRefObject<number | null>
   masterPlayingRef: React.MutableRefObject<boolean>
   playbackRateRef: React.MutableRefObject<number>
   durationRef: React.MutableRefObject<number>
@@ -46,8 +46,6 @@ interface UsePlaybackEngineParams {
   ) => void
 
   allStems: string[]
-  shiftedPaths: Record<string, string>
-  bpm: number
   bpmRef: React.MutableRefObject<number>
   originalBpmRef: React.MutableRefObject<number>
   loopEnabled: boolean
@@ -90,7 +88,6 @@ export function usePlaybackEngine(params: UsePlaybackEngineParams): {
     activeRef,
     stemsRef,
     lastSeekRef,
-    audioStartRef,
     masterPlayingRef,
     playbackRateRef,
     durationRef,
@@ -110,8 +107,6 @@ export function usePlaybackEngine(params: UsePlaybackEngineParams): {
     setStemVolumes,
     setStemPannings,
     allStems,
-    shiftedPaths,
-    bpm,
     bpmRef,
     originalBpmRef,
     loopEnabled,
@@ -151,8 +146,7 @@ export function usePlaybackEngine(params: UsePlaybackEngineParams): {
       const result: Record<string, string> = {}
       for (const stem of allStems) {
         const key = stemNameFromPath(stem)
-        const actualPath = shiftedPaths[key] ?? stem
-        result[key] = await window.api.getAudioUrl(actualPath)
+        result[key] = await window.api.getAudioUrl(stem)
       }
       if (!cancelled) setUrls(result)
     }
@@ -160,7 +154,7 @@ export function usePlaybackEngine(params: UsePlaybackEngineParams): {
     return () => {
       cancelled = true
     }
-  }, [allStems, shiftedPaths]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [allStems]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Assign audio src once URLs are ready
   useEffect(() => {
@@ -201,13 +195,12 @@ export function usePlaybackEngine(params: UsePlaybackEngineParams): {
     applyAllVolumes()
   }, [masterPlaying, active, solo, masterVolume, applyAllVolumes])
 
-  // Apply playback rate when BPM changes or play state toggles
+  // Always play at original speed; no real-time BPM change
   useEffect(() => {
-    const rate = masterPlaying ? bpm / originalBpmRef.current : 1
     for (const el of Object.values(audioEls.current)) {
-      el.playbackRate = rate
+      el.playbackRate = 1
     }
-  }, [bpm, masterPlaying]) // eslint-disable-line react-hooks/exhaustive-deps
+  })
 
   // Clean up unused audio elements on stem change
   useEffect(() => {
@@ -224,40 +217,6 @@ export function usePlaybackEngine(params: UsePlaybackEngineParams): {
     }
   }, [allStems, audioEls])
 
-  // --- Audio start detection ---
-  const detectAudioStart = useCallback(async (url: string): Promise<number> => {
-    try {
-      const res = await fetch(url)
-      const buf = await res.arrayBuffer()
-      const ctx = new AudioContext()
-      const ab = await ctx.decodeAudioData(buf)
-      await ctx.close()
-      const ch = ab.getChannelData(0)
-      const sr = ab.sampleRate
-      const threshold = AUDIO_START_THRESHOLD
-      const maxFrames = Math.min(ch.length, AUDIO_START_MAX_SCAN_SECS * sr)
-      for (let i = 0; i < maxFrames; i++) {
-        if (Math.abs(ch[i]) > threshold) {
-          const t = i / sr
-          return t > 0 ? t : 0
-        }
-      }
-      return 0
-    } catch {
-      return 0
-    }
-  }, [])
-
-  // Detect audio start when a new song loads
-  useEffect(() => {
-    const masterUrl = urls[Object.keys(urls)[0]]
-    if (!masterUrl) return
-    audioStartRef.current = null
-    detectAudioStart(masterUrl).then((t) => {
-      audioStartRef.current = t
-    })
-  }, [urls, detectAudioStart, audioStartRef])
-
   // Close AudioContext on unmount
   useEffect(() => {
     return () => {
@@ -273,12 +232,14 @@ export function usePlaybackEngine(params: UsePlaybackEngineParams): {
   }, [])
 
   // Audio timeupdate → update counter + WaveSurfer cursors
+  const lastCursorSyncRef = useRef(0)
   const onAudioTime = useCallback(
     (time: number): void => {
       positionRef.current = time
 
       if (loopEnabled && loopStart !== null && loopEnd !== null && time >= loopEnd) {
         const seekTime = loopStart
+        lastScheduledBeatRef.current = -1
         positionRef.current = seekTime
         for (const el of Object.values(audioEls.current)) {
           el.currentTime = seekTime
@@ -287,10 +248,13 @@ export function usePlaybackEngine(params: UsePlaybackEngineParams): {
         return
       }
 
-      const d = durationRef.current || duration || 1
-      syncStemCursors(time, d)
-
       const now = Date.now()
+      if (now - lastCursorSyncRef.current >= CURSOR_THROTTLE_MS) {
+        lastCursorSyncRef.current = now
+        const d = durationRef.current || duration || 1
+        syncStemCursors(time, d)
+      }
+
       if (now - lastSeekRef.current < PROGRESS_THROTTLE_MS) return
       lastSeekRef.current = now
       setProgress(time)
@@ -304,6 +268,7 @@ export function usePlaybackEngine(params: UsePlaybackEngineParams): {
       audioEls,
       durationRef,
       lastSeekRef,
+      lastScheduledBeatRef,
       positionRef,
       setProgress
     ]
@@ -312,6 +277,27 @@ export function usePlaybackEngine(params: UsePlaybackEngineParams): {
   useLayoutEffect(() => {
     onAudioTimeRef.current = onAudioTime
   })
+
+  // Drift correction: periodically check if audio elements are in sync
+  useEffect(() => {
+    if (!masterPlaying) return
+    const id = window.setInterval(() => {
+      const els = Object.values(audioEls.current)
+      if (els.length < 2) return
+      const ref = els[0]
+      if (!ref || ref.paused) return
+      const refTime = ref.currentTime
+      for (let i = 1; i < els.length; i++) {
+        const el = els[i]
+        if (!el || el.paused) continue
+        const drift = el.currentTime - refTime
+        if (Math.abs(drift) > DRIFT_THRESHOLD) {
+          el.currentTime = refTime
+        }
+      }
+    }, DRIFT_CORRECTION_INTERVAL_MS)
+    return () => clearInterval(id)
+  }, [masterPlaying, audioEls])
 
   // Toggle stem active
   const toggleStem = useCallback(
@@ -397,6 +383,7 @@ export function usePlaybackEngine(params: UsePlaybackEngineParams): {
   ])
 
   const handleRestart = useCallback((): void => {
+    lastScheduledBeatRef.current = -1
     positionRef.current = 0
     setProgress(0)
     for (const el of Object.values(audioEls.current)) {
@@ -405,7 +392,7 @@ export function usePlaybackEngine(params: UsePlaybackEngineParams): {
     for (const sw of Object.values(stemWaves.current)) {
       sw.seekTo(0)
     }
-  }, [stemWaves, audioEls, positionRef, setProgress])
+  }, [stemWaves, audioEls, positionRef, setProgress, lastScheduledBeatRef])
 
   const toggleSolo = useCallback(
     (key: string): void => {

@@ -174,28 +174,6 @@ function Home(): React.JSX.Element {
     if (currentSong?.songName === song.name) setCurrentSong(null)
   }
 
-  const handleExportAll = async (): Promise<void> => {
-    if (!window.api || !currentSong) return
-    const dir = await window.api.openDirectoryDialog()
-    if (!dir) return
-    const ext = '.wav'
-    for (const stemPath of currentSong.stems) {
-      const name =
-        stemPath
-          .split(/[/\\]/)
-          .pop()
-          ?.replace(/\.[^.]+$/, '') || 'stem'
-      const outPath = `${dir}/${currentSong.songName} - ${name}${ext}`
-      try {
-        await window.api.exportSingle(stemPath, outPath)
-      } catch {
-        addToast(`Failed to export ${name}`, 'error')
-        return
-      }
-    }
-    addToast(`All stems exported to ${dir}`, 'success')
-  }
-
   const queuedJobs = jobQueue.filter((j) => j.status === 'queued' || j.status === 'running')
 
   return (
@@ -297,7 +275,6 @@ function Home(): React.JSX.Element {
             key={currentSong.songName}
             stems={currentSong.stems}
             songName={currentSong.songName}
-            onExportAll={handleExportAll}
           />
         ) : (
           <div className="flex-1 flex items-center justify-center">

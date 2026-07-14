@@ -111,8 +111,6 @@ const api = {
   saveMeta: (songDir: string, meta: Record<string, unknown>) =>
     ipcRenderer.invoke('song:saveMeta', songDir, meta),
   loadMeta: (songDir: string) => ipcRenderer.invoke('song:loadMeta', songDir),
-  detectKey: (songDir: string, stemPaths: string[]) =>
-    ipcRenderer.invoke('song:detectKey', songDir, stemPaths),
   detectBpm: (stemPath: string) =>
     ipcRenderer.invoke('song:detectBpm', stemPath) as Promise<{
       bpm: number
