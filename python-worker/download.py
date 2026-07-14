@@ -14,6 +14,7 @@ Output:
 
 import sys
 import json
+import re
 import tempfile
 from pathlib import Path
 
@@ -39,12 +40,21 @@ def progress_hook(d):
         _emit({"type": "progress", "percent": 100})
 
 
+def _clean_youtube_url(url: str) -> str:
+    if 'youtube.com' in url or 'youtu.be' in url:
+        url = re.sub(r'[&?]list=[^&]*', '', url)
+        url = re.sub(r'[&?]index=[^&]*', '', url)
+    return url
+
+
 def download_audio(url: str, ffmpeg_path: str | None = None) -> dict:
     tmp_dir = tempfile.mkdtemp(prefix="velody_dl_")
     output_path = str(Path(tmp_dir) / "%(title)s.%(ext)s")
 
+    clean_url = _clean_youtube_url(url)
+
     ydl_opts = {
-        'format': 'bestaudio/best',
+        'format': 'ba/b/worst*',
         'outtmpl': output_path,
         'progress_hooks': [progress_hook],
         'postprocessors': [{
@@ -55,19 +65,22 @@ def download_audio(url: str, ffmpeg_path: str | None = None) -> dict:
         'quiet': True,
         'no_warnings': True,
         'noplaylist': True,
+        'http_headers': {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+        },
     }
 
     if ffmpeg_path and ('/' in ffmpeg_path or '\\' in ffmpeg_path):
         ydl_opts['ffmpeg_location'] = str(Path(ffmpeg_path).parent)
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url, download=False)
+        info = ydl.extract_info(clean_url, download=False)
         title = info.get('title', 'untitled')
         duration = info.get('duration', 0)
 
         _emit({"type": "metadata", "title": title, "duration": duration})
 
-        ydl.download([url])
+        ydl.download([clean_url])
 
     # Find the downloaded MP3 file
     downloaded_files = list(Path(tmp_dir).glob("*.mp3"))
@@ -112,6 +125,10 @@ if __name__ == "__main__":
             _emit({"type": "error", "message": "Video unavailable"})
         elif "Sign in" in error_msg:
             _emit({"type": "error", "message": "This video requires sign-in (age-restricted or private)"})
+        elif "403" in error_msg or "Forbidden" in error_msg:
+            _emit({"type": "error", "message": "YouTube blocked the download. Try updating yt-dlp: python -m pip install -U yt-dlp"})
+        elif "format" in error_msg.lower() and "not available" in error_msg.lower():
+            _emit({"type": "error", "message": "No downloadable audio format found for this video"})
         else:
             _emit({"type": "error", "message": f"Download failed: {error_msg[:200]}"})
         sys.exit(1)

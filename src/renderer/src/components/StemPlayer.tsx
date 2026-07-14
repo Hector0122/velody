@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, useRef, useLayoutEffect } from 'react'
+import { useState, useMemo, useCallback, useRef, useLayoutEffect, useEffect } from 'react'
 import ExportModal from './ExportModal'
 import MarkerLabelInput from './MarkerLabelInput'
 import RecordingConfirmationModal from './RecordingConfirmationModal'
@@ -18,7 +18,8 @@ import {
   BPM_MIN,
   BPM_MAX,
   updateTimeDisplays,
-  updateCursors
+  updateCursors,
+  invalidateLiveUICache
 } from '../utils'
 
 interface StemPlayerProps {
@@ -123,6 +124,10 @@ function StemPlayer({ stems, songName }: StemPlayerProps): React.JSX.Element {
       }
     })
   }, [allStems, recordedStems])
+
+  useEffect(() => {
+    invalidateLiveUICache()
+  }, [stemItems])
 
   const {
     stemWaves,
@@ -255,6 +260,48 @@ function StemPlayer({ stems, songName }: StemPlayerProps): React.JSX.Element {
     [songName]
   )
 
+  const stemCallbacks = useMemo(() => {
+    const map: Record<
+      string,
+      {
+        onToggle: () => void
+        onSolo: () => void
+        onExport: () => void
+        onOpenTab: () => void
+        onStartRecording: () => void
+        onVolumeChange: (v: number) => void
+        onPanningChange: (v: number) => void
+        onDeleteRecording: () => void
+      }
+    > = {}
+    for (const stem of stemItems) {
+      const { key, isRecording } = stem
+      const recPath = isRecording ? allStems.find((p) => stemNameFromPath(p) === key) : undefined
+      map[key] = {
+        onToggle: () => toggleStem(key),
+        onSolo: () => toggleSolo(key),
+        onExport: () => handleExportSingle(key),
+        onOpenTab: () => handleOpenTab(key),
+        onStartRecording: () => handleStartRecording(key),
+        onVolumeChange: (v: number) => handleStemVolume(key, v),
+        onPanningChange: (v: number) => handleStemPanning(key, v),
+        onDeleteRecording: recPath ? () => handleDeleteRecording(recPath) : () => {}
+      }
+    }
+    return map
+  }, [
+    stemItems,
+    allStems,
+    toggleStem,
+    toggleSolo,
+    handleExportSingle,
+    handleOpenTab,
+    handleStartRecording,
+    handleStemVolume,
+    handleStemPanning,
+    handleDeleteRecording
+  ])
+
   const handleBpmDecrement = useCallback((): void => {
     setBpm((prev) => {
       const next = Math.max(BPM_MIN, prev - 1)
@@ -304,6 +351,9 @@ function StemPlayer({ stems, songName }: StemPlayerProps): React.JSX.Element {
     },
     [setCountInBars]
   )
+  const handleShowExportModal = useCallback((): void => {
+    setShowExportModal(true)
+  }, [setShowExportModal])
 
   return (
     <>
@@ -340,20 +390,11 @@ function StemPlayer({ stems, songName }: StemPlayerProps): React.JSX.Element {
             exporting={exporting}
             recording={recording}
             recordingKey={recordingKey}
-            recordingElapsed={recordingElapsed}
             formatTime={formatTime}
-            allStems={allStems}
             stemVolumes={stemVolumes}
             stemPannings={stemPannings}
-            onToggleStem={toggleStem}
-            onToggleSolo={toggleSolo}
-            onExportSingle={handleExportSingle}
-            onOpenTab={handleOpenTab}
-            onStartRecording={handleStartRecording}
+            stemCallbacks={stemCallbacks}
             onStopRecording={handleStopRecording}
-            onDeleteRecording={handleDeleteRecording}
-            onStemVolume={handleStemVolume}
-            onStemPanning={handleStemPanning}
           />
         </div>
 
@@ -378,7 +419,7 @@ function StemPlayer({ stems, songName }: StemPlayerProps): React.JSX.Element {
           onMonitorVolumeChange={handleMonitorVolumeChange}
           onRecordingFormatChange={handleRecordingFormatChange}
           onCountInBarsChange={handleCountInBarsChange}
-          onShowExportModal={() => setShowExportModal(true)}
+          onShowExportModal={handleShowExportModal}
         />
       </div>
 

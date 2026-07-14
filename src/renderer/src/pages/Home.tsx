@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, useLayoutEffect } from 'react'
+import { useState, useEffect, useCallback, useRef, useLayoutEffect, useMemo } from 'react'
 import AudioUploader from '../components/AudioUploader'
 import UrlImporter from '../components/UrlImporter'
 import StemPlayer from '../components/StemPlayer'
@@ -32,6 +32,8 @@ function Home(): React.JSX.Element {
   const [toasts, setToasts] = useState<Toast[]>([])
   const [error, setError] = useState<string | null>(null)
   const [importMode, setImportMode] = useState<'local' | 'url'>('local')
+  const [showNewSongMenu, setShowNewSongMenu] = useState(false)
+  const newSongMenuRef = useRef<HTMLDivElement>(null)
   const jobQueueRef = useRef<SeparationJob[]>([])
 
   useLayoutEffect(() => {
@@ -117,25 +119,50 @@ function Home(): React.JSX.Element {
     window.api.listSeparationJobs().then(setJobQueue)
   }, [])
 
-  const handleOpenFile = async (): Promise<void> => {
+  // Close new song menu on outside click
+  useEffect(() => {
+    if (!showNewSongMenu) return
+    const handleClick = (e: MouseEvent): void => {
+      if (newSongMenuRef.current && !newSongMenuRef.current.contains(e.target as Node)) {
+        setShowNewSongMenu(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClick)
+    return () => document.removeEventListener('mousedown', handleClick)
+  }, [showNewSongMenu])
+
+  const handleOpenFile = useCallback(async (): Promise<void> => {
     if (!window.api) return
     const path = await window.api.openFileDialog()
     if (!path) return
     const parts = path.split(/[/\\]/)
     setPendingFiles((prev) => [...prev, { name: parts[parts.length - 1], path }])
-  }
+  }, [])
 
-  const handleFilesAdded = (paths: string[]): void => {
+  const handleNewSongLocal = useCallback((): void => {
+    setShowNewSongMenu(false)
+    setCurrentSong(null)
+    setImportMode('local')
+    handleOpenFile()
+  }, [handleOpenFile])
+
+  const handleNewSongUrl = useCallback((): void => {
+    setShowNewSongMenu(false)
+    setCurrentSong(null)
+    setImportMode('url')
+  }, [])
+
+  const handleFilesAdded = useCallback((paths: string[]): void => {
     const newFiles = paths.map((p) => {
       const parts = p.split(/[/\\]/)
       return { name: parts[parts.length - 1], path: p }
     })
     setPendingFiles((prev) => [...prev, ...newFiles])
-  }
+  }, [])
 
-  const handleRemoveFile = (path: string): void => {
+  const handleRemoveFile = useCallback((path: string): void => {
     setPendingFiles((prev) => prev.filter((f) => f.path !== path))
-  }
+  }, [])
 
   const handleProcessAll = async (): Promise<void> => {
     if (!window.api || pendingFiles.length === 0) return
@@ -169,22 +196,22 @@ function Home(): React.JSX.Element {
     addToast(`${files.length} song(s) added to queue`, 'success')
   }
 
-  const handleSelectRecent = (song: RecentSong): void => {
+  const handleSelectRecent = useCallback((song: RecentSong): void => {
     setError(null)
     setCurrentSong({ stems: song.stems, songName: song.name })
-  }
+  }, [])
 
-  const handleUrlImport = (url: string, jobId: string, songName: string): void => {
+  const handleUrlImport = useCallback((url: string, jobId: string, songName: string): void => {
     setJobQueue((prev) => {
       if (prev.some((j) => j.id === jobId)) return prev
       return [...prev, { id: jobId, songPath: url, songName, status: 'queued', progress: 0 }]
     })
-  }
+  }, [])
 
-  const handleCancelJob = async (jobId: string): Promise<void> => {
+  const handleCancelJob = useCallback(async (jobId: string): Promise<void> => {
     if (!window.api) return
     await window.api.cancelSeparation(jobId)
-  }
+  }, [])
 
   const handleDeleteSong = async (song: RecentSong, e: React.MouseEvent): Promise<void> => {
     e.stopPropagation()
@@ -207,12 +234,16 @@ function Home(): React.JSX.Element {
     if (currentSong?.songName === song.name) setCurrentSong(null)
   }
 
-  const queuedJobs = jobQueue.filter(
-    (j) =>
-      j.status === 'queued' ||
-      j.status === 'running' ||
-      j.status === 'failed' ||
-      j.status === 'cancelled'
+  const queuedJobs = useMemo(
+    () =>
+      jobQueue.filter(
+        (j) =>
+          j.status === 'queued' ||
+          j.status === 'running' ||
+          j.status === 'failed' ||
+          j.status === 'cancelled'
+      ),
+    [jobQueue]
   )
 
   return (
@@ -225,12 +256,30 @@ function Home(): React.JSX.Element {
           </h1>
         </div>
 
-        <button
-          onClick={handleOpenFile}
-          className="mx-3 mt-3 px-3 py-2 rounded-lg text-sm font-semibold bg-blue-600 hover:bg-blue-500 text-white transition-colors"
-        >
-          + New Song
-        </button>
+        <div className="mx-3 mt-3 relative" ref={newSongMenuRef}>
+          <button
+            onClick={() => setShowNewSongMenu((prev) => !prev)}
+            className="w-full px-3 py-2 rounded-lg text-sm font-semibold bg-blue-600 hover:bg-blue-500 text-white transition-colors"
+          >
+            + New Song
+          </button>
+          {showNewSongMenu && (
+            <div className="absolute top-full left-0 right-0 mt-1 bg-neutral-800 border border-neutral-700 rounded-lg shadow-lg z-50 overflow-hidden">
+              <button
+                onClick={handleNewSongLocal}
+                className="w-full px-3 py-2 text-left text-sm text-neutral-300 hover:bg-neutral-700 hover:text-white transition-colors"
+              >
+                Local File
+              </button>
+              <button
+                onClick={handleNewSongUrl}
+                className="w-full px-3 py-2 text-left text-sm text-neutral-300 hover:bg-neutral-700 hover:text-white transition-colors border-t border-neutral-700"
+              >
+                From URL
+              </button>
+            </div>
+          )}
+        </div>
 
         {/* Queue */}
         {queuedJobs.length > 0 && (

@@ -1,7 +1,6 @@
 import { memo } from 'react'
 import { Grid } from 'react-window'
 import StemCard from './StemCard'
-import { stemNameFromPath } from '../utils'
 
 interface StemMeta {
   color: string
@@ -14,7 +13,18 @@ interface StemGridItem {
   isRecording: boolean
 }
 
-interface StemGridCellProps {
+interface StemCallbacks {
+  onToggle: () => void
+  onSolo: () => void
+  onExport: () => void
+  onOpenTab: () => void
+  onStartRecording: () => void
+  onVolumeChange: (v: number) => void
+  onPanningChange: (v: number) => void
+  onDeleteRecording: () => void
+}
+
+export interface StemGridCellProps {
   items: StemGridItem[]
   masterPlaying: boolean
   active: Record<string, boolean>
@@ -23,20 +33,11 @@ interface StemGridCellProps {
   exporting: boolean
   recording: string
   recordingKey: string | null
-  recordingElapsed: number
   formatTime: (s: number) => string
   stemVolumes: Record<string, number>
   stemPannings: Record<string, number>
-  onToggleStem: (key: string) => void
-  onToggleSolo: (key: string) => void
-  onExportSingle: (key: string) => void
-  onOpenTab: (key: string) => void
-  onStartRecording: (key: string) => void
+  stemCallbacks: Record<string, StemCallbacks>
   onStopRecording: () => void
-  onDeleteRecording: (path: string) => void
-  onStemVolume: (key: string, value: number) => void
-  onStemPanning: (key: string, value: number) => void
-  allStems: string[]
 }
 
 const ROW_HEIGHT = 200
@@ -60,25 +61,17 @@ function StemGridCell({
     exporting,
     recording,
     recordingKey,
-    recordingElapsed,
     formatTime,
     stemVolumes,
     stemPannings,
-    onToggleStem,
-    onToggleSolo,
-    onExportSingle,
-    onOpenTab,
-    onStartRecording,
-    onStopRecording,
-    onDeleteRecording,
-    onStemVolume,
-    onStemPanning,
-    allStems
+    stemCallbacks,
+    onStopRecording
   } = cellProps
 
   const itemIndex = rowIndex * 2 + columnIndex
   if (itemIndex >= items.length) return null
   const { key, meta, isRecording } = items[itemIndex]
+  const cb = stemCallbacks[key]
   const isAudible = masterPlaying && active[key]
   const isInactive = !active[key] && !masterPlaying
   const canTab = ['guitar', 'bass', 'piano'].includes(key)
@@ -97,24 +90,20 @@ function StemGridCell({
         duration={duration}
         exporting={exporting}
         isRecordingThis={isRecordingThis}
-        recordingElapsed={recordingElapsed}
         canTab={canTab}
         canRecord={canRecord}
         formatTime={formatTime}
         stemVolume={stemVolumes[key] ?? 1}
         stemPanning={stemPannings[key] ?? 0}
-        onToggle={() => onToggleStem(key)}
-        onSolo={() => onToggleSolo(key)}
-        onExport={() => onExportSingle(key)}
-        onOpenTab={() => onOpenTab(key)}
-        onStartRecording={() => onStartRecording(key)}
+        onToggle={cb?.onToggle ?? (() => {})}
+        onSolo={cb?.onSolo ?? (() => {})}
+        onExport={cb?.onExport ?? (() => {})}
+        onOpenTab={cb?.onOpenTab ?? (() => {})}
+        onStartRecording={cb?.onStartRecording ?? (() => {})}
         onStopRecording={onStopRecording}
-        onVolumeChange={(v) => onStemVolume(key, v)}
-        onPanningChange={(v) => onStemPanning(key, v)}
-        onDeleteRecording={() => {
-          const recPath = allStems.find((p) => stemNameFromPath(p) === key)
-          if (recPath) onDeleteRecording(recPath)
-        }}
+        onVolumeChange={cb?.onVolumeChange ?? (() => {})}
+        onPanningChange={cb?.onPanningChange ?? (() => {})}
+        onDeleteRecording={cb?.onDeleteRecording ?? (() => {})}
       >
         <div className="relative h-8">
           <div data-stem-container={key} className="h-8 rounded overflow-hidden cursor-pointer" />

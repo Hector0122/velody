@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback } from 'react'
-import { updateTimeDisplays } from '../utils'
+import { formatTime, updateTimeDisplays } from '../utils'
 
 interface UseRecordingParams {
   audioCtxRef: React.MutableRefObject<AudioContext | null>
@@ -62,6 +62,7 @@ export function useRecording({
   const recordingStartTimeRef = useRef(0)
   const recordingOffsetRef = useRef(0)
   const recordingTimeoutIds = useRef<ReturnType<typeof setTimeout>[]>([])
+  const recordingElapsedRef = useRef(0)
 
   const beginCapture = useCallback(
     (stream: MediaStream): void => {
@@ -77,7 +78,9 @@ export function useRecording({
       mr.onstop = () => {
         const blob = new Blob(recordingChunksRef.current, { type: 'audio/webm' })
         setRecordingBlob(blob)
-        setRecordingElapsed(Math.floor((Date.now() - recordingStartTimeRef.current) / 1000))
+        const elapsed = Math.floor((Date.now() - recordingStartTimeRef.current) / 1000)
+        recordingElapsedRef.current = elapsed
+        setRecordingElapsed(elapsed)
         setRecording('confirming')
       }
 
@@ -86,10 +89,15 @@ export function useRecording({
 
       setRecording('recording')
       setRecordingElapsed(0)
+      recordingElapsedRef.current = 0
 
       recordingTimerRef.current = setInterval(() => {
-        setRecordingElapsed(Math.floor((Date.now() - recordingStartTimeRef.current) / 1000))
-      }, 200)
+        const elapsed = Math.floor((Date.now() - recordingStartTimeRef.current) / 1000)
+        recordingElapsedRef.current = elapsed
+        const els = document.querySelectorAll<HTMLElement>('[data-rec-elapsed]')
+        const str = formatTime(elapsed)
+        for (let i = 0; i < els.length; i++) els[i].textContent = str
+      }, 250)
     },
     [positionRef]
   )

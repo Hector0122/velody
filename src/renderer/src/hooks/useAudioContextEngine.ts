@@ -379,7 +379,8 @@ export function useAudioContextEngine(params: UseAudioContextEngineParams): {
     setMasterPlaying,
     lastScheduledBeatRef,
     allStems,
-    positionRef
+    positionRef,
+    masterPlayingRef
   ])
 
   const handleRestart = useCallback((): void => {

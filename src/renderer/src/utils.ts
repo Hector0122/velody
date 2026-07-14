@@ -34,18 +34,30 @@ export const MASTER_WAVEFORM_HEIGHT = 64
 export const MASTER_MIN_PX_PER_SEC = 20
 export const STEM_WAVEFORM_HEIGHT = 32
 
+let cachedTimeEls: Element[] | null = null
+let cachedCursorEls: HTMLElement[] | null = null
+
+export function invalidateLiveUICache(): void {
+  cachedTimeEls = null
+  cachedCursorEls = null
+}
+
 export function updateTimeDisplays(time: number): void {
+  if (!cachedTimeEls) {
+    cachedTimeEls = Array.from(document.querySelectorAll('[data-live-time]'))
+  }
   const timeStr = formatTime(time)
-  const els = document.querySelectorAll('[data-live-time]')
-  for (let i = 0; i < els.length; i++) {
-    els[i].textContent = timeStr
+  for (let i = 0; i < cachedTimeEls.length; i++) {
+    cachedTimeEls[i].textContent = timeStr
   }
 }
 
 export function updateCursors(time: number, duration: number): void {
+  if (!cachedCursorEls) {
+    cachedCursorEls = Array.from(document.querySelectorAll<HTMLElement>('[data-stem-cursor]'))
+  }
   const pct = duration > 0 ? (time / duration) * 100 : 0
-  const els = document.querySelectorAll<HTMLElement>('[data-stem-cursor]')
-  for (let i = 0; i < els.length; i++) {
-    els[i].style.left = pct + '%'
+  for (let i = 0; i < cachedCursorEls.length; i++) {
+    cachedCursorEls[i].style.left = pct + '%'
   }
 }

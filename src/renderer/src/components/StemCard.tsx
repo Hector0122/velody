@@ -15,7 +15,6 @@ interface StemCardProps {
   duration: number
   exporting: boolean
   isRecordingThis: boolean
-  recordingElapsed: number
   canTab: boolean
   canRecord: boolean
   formatTime: (s: number) => string
@@ -43,7 +42,6 @@ function StemCard({
   duration,
   exporting,
   isRecordingThis,
-  recordingElapsed,
   canTab,
   canRecord,
   formatTime,
@@ -195,7 +193,9 @@ function StemCard({
         <div className="flex items-center justify-between bg-red-900/20 rounded-lg px-3 py-2 -mt-1">
           <div className="flex items-center gap-2">
             <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
-            <span className="text-red-400 text-xs font-mono">{formatTime(recordingElapsed)}</span>
+            <span data-rec-elapsed className="text-red-400 text-xs font-mono">
+              {formatTime(0)}
+            </span>
           </div>
           <button
             onClick={onStopRecording}

@@ -4,9 +4,15 @@ interface UrlImporterProps {
   onImportStarted: (url: string, jobId: string, songName: string) => void
 }
 
+function normalizeUrl(text: string): string {
+  const trimmed = text.trim()
+  if (/^https?:\/\//i.test(trimmed)) return trimmed
+  return `https://${trimmed}`
+}
+
 function isValidUrl(text: string): boolean {
   try {
-    const url = new URL(text)
+    const url = new URL(normalizeUrl(text))
     return url.protocol === 'http:' || url.protocol === 'https:'
   } catch {
     return false
@@ -34,7 +40,7 @@ function UrlImporter({ onImportStarted }: UrlImporterProps): React.JSX.Element {
     })
 
     try {
-      const result = await window.api.importFromUrl(url)
+      const result = await window.api.importFromUrl(normalizeUrl(url))
       onImportStarted(url, result.jobId, result.songName)
       setUrl('')
       setStatus('idle')
