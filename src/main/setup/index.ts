@@ -102,6 +102,11 @@ export class SetupManager {
   private progressCallback: ProgressCallback | null = null
   private readonly simMode: boolean
   private compatiblePythonPath: string | null = null
+  // Only ever set to `true` (never cache a negative/partial result) once a full
+  // readiness check has passed, so a fixable failure is always re-checked on the
+  // next query. Reset to `null` at the start of `run()` so a fresh setup pass
+  // re-verifies from scratch.
+  private cachedReady: boolean | null = null
 
   constructor(simMode = false) {
     this.simMode = simMode
@@ -121,6 +126,7 @@ export class SetupManager {
   }
 
   async run(): Promise<void> {
+    this.cachedReady = null
     if (this.simMode) {
       for (const step of STEPS) {
         this.emit(step, 100, 'done', 'Simulation mode — skipping checks')
@@ -170,6 +176,7 @@ export class SetupManager {
 
   async isSetupComplete(): Promise<boolean> {
     if (this.simMode) return true
+    if (this.cachedReady) return true
     for (const s of STEPS) {
       if (s === 'python') {
         if (!(await this.checkPython())) return false
@@ -177,6 +184,7 @@ export class SetupManager {
         if (!(await this.check(s))) return false
       }
     }
+    this.cachedReady = true
     return true
   }
 
@@ -203,12 +211,15 @@ export class SetupManager {
   }
 
   private async checkPython(): Promise<boolean> {
-    // Try compatible Python versions on PATH
-    for (const ver of COMPATIBLE_PYTHON_VERSIONS) {
-      const name = isWin ? 'python' : `python${ver}`
-      const actualVersion = await this.parsePythonVersion(name)
+    // Try compatible Python versions on PATH concurrently, then pick the first
+    // match in COMPATIBLE_PYTHON_VERSIONS precedence order (same precedence as
+    // the previous sequential loop, just not gated on each probe's latency).
+    const names = COMPATIBLE_PYTHON_VERSIONS.map((ver) => (isWin ? 'python' : `python${ver}`))
+    const versions = await Promise.all(names.map((name) => this.parsePythonVersion(name)))
+    for (let i = 0; i < names.length; i++) {
+      const actualVersion = versions[i]
       if (actualVersion && COMPATIBLE_PYTHON_VERSIONS.includes(actualVersion)) {
-        this.compatiblePythonPath = name
+        this.compatiblePythonPath = names[i]
         return true
       }
     }
@@ -239,10 +250,11 @@ export class SetupManager {
 
   private async checkDemucs(): Promise<boolean> {
     const python = this.getPythonPath()
-    for (const pkg of ['demucs', 'torch', 'torchaudio', 'tempocnn', 'librosa', 'yt-dlp']) {
-      if (!(await this.tryCmd(`${python} -m pip show ${pkg}`))) return false
-    }
-    return true
+    const pkgs = ['demucs', 'torch', 'torchaudio', 'tempocnn', 'librosa', 'yt-dlp']
+    const results = await Promise.all(
+      pkgs.map((pkg) => this.tryCmd(`${python} -m pip show ${pkg}`))
+    )
+    return results.every(Boolean)
   }
 
   private isVenvCompatible(): Promise<boolean> {
