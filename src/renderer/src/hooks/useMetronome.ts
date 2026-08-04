@@ -150,7 +150,9 @@ export function useMetronome(
 
     const t = positionRef.current
     const currentBpm = bpmRef.current
-    const beatTimes = beatTimesRef.current
+    // Defensive fallback in case anything ever hands this ref a non-array
+    // (e.g. a stale caller) — degrade to constant-tempo rather than throw.
+    const beatTimes = Array.isArray(beatTimesRef.current) ? beatTimesRef.current : []
     // The detected grid corresponds to the originally detected tempo; once
     // the user asks for a different BPM, the grid's timings no longer match
     // what's displayed, so fall back to constant-tempo at the chosen BPM.

@@ -54,14 +54,19 @@ export default function useSongAnalysis(
         const firstStem = stems[0]
         const result = await window.api.detectBpm(firstStem)
         if (result) {
+          // Defensive: guard against a stale/mismatched main process (e.g. a
+          // dev session not yet restarted after this field was added) still
+          // returning a result without beatTimes — fall back to [] rather
+          // than crash the scheduler on `beatTimes.length`.
+          const beatTimes = Array.isArray(result.beatTimes) ? result.beatTimes : []
           originalBpmRef.current = result.bpm
           firstBeatOffsetRef.current = result.firstBeatOffset
-          beatTimesRef.current = result.beatTimes
+          beatTimesRef.current = beatTimes
           setBpm(result.bpm)
           window.api.saveMeta(songDir, {
             bpm: result.bpm,
             firstBeatOffset: result.firstBeatOffset,
-            beatTimes: result.beatTimes,
+            beatTimes,
             _version: CACHE_VERSION
           })
         }
