@@ -97,7 +97,9 @@ export interface VelodyAPI {
   onSetupProgress: (callback: (progress: SetupProgress) => void) => void
   saveMeta: (songDir: string, meta: Record<string, unknown>) => Promise<{ success: boolean }>
   loadMeta: (songDir: string) => Promise<Record<string, unknown> | null>
-  detectBpm: (stemPath: string) => Promise<{ bpm: number; firstBeatOffset: number } | null>
+  detectBpm: (
+    stemPath: string
+  ) => Promise<{ bpm: number; firstBeatOffset: number; beatTimes: number[] } | null>
   openExternal: (url: string) => Promise<void>
   deleteFile: (filePath: string) => Promise<{ success: boolean; error?: string }>
   importFromUrl: (url: string) => Promise<{ jobId: string; songName: string }>

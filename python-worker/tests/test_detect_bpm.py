@@ -107,10 +107,16 @@ class TestDetectBpm:
         data = json.loads(result.stdout.strip())
         assert 'bpm' in data
         assert 'firstBeatOffset' in data
+        assert 'beatTimes' in data
         assert isinstance(data['bpm'], (int, float))
         assert isinstance(data['firstBeatOffset'], (int, float))
+        assert isinstance(data['beatTimes'], list)
         assert 40 <= data['bpm'] <= 300
         assert data['firstBeatOffset'] >= 0
+        if data['beatTimes']:
+            assert all(isinstance(t, (int, float)) for t in data['beatTimes'])
+            assert data['beatTimes'] == sorted(data['beatTimes'])
+            assert data['beatTimes'][0] == data['firstBeatOffset']
 
     @pytest.mark.skipif(not HAS_LIBROSA, reason='librosa not installed')
     def test_first_beat_offset_is_non_negative(self):

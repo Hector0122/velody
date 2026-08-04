@@ -9,7 +9,13 @@ import crypto from 'crypto'
 import { SetupManager } from '../setup'
 import { JobManager } from '../jobs/JobManager'
 
-let bpmDetectionRunning: Promise<{ bpm: number; firstBeatOffset: number } | null> | null = null
+interface BpmDetectionResult {
+  bpm: number
+  firstBeatOffset: number
+  beatTimes: number[]
+}
+
+let bpmDetectionRunning: Promise<BpmDetectionResult | null> | null = null
 
 const STEM_NAMES = ['vocals', 'drums', 'bass', 'other', 'piano', 'guitar']
 
@@ -141,10 +147,10 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle(
     'song:detectBpm',
-    async (_event, stemPath: string): Promise<{ bpm: number; firstBeatOffset: number } | null> => {
+    async (_event, stemPath: string): Promise<BpmDetectionResult | null> => {
       if (bpmDetectionRunning) return bpmDetectionRunning
 
-      bpmDetectionRunning = (async (): Promise<{ bpm: number; firstBeatOffset: number } | null> => {
+      bpmDetectionRunning = (async (): Promise<BpmDetectionResult | null> => {
         const pythonPath = setupManager?.getPythonPath() ?? 'python3'
         const scriptPath = join(getPythonWorkerDir(), 'detect_bpm.py')
         const ffmpegPath = setupManager?.getFfmpegPath() ?? 'ffmpeg'
@@ -165,7 +171,10 @@ export function registerIpcHandlers(): void {
             typeof parsed.bpm === 'number' &&
             typeof parsed.firstBeatOffset === 'number'
           ) {
-            return { bpm: parsed.bpm, firstBeatOffset: parsed.firstBeatOffset }
+            // beatTimes is new; default to [] so an older script build (or any
+            // unexpected shape) degrades to "no grid" rather than breaking.
+            const beatTimes = Array.isArray(parsed.beatTimes) ? parsed.beatTimes : []
+            return { bpm: parsed.bpm, firstBeatOffset: parsed.firstBeatOffset, beatTimes }
           }
           return null
         } catch (err) {

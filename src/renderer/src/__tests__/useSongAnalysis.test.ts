@@ -8,7 +8,7 @@ function stubApi(overrides: Partial<VelodyAPI> = {}): VelodyAPI {
   const api = {
     loadMeta: vi.fn(async () => null),
     saveMeta: vi.fn(async () => ({ success: true })),
-    detectBpm: vi.fn(async () => ({ bpm: 128, firstBeatOffset: 0.42 })),
+    detectBpm: vi.fn(async () => ({ bpm: 128, firstBeatOffset: 0.42, beatTimes: [0.42, 0.9] })),
     ...overrides
   } as unknown as VelodyAPI
   window.api = api
@@ -39,6 +39,7 @@ describe('useSongAnalysis - cached first-beat offset', () => {
     expect(api.saveMeta).toHaveBeenCalledWith('/song', {
       bpm: 128,
       firstBeatOffset: 0.42,
+      beatTimes: [0.42, 0.9],
       _version: CACHE_VERSION
     })
   })
@@ -70,7 +71,7 @@ describe('useSongAnalysis - cached first-beat offset', () => {
     const api = stubApi({
       // Old-shaped cache: only bpm + a stale _version, no firstBeatOffset.
       loadMeta: vi.fn(async () => ({ bpm: 100, _version: CACHE_VERSION - 1 })),
-      detectBpm: vi.fn(async () => ({ bpm: 130, firstBeatOffset: 0.55 }))
+      detectBpm: vi.fn(async () => ({ bpm: 130, firstBeatOffset: 0.55, beatTimes: [0.55, 1.02] }))
     })
     const setBpm = vi.fn()
     const firstBeatOffsetRef = { current: 0 }

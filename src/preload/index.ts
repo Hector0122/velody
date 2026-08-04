@@ -126,6 +126,7 @@ const api = {
     ipcRenderer.invoke('song:detectBpm', stemPath) as Promise<{
       bpm: number
       firstBeatOffset: number
+      beatTimes: number[]
     } | null>,
   openExternal: (url: string) => ipcRenderer.invoke('shell:openExternal', url),
   deleteFile: (filePath: string) => ipcRenderer.invoke('file:delete', filePath),

@@ -1,20 +1,20 @@
 ## 1. Python: return the full beat grid
 
-- [ ] 1.1 In `detect_bpm.py`'s librosa branch, convert all of `beat_frames` (not just index 0) to times via `librosa.frames_to_time(beat_frames, sr=sr)`, round each to 4 decimals, and include as `beatTimes: [...]` in the returned dict. Keep `firstBeatOffset` as `beatTimes[0]` (or `0.0` if empty) for backward compatibility with existing consumers.
-- [ ] 1.2 In the no-librosa fallback branch, include `beatTimes: []`.
-- [ ] 1.3 Extend `python-worker/tests/test_detect_bpm.py`'s `test_returns_bpm_and_offset` (and/or add a new test) to assert `beatTimes` is present, is a list of numbers, and — when non-empty — is sorted ascending and its first element equals `firstBeatOffset`.
+- [x] 1.1 In `detect_bpm.py`'s librosa branch, convert all of `beat_frames` (not just index 0) to times via `librosa.frames_to_time(beat_frames, sr=sr)`, round each to 4 decimals, and include as `beatTimes: [...]` in the returned dict. Keep `firstBeatOffset` as `beatTimes[0]` (or `0.0` if empty) for backward compatibility with existing consumers.
+- [x] 1.2 In the no-librosa fallback branch, include `beatTimes: []`.
+- [x] 1.3 Extend `python-worker/tests/test_detect_bpm.py`'s `test_returns_bpm_and_offset` (and/or add a new test) to assert `beatTimes` is present, is a list of numbers, and — when non-empty — is sorted ascending and its first element equals `firstBeatOffset`.
 
 ## 2. IPC / types plumbing
 
-- [ ] 2.1 Update `song:detectBpm`'s handler in `src/main/ipc/handlers.ts` to parse and return `beatTimes` from the Python script's JSON output, defaulting to `[]` if missing or not an array (forward/backward compatibility per design.md's Risks section).
-- [ ] 2.2 Update the `detectBpm` return type in `src/preload/index.ts`/`src/shared/types.ts` to include `beatTimes: number[]`.
+- [x] 2.1 Update `song:detectBpm`'s handler in `src/main/ipc/handlers.ts` to parse and return `beatTimes` from the Python script's JSON output, defaulting to `[]` if missing or not an array (forward/backward compatibility per design.md's Risks section).
+- [x] 2.2 Update the `detectBpm` return type in `src/preload/index.ts`/`src/shared/types.ts` to include `beatTimes: number[]`.
 
 ## 3. Cache beatTimes alongside bpm/firstBeatOffset
 
-- [ ] 3.1 In `useSongAnalysis.ts`, bump `CACHE_VERSION` again (building on `fix-cached-metronome-beat-offset`'s bump).
-- [ ] 3.2 Persist `beatTimes` in the `saveMeta` call alongside `bpm`/`firstBeatOffset`.
-- [ ] 3.3 On a cache hit, populate a new `beatTimesRef` (returned from `useSongAnalysis`, mirroring `firstBeatOffsetRef`) from the cached value; default to `[]` if absent.
-- [ ] 3.4 Expose `originalBpmRef` (already computed in `useSongAnalysis`) as-is for `useMetronome` to compare against the live `bpm` state (per design.md's manual-override decision).
+- [x] 3.1 In `useSongAnalysis.ts`, bump `CACHE_VERSION` again (building on `fix-cached-metronome-beat-offset`'s bump).
+- [x] 3.2 Persist `beatTimes` in the `saveMeta` call alongside `bpm`/`firstBeatOffset`.
+- [x] 3.3 On a cache hit, populate a new `beatTimesRef` (returned from `useSongAnalysis`, mirroring `firstBeatOffsetRef`) from the cached value; default to `[]` if absent.
+- [x] 3.4 Expose `originalBpmRef` (already computed in `useSongAnalysis`) as-is for `useMetronome` to compare against the live `bpm` state (per design.md's manual-override decision).
 
 ## 4. Metronome scheduling
 

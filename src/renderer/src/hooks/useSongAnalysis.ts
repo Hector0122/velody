@@ -1,13 +1,15 @@
 import { useEffect, useRef } from 'react'
 
-// Bumped from 16: older caches never stored firstBeatOffset, so they must be
-// treated as stale rather than silently reused with an incorrect offset.
-const CACHE_VERSION = 17
+// Bumped from 17: older caches never stored the detected beat-time grid, so
+// they must be treated as stale rather than silently falling back to
+// constant-tempo scheduling for songs whose grid was already detected once.
+const CACHE_VERSION = 18
 export { CACHE_VERSION }
 
 export interface SongAnalysis {
   originalBpmRef: React.MutableRefObject<number>
   firstBeatOffsetRef: React.MutableRefObject<number>
+  beatTimesRef: React.MutableRefObject<number[]>
 }
 
 export default function useSongAnalysis(
@@ -17,6 +19,7 @@ export default function useSongAnalysis(
   firstBeatOffsetRef: React.MutableRefObject<number>
 ): SongAnalysis {
   const originalBpmRef = useRef(120)
+  const beatTimesRef = useRef<number[]>([])
   const detectedRef = useRef(false)
 
   useEffect(() => {
@@ -32,6 +35,7 @@ export default function useSongAnalysis(
       const cached = (await window.api.loadMeta(songDir)) as {
         bpm?: number
         firstBeatOffset?: number
+        beatTimes?: number[]
         _version?: number
       } | null
       if (
@@ -42,6 +46,7 @@ export default function useSongAnalysis(
       ) {
         originalBpmRef.current = cached.bpm
         firstBeatOffsetRef.current = cached.firstBeatOffset
+        beatTimesRef.current = Array.isArray(cached.beatTimes) ? cached.beatTimes : []
         setBpm(cached.bpm)
         return
       }
@@ -52,10 +57,12 @@ export default function useSongAnalysis(
         if (result) {
           originalBpmRef.current = result.bpm
           firstBeatOffsetRef.current = result.firstBeatOffset
+          beatTimesRef.current = result.beatTimes
           setBpm(result.bpm)
           window.api.saveMeta(songDir, {
             bpm: result.bpm,
             firstBeatOffset: result.firstBeatOffset,
+            beatTimes: result.beatTimes,
             _version: CACHE_VERSION
           })
         }
@@ -65,5 +72,5 @@ export default function useSongAnalysis(
     })()
   }, [urls, stems, setBpm, firstBeatOffsetRef])
 
-  return { originalBpmRef, firstBeatOffsetRef }
+  return { originalBpmRef, firstBeatOffsetRef, beatTimesRef }
 }
