@@ -62,26 +62,37 @@ export interface SongItem {
   stems: string[]
 }
 
-export function registerIpcHandlers(): void {
-  ipcMain.handle('shell:openExternal', (_event, url: string) => shell.openExternal(url))
-
-  ipcMain.handle('songs:list', async (): Promise<SongItem[]> => {
-    const root = getStemsRootDir()
-    if (!(await fileExists(root))) return []
-    const entries = await readdir(root)
-    const result: SongItem[] = []
-    for (const entry of entries) {
+// Extracted from the IPC handler so it's directly unit-testable without
+// mocking Electron's ipcMain — the handler below is a thin wrapper over this.
+export async function scanSongsLibrary(root: string): Promise<SongItem[]> {
+  if (!(await fileExists(root))) return []
+  const entries = await readdir(root)
+  // Each entry's stat+readdir is independent of every other entry's, so scan
+  // them concurrently instead of one at a time — total time is then bounded
+  // by the slowest single directory rather than the sum of all of them.
+  const scanned = await Promise.all(
+    entries.map(async (entry): Promise<SongItem | null> => {
       const dir = join(root, entry)
       const st = await stat(dir)
-      if (!st.isDirectory()) continue
+      if (!st.isDirectory()) return null
       const files = await readdir(dir)
       const stems = files
         .filter((f) => STEM_NAMES.some((s) => f.startsWith(s)))
         .map((f) => join(dir, f))
-      if (stems.length > 0) result.push({ name: entry, stems })
-    }
-    result.sort((a, b) => b.name.localeCompare(a.name))
-    return result
+      if (stems.length === 0) return null
+      return { name: entry, stems }
+    })
+  )
+  const result = scanned.filter((item): item is SongItem => item !== null)
+  result.sort((a, b) => b.name.localeCompare(a.name))
+  return result
+}
+
+export function registerIpcHandlers(): void {
+  ipcMain.handle('shell:openExternal', (_event, url: string) => shell.openExternal(url))
+
+  ipcMain.handle('songs:list', async (): Promise<SongItem[]> => {
+    return scanSongsLibrary(getStemsRootDir())
   })
 
   ipcMain.handle('dialog:openFile', async () => {
