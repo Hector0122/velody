@@ -47,6 +47,10 @@ interface UseAudioContextEngineParams {
   stemWaves: React.MutableRefObject<Record<string, WaveSurfer>>
   waveUrlsRef: React.MutableRefObject<Record<string, string>>
   mediaStreamRef: React.MutableRefObject<MediaStream | null>
+  // Written by useWaveSurfers (mirrors the seekRef pattern) so decodeStems can
+  // notify the waveform renderer as each stem finishes decoding, without the
+  // two hooks depending on each other's return values directly.
+  notifyStemDecodedRef: React.MutableRefObject<(key: string) => void>
 }
 
 export function useAudioContextEngine(params: UseAudioContextEngineParams): {
@@ -60,6 +64,7 @@ export function useAudioContextEngine(params: UseAudioContextEngineParams): {
   handleStemPanning: (key: string, value: number) => void
   seek: (time: number) => void
   audioCtxRef: React.MutableRefObject<AudioContext | null>
+  getDecodedBuffer: (key: string) => AudioBuffer | undefined
 } {
   const {
     allStems,
@@ -92,7 +97,8 @@ export function useAudioContextEngine(params: UseAudioContextEngineParams): {
     ensureWaveSurfer,
     stemWaves,
     waveUrlsRef,
-    mediaStreamRef
+    mediaStreamRef,
+    notifyStemDecodedRef
   } = params
 
   const audioCtxRef = useRef<AudioContext | null>(null)
@@ -158,6 +164,72 @@ export function useAudioContextEngine(params: UseAudioContextEngineParams): {
     panNodesRef.current[key] = pan
   }, [])
 
+  const getDecodedBuffer = useCallback(
+    (key: string): AudioBuffer | undefined => buffersRef.current[key],
+    []
+  )
+
+  // Creates and starts a live source for one stem at `position` (seconds into
+  // the buffer). Always calls `source.start()`, even when the stem is
+  // currently muted (gain 0) — muting only ever sets gain to 0 afterwards, it
+  // never stops/recreates the source (see CLAUDE.md). A source that is never
+  // started can't be un-muted later by ramping its gain back up, which is
+  // what made a stem stay silent after its first mute/unmute cycle: if it
+  // wasn't part of the initial active set (or wasn't decoded yet) when
+  // playback began, it either got a dormant, never-started source or no
+  // source at all.
+  const startSourceForKey = useCallback(
+    (key: string, buffer: AudioBuffer, position: number): void => {
+      const ctx = audioCtxRef.current
+      if (!ctx) return
+      ensureNodes(key)
+      const source = ctx.createBufferSource()
+      source.buffer = buffer
+      source.connect(gainNodesRef.current[key])
+
+      const gain = computeGain(key)
+      gainNodesRef.current[key].gain.setValueAtTime(gain, ctx.currentTime)
+
+      source.start(0, Math.max(0, position))
+      sourcesRef.current[key] = source
+    },
+    [computeGain, ensureNodes]
+  )
+
+  const startSources = useCallback(
+    (position: number): void => {
+      const ctx = audioCtxRef.current
+      if (!ctx) return
+
+      startTimeRef.current = ctx.currentTime
+      startRef.current = position
+      positionRef.current = position
+
+      for (const [key, buffer] of Object.entries(buffersRef.current)) {
+        if (!buffer) continue
+        startSourceForKey(key, buffer, position)
+      }
+
+      isPlayingRef.current = true
+    },
+    [startSourceForKey, positionRef]
+  )
+
+  // A stem that finishes decoding after playback has already started never
+  // gets picked up by `startSources` (it already ran without this stem's
+  // buffer). Join it into the currently playing mix now, at the correct
+  // elapsed position, instead of leaving it silent until the next seek/loop/
+  // restart recreates all sources from scratch.
+  const joinLateDecodedStem = useCallback(
+    (key: string, buffer: AudioBuffer): void => {
+      const ctx = audioCtxRef.current
+      if (!ctx || !isPlayingRef.current || sourcesRef.current[key]) return
+      const position = startRef.current + (ctx.currentTime - startTimeRef.current)
+      startSourceForKey(key, buffer, position)
+    },
+    [startSourceForKey]
+  )
+
   const decodeStems = useCallback(async (): Promise<void> => {
     const ctx = ensureCtx()
     await Promise.all(
@@ -172,12 +244,19 @@ export function useAudioContextEngine(params: UseAudioContextEngineParams): {
           const audioBuf = await ctx.decodeAudioData(buf)
           buffersRef.current[key] = audioBuf
           ensureNodes(key)
+          joinLateDecodedStem(key, audioBuf)
         } catch (err) {
           console.error('[audioEngine] decode failed for', key, err)
+        } finally {
+          // Notify the waveform renderer regardless of outcome: on success it
+          // can switch from a pending state to the decoded buffer; on failure
+          // it still needs the signal to fall back to its own independent
+          // fetch+decode instead of staying blank forever (see useWaveSurfers).
+          notifyStemDecodedRef.current(key)
         }
       })
     )
-  }, [allStems, urls, ensureCtx, ensureNodes])
+  }, [allStems, urls, ensureCtx, ensureNodes, joinLateDecodedStem, notifyStemDecodedRef])
 
   useEffect(() => {
     decodeStems()
@@ -193,36 +272,6 @@ export function useAudioContextEngine(params: UseAudioContextEngineParams): {
     }
     sourcesRef.current = {}
   }, [])
-
-  const startSources = useCallback(
-    (position: number): void => {
-      const ctx = audioCtxRef.current
-      if (!ctx) return
-
-      startTimeRef.current = ctx.currentTime
-      startRef.current = position
-      positionRef.current = position
-
-      for (const [key, buffer] of Object.entries(buffersRef.current)) {
-        if (!buffer) continue
-        ensureNodes(key)
-        const source = ctx.createBufferSource()
-        source.buffer = buffer
-        source.connect(gainNodesRef.current[key])
-
-        const gain = computeGain(key)
-        gainNodesRef.current[key].gain.setValueAtTime(gain, ctx.currentTime)
-
-        if (gain > 0) {
-          source.start(0, position)
-        }
-        sourcesRef.current[key] = source
-      }
-
-      isPlayingRef.current = true
-    },
-    [computeGain, ensureNodes, positionRef]
-  )
 
   const seek = useCallback(
     (time: number): void => {
@@ -491,6 +540,7 @@ export function useAudioContextEngine(params: UseAudioContextEngineParams): {
     handleStemVolume,
     handleStemPanning,
     seek,
-    audioCtxRef
+    audioCtxRef,
+    getDecodedBuffer
   }
 }

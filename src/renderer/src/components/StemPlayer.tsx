@@ -64,6 +64,11 @@ function StemPlayer({ stems, songName }: StemPlayerProps): React.JSX.Element {
   const onAudioTimeRef = useRef<(time: number) => void>(() => {})
   const lastScheduledBeatRef = useRef(-1)
   const seekRef = useRef<(time: number) => void>(() => {})
+  // Break the useWaveSurfers <-> useAudioContextEngine circular dependency the
+  // same way seekRef does: a stable ref box owned by StemPlayer, written by one
+  // hook's return value and read by the other's params (see design.md - Ordering).
+  const getDecodedBufferRef = useRef<(key: string) => AudioBuffer | undefined>(() => undefined)
+  const notifyStemDecodedRef = useRef<(key: string) => void>(() => {})
 
   const masterPlayingRef = useRef(masterPlaying)
   const durationRef = useRef(0)
@@ -136,7 +141,8 @@ function StemPlayer({ stems, songName }: StemPlayerProps): React.JSX.Element {
     masterWaveDuration,
     duration,
     ensureWaveSurfer,
-    seekMasterFraction
+    seekMasterFraction,
+    handleStemDecoded
   } = useWaveSurfers({
     stemItems,
     urls,
@@ -148,7 +154,12 @@ function StemPlayer({ stems, songName }: StemPlayerProps): React.JSX.Element {
     onMasterDblClick: (time) => {
       setPendingMarkerTime(time)
       setShowMarkerInput(true)
-    }
+    },
+    getDecodedBufferRef
+  })
+
+  useLayoutEffect(() => {
+    notifyStemDecodedRef.current = handleStemDecoded
   })
 
   const {
@@ -161,7 +172,8 @@ function StemPlayer({ stems, songName }: StemPlayerProps): React.JSX.Element {
     handleStemVolume,
     handleStemPanning,
     seek,
-    audioCtxRef
+    audioCtxRef,
+    getDecodedBuffer
   } = useAudioContextEngine({
     allStems,
     urls,
@@ -193,11 +205,16 @@ function StemPlayer({ stems, songName }: StemPlayerProps): React.JSX.Element {
     ensureWaveSurfer,
     stemWaves,
     waveUrlsRef,
-    mediaStreamRef
+    mediaStreamRef,
+    notifyStemDecodedRef
   })
 
   useLayoutEffect(() => {
     seekRef.current = seek
+  })
+
+  useLayoutEffect(() => {
+    getDecodedBufferRef.current = getDecodedBuffer
   })
 
   const onAudioTime = useCallback(
