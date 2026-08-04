@@ -332,11 +332,27 @@ export function useAudioContextEngine(params: UseAudioContextEngineParams): {
   useEffect(() => {
     let cancelled = false
     const load = async (): Promise<void> => {
-      if (!window.api) return
+      const api = window.api
+      if (!api) return
+      // Resolve every stem's url concurrently — each getAudioUrl call is an
+      // independent IPC round-trip, so there's no reason to wait for one
+      // stem's url before requesting the next. A single stem's resolution
+      // failing (allSettled, not all) doesn't drop the others.
+      const entries = await Promise.allSettled(
+        allStems.map(async (stem) => {
+          const key = stemNameFromPath(stem)
+          const url = await api.getAudioUrl(stem)
+          return [key, url] as const
+        })
+      )
       const result: Record<string, string> = {}
-      for (const stem of allStems) {
-        const key = stemNameFromPath(stem)
-        result[key] = await window.api.getAudioUrl(stem)
+      for (const entry of entries) {
+        if (entry.status === 'fulfilled') {
+          const [key, url] = entry.value
+          result[key] = url
+        } else {
+          console.error('[audioEngine] failed to resolve stem url', entry.reason)
+        }
       }
       if (!cancelled) setUrls(result)
     }

@@ -25,6 +25,6 @@
 
 ## 5. Manual verification
 
-- [ ] 5.1 Run `pnpm dev`, open a song with multiple stems, and confirm waveforms render correctly and playback/scrubbing/looping behave identically to before.
+- [x] 5.1 Run `pnpm dev`, open a song with multiple stems, and confirm waveforms render correctly and playback/scrubbing/looping behave identically to before.
 - [ ] 5.2 Using browser devtools network/performance panels, confirm each stem's audio file is fetched once (not twice) and `decodeAudioData`-equivalent work happens once per stem when opening a song.
 - [ ] 5.3 Record over a stem and delete a recorded stem; confirm waveform cleanup still works as before.

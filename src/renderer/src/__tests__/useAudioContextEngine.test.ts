@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { renderHook, act, waitFor } from '@testing-library/react'
 import { useAudioContextEngine } from '../hooks/useAudioContextEngine'
+import type { VelodyAPI } from '../../../shared/types'
 
 // Minimal fake AudioContext: jsdom doesn't implement the Web Audio API, and
 // these tests only need decodeAudioData + the handful of node-creation calls
@@ -250,5 +251,50 @@ describe('useAudioContextEngine - source lifecycle (mute-at-start / late decode)
     await waitFor(() => expect(notifyStemDecodedRef.current).toHaveBeenCalledWith('drums'))
     // 'drums' joined the already-playing mix without needing a restart/seek.
     expect(createdSources).toHaveLength(2)
+  })
+})
+
+describe('useAudioContextEngine - stem url resolution', () => {
+  afterEach(() => {
+    delete (window as { api?: VelodyAPI }).api
+  })
+
+  it('resolves all stem urls concurrently, not sequentially', async () => {
+    const getAudioUrl = vi.fn(
+      () =>
+        new Promise<string>(() => {
+          /* never resolves — proves every call fired without waiting on the previous one */
+        })
+    )
+    window.api = { getAudioUrl } as unknown as VelodyAPI
+
+    const params = buildParams({
+      allStems: ['/song/vocals.wav', '/song/drums.wav', '/song/bass.wav']
+    })
+    renderHook(() => useAudioContextEngine(params))
+
+    await waitFor(() => expect(getAudioUrl).toHaveBeenCalledTimes(3))
+  })
+
+  it('keeps successfully resolved stem urls when another stem fails to resolve', async () => {
+    const getAudioUrl = vi.fn((filePath: string) =>
+      filePath.includes('drums')
+        ? Promise.reject(new Error('boom'))
+        : Promise.resolve(`http://127.0.0.1:1234${filePath}`)
+    )
+    window.api = { getAudioUrl } as unknown as VelodyAPI
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    const setUrls = vi.fn()
+    const params = buildParams({
+      setUrls,
+      allStems: ['/song/vocals.wav', '/song/drums.wav']
+    })
+    renderHook(() => useAudioContextEngine(params))
+
+    await waitFor(() => expect(setUrls).toHaveBeenCalled())
+    expect(setUrls).toHaveBeenCalledWith({ vocals: 'http://127.0.0.1:1234/song/vocals.wav' })
+
+    errorSpy.mockRestore()
   })
 })
