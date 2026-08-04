@@ -1,6 +1,8 @@
 import { useEffect, useRef } from 'react'
 
-const CACHE_VERSION = 16
+// Bumped from 16: older caches never stored firstBeatOffset, so they must be
+// treated as stale rather than silently reused with an incorrect offset.
+const CACHE_VERSION = 17
 export { CACHE_VERSION }
 
 export interface SongAnalysis {
@@ -29,11 +31,17 @@ export default function useSongAnalysis(
       const songDir = stems[0].replace(/[/\\][^/\\]+$/, '')
       const cached = (await window.api.loadMeta(songDir)) as {
         bpm?: number
+        firstBeatOffset?: number
         _version?: number
       } | null
-      if (cached && cached.bpm && cached._version === CACHE_VERSION) {
+      if (
+        cached &&
+        cached.bpm &&
+        typeof cached.firstBeatOffset === 'number' &&
+        cached._version === CACHE_VERSION
+      ) {
         originalBpmRef.current = cached.bpm
-        firstBeatOffsetRef.current = 0
+        firstBeatOffsetRef.current = cached.firstBeatOffset
         setBpm(cached.bpm)
         return
       }
@@ -45,7 +53,11 @@ export default function useSongAnalysis(
           originalBpmRef.current = result.bpm
           firstBeatOffsetRef.current = result.firstBeatOffset
           setBpm(result.bpm)
-          window.api.saveMeta(songDir, { bpm: result.bpm, _version: CACHE_VERSION })
+          window.api.saveMeta(songDir, {
+            bpm: result.bpm,
+            firstBeatOffset: result.firstBeatOffset,
+            _version: CACHE_VERSION
+          })
         }
       } catch {
         /* detection failed — do NOT cache fallback */
