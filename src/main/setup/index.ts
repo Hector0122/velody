@@ -349,13 +349,23 @@ export class SetupManager {
     return ok
   }
 
+  // `nvidia-smi -L` succeeds iff NVIDIA drivers (and thus a usable GPU) are
+  // present — it ships with any NVIDIA driver install, no extra dependency.
+  private hasNvidiaGpu(): Promise<boolean> {
+    return this.tryCmd('nvidia-smi -L')
+  }
+
   private async installDemucs(): Promise<boolean> {
     const pip = existsSync(VENV_PIP) ? VENV_PIP : this.getPythonPath()
     const pkgs = ['demucs', 'torch', 'torchaudio', 'tempocnn', 'librosa', 'yt-dlp']
     const args = existsSync(VENV_PIP)
       ? ['install', '--upgrade', ...pkgs]
       : ['-m', 'pip', 'install', '--upgrade', ...pkgs]
-    if (isWin) {
+    // On Windows, only force the CPU-only PyTorch wheel when there's no NVIDIA
+    // GPU to use — otherwise this would silently disable Demucs' own CUDA
+    // auto-detection ("device default is cuda if available else cpu") for
+    // every GPU owner, forcing everyone onto the much slower CPU path.
+    if (isWin && !(await this.hasNvidiaGpu())) {
       args.push('--extra-index-url', 'https://download.pytorch.org/whl/cpu')
     }
     const { ok, stderr } = await this.spawnAsync(pip, args, 'demucs', 900_000)

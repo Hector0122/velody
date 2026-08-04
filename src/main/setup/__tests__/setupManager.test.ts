@@ -1,13 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { EventEmitter } from 'events'
 
 // SetupManager talks to the system via `child_process.execFile` (version probes,
 // `pip show`, ffmpeg/venv checks) and `fs.existsSync` (locating the venv/ffmpeg
 // binaries). Mock both so readiness checks are deterministic and we can assert
 // on how many/which subprocesses were spawned.
 const execFileMock = vi.fn()
+const spawnMock = vi.fn()
 vi.mock('child_process', () => ({
   execFile: (...args: unknown[]) => (execFileMock as (...a: unknown[]) => void)(...args),
-  spawn: vi.fn()
+  spawn: (...args: unknown[]) => (spawnMock as (...a: unknown[]) => unknown)(...args)
 }))
 
 const existsSyncMock = vi.fn()
@@ -124,5 +126,56 @@ describe('SetupManager verification concurrency', () => {
 
     // demucs, torch, torchaudio, tempocnn, librosa, yt-dlp
     expect(execFileMock).toHaveBeenCalledTimes(6)
+  })
+})
+
+function mockSpawnSuccess(): void {
+  spawnMock.mockImplementation(() => {
+    const proc = new EventEmitter() as EventEmitter & { stdout: EventEmitter; stderr: EventEmitter }
+    proc.stdout = new EventEmitter()
+    proc.stderr = new EventEmitter()
+    // Resolve on the next tick so `spawnAsync`'s Promise executor has already
+    // registered its 'close' listener.
+    setImmediate(() => proc.emit('close', 0))
+    return proc
+  })
+}
+
+describe('SetupManager - GPU-aware torch install (Windows)', () => {
+  beforeEach(() => {
+    execFileMock.mockReset()
+    spawnMock.mockReset()
+  })
+
+  it('hasNvidiaGpu reflects whether `nvidia-smi -L` succeeds', async () => {
+    execFileMock.mockImplementation((_file, _args, cb) => cb(null, '', ''))
+    const manager = new SetupManager(false)
+
+    const present = await (
+      manager as unknown as { hasNvidiaGpu: () => Promise<boolean> }
+    ).hasNvidiaGpu()
+    expect(present).toBe(true)
+    expect(execFileMock).toHaveBeenCalledWith('nvidia-smi', ['-L'], expect.any(Function))
+
+    execFileMock.mockImplementation((_file, _args, cb) => cb(new Error('not found')))
+    const absent = await (
+      manager as unknown as { hasNvidiaGpu: () => Promise<boolean> }
+    ).hasNvidiaGpu()
+    expect(absent).toBe(false)
+  })
+
+  // isWin is resolved from process.platform at module load time, so the
+  // Windows-only branch itself can't be exercised on a non-Windows test
+  // runner — this confirms the non-Windows path stays unaffected regardless
+  // of GPU presence, which is what we can verify in this environment.
+  it('does not force the CPU-only wheel on non-Windows platforms regardless of GPU detection', async () => {
+    execFileMock.mockImplementation((_file, _args, cb) => cb(null, '', ''))
+    mockSpawnSuccess()
+    const manager = new SetupManager(false)
+
+    await (manager as unknown as { installDemucs: () => Promise<boolean> }).installDemucs()
+
+    const spawnArgs = spawnMock.mock.calls[0][1] as string[]
+    expect(spawnArgs).not.toContain('--extra-index-url')
   })
 })
