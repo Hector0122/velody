@@ -6,20 +6,19 @@ import { useEffect, useRef } from 'react'
 const CACHE_VERSION = 18
 export { CACHE_VERSION }
 
-export interface SongAnalysis {
-  originalBpmRef: React.MutableRefObject<number>
-  firstBeatOffsetRef: React.MutableRefObject<number>
-  beatTimesRef: React.MutableRefObject<number[]>
-}
-
+// originalBpmRef/beatTimesRef, like firstBeatOffsetRef, are refs owned by
+// StemPlayer and threaded into both this hook (which writes them) and
+// useMetronome (which reads them) — avoids a circular dependency between the
+// two hooks (useMetronome needs the detected grid; useSongAnalysis needs
+// useMetronome's setBpm).
 export default function useSongAnalysis(
   urls: Record<string, string>,
   stems: string[],
   setBpm: (bpm: number) => void,
-  firstBeatOffsetRef: React.MutableRefObject<number>
-): SongAnalysis {
-  const originalBpmRef = useRef(120)
-  const beatTimesRef = useRef<number[]>([])
+  firstBeatOffsetRef: React.MutableRefObject<number>,
+  originalBpmRef: React.MutableRefObject<number>,
+  beatTimesRef: React.MutableRefObject<number[]>
+): void {
   const detectedRef = useRef(false)
 
   useEffect(() => {
@@ -70,7 +69,5 @@ export default function useSongAnalysis(
         /* detection failed — do NOT cache fallback */
       }
     })()
-  }, [urls, stems, setBpm, firstBeatOffsetRef])
-
-  return { originalBpmRef, firstBeatOffsetRef, beatTimesRef }
+  }, [urls, stems, setBpm, firstBeatOffsetRef, originalBpmRef, beatTimesRef])
 }

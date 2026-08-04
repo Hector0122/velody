@@ -73,13 +73,27 @@ function StemPlayer({ stems, songName }: StemPlayerProps): React.JSX.Element {
   const masterPlayingRef = useRef(masterPlaying)
   const durationRef = useRef(0)
   const firstBeatOffsetRef = useRef(0)
+  // originalBpmRef/beatTimesRef are written by useSongAnalysis and read by
+  // useMetronome for grid-based scheduling — same shared-ref pattern as
+  // firstBeatOffsetRef, avoiding a circular dependency between the two hooks
+  // (useMetronome needs the detected grid; useSongAnalysis needs
+  // useMetronome's setBpm).
+  const originalBpmRef = useRef(120)
+  const beatTimesRef = useRef<number[]>([])
   const audioStartRef = useRef<number | null>(null)
   const mediaStreamRef = useRef<MediaStream | null>(null)
 
   const { bpm, setBpm, metronomeOn, setMetronomeOn, metroVolume, setMetroVolume, playClick } =
-    useMetronome(masterPlaying, masterPlayingRef, positionRef, firstBeatOffsetRef)
+    useMetronome(
+      masterPlaying,
+      masterPlayingRef,
+      positionRef,
+      firstBeatOffsetRef,
+      originalBpmRef,
+      beatTimesRef
+    )
 
-  useSongAnalysis(urls, stems, setBpm, firstBeatOffsetRef)
+  useSongAnalysis(urls, stems, setBpm, firstBeatOffsetRef, originalBpmRef, beatTimesRef)
 
   const {
     markers,

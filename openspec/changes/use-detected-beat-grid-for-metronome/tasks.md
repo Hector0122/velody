@@ -18,19 +18,19 @@
 
 ## 4. Metronome scheduling
 
-- [ ] 4.1 Add `beatTimesRef` and `originalBpmRef` params to `useMetronome`.
-- [ ] 4.2 Implement a binary-search helper (first index with `beatTimes[idx] >= t`) used by the grid-scheduling path.
-- [ ] 4.3 In `schedulerTick`, branch on `beatTimesRef.current.length > 0 && bpmRef.current === originalBpmRef.current`: grid path schedules from `beatTimes`, deduping via `lastScheduledBeatRef` reinterpreted as "last scheduled grid index" (see design.md - Decisions); accent = `idx % 4 === 0`.
-- [ ] 4.4 When the grid path's search index runs past the end of `beatTimes`, extrapolate forward from the last detected beat's time/index using the existing constant-tempo formula (anchored at `beatTimes[last]`/`lastIdx` instead of `offset`/`0`), continuing to write into `lastScheduledBeatRef`.
-- [ ] 4.5 When the branch condition is false (no grid, or BPM manually overridden), run today's existing constant-tempo extrapolation unchanged.
-- [ ] 4.6 Thread `beatTimesRef`/`originalBpmRef` from `useSongAnalysis`'s return into `useMetronome`'s call site in `StemPlayer.tsx`.
+- [x] 4.1 Add `beatTimesRef` and `originalBpmRef` params to `useMetronome`.
+- [x] 4.2 Implement a binary-search helper (first index with `beatTimes[idx] >= t`) used by the grid-scheduling path.
+- [x] 4.3 In `schedulerTick`, branch on `beatTimesRef.current.length > 0 && bpmRef.current === originalBpmRef.current`: grid path schedules from `beatTimes`, deduping via `lastScheduledBeatRef` reinterpreted as "last scheduled grid index" (see design.md - Decisions); accent = `idx % 4 === 0`.
+- [x] 4.4 When the grid path's search index runs past the end of `beatTimes`, extrapolate forward from the last detected beat's time/index using the existing constant-tempo formula (anchored at `beatTimes[last]`/`lastIdx` instead of `offset`/`0`), continuing to write into `lastScheduledBeatRef`.
+- [x] 4.5 When the branch condition is false (no grid, or BPM manually overridden), run today's existing constant-tempo extrapolation unchanged.
+- [x] 4.6 Thread `beatTimesRef`/`originalBpmRef` from `useSongAnalysis`'s return into `useMetronome`'s call site in `StemPlayer.tsx`.
 
 ## 5. Tests
 
-- [ ] 5.1 Add a renderer test for `useMetronome`'s scheduler: given a `beatTimesRef` with a known set of times, playing through them schedules `playClick` at those exact times (not a constant-tempo projection), including across a seek (position jumps to an arbitrary point mid-song).
-- [ ] 5.2 Add a test for the past-the-grid extrapolation: position advances beyond the last entry in `beatTimesRef`, and clicks continue at a constant interval anchored to the last detected beat.
-- [ ] 5.3 Add a test for the manual-override fallback: `bpm` differs from `originalBpmRef.current` even though `beatTimesRef` is non-empty, and scheduling uses constant-tempo extrapolation at the live `bpm` instead of the grid.
-- [ ] 5.4 Confirm existing `useSongAnalysis`/metronome-related tests (including the ones added by `fix-cached-metronome-beat-offset`) still pass with the extended cache shape.
+- [x] 5.1 Add a renderer test for `useMetronome`'s scheduler: given a `beatTimesRef` with a known set of times, playing through them schedules `playClick` at those exact times (not a constant-tempo projection), including across a seek (position jumps to an arbitrary point mid-song).
+- [x] 5.2 Add a test for the past-the-grid extrapolation: position advances beyond the last entry in `beatTimesRef`, and clicks continue at a constant interval anchored to the last detected beat.
+- [x] 5.3 Add a test for the manual-override fallback: `bpm` differs from `originalBpmRef.current` even though `beatTimesRef` is non-empty, and scheduling uses constant-tempo extrapolation at the live `bpm` instead of the grid.
+- [x] 5.4 Confirm existing `useSongAnalysis`/metronome-related tests (including the ones added by `fix-cached-metronome-beat-offset`) still pass with the extended cache shape.
 
 ## 6. Manual verification
 
