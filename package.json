@@ -19,7 +19,8 @@
     "build:mac": "npm run build && electron-builder --mac",
     "build:linux": "npm run build && electron-builder --linux",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "batch-import": "node scripts/batch-import.mjs"
   },
   "dependencies": {
     "@electron-toolkit/utils": "^4.0.0",

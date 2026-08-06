@@ -18,6 +18,14 @@ export default defineConfig(
     }
   },
   {
+    // Standalone dev scripts: plain JS, not part of the TS project, so
+    // TS-only rules requiring type annotations don't apply.
+    files: ['scripts/**/*.mjs'],
+    rules: {
+      '@typescript-eslint/explicit-function-return-type': 'off'
+    }
+  },
+  {
     files: ['**/*.{ts,tsx}'],
     plugins: {
       'react-hooks': eslintPluginReactHooks,
