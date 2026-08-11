@@ -270,7 +270,7 @@ function Home(): React.JSX.Element {
       {/* Sidebar */}
       <aside className="w-52 shrink-0 border-r border-neutral-800 flex flex-col">
         <div className="p-4 border-b border-neutral-800">
-          <h1 className="text-xl font-bold bg-gradient-to-r from-blue-400 to-purple-500 bg-clip-text text-transparent">
+          <h1 className="text-xl font-bold bg-gradient-to-r from-brand-primary to-brand-accent bg-clip-text text-transparent">
             Velody
           </h1>
         </div>
@@ -278,7 +278,7 @@ function Home(): React.JSX.Element {
         <div className="mx-3 mt-3 relative" ref={newSongMenuRef}>
           <button
             onClick={() => setShowNewSongMenu((prev) => !prev)}
-            className="w-full px-3 py-2 rounded-lg text-sm font-semibold bg-blue-600 hover:bg-blue-500 text-white transition-colors"
+            className="w-full px-3 py-2 rounded-lg text-sm font-semibold bg-brand-primary hover:bg-brand-primary/80 text-white transition-colors"
           >
             + New Song
           </button>
@@ -343,7 +343,7 @@ function Home(): React.JSX.Element {
                   {job.status === 'running' && (
                     <div className="w-full bg-neutral-800 rounded-full h-1.5 overflow-hidden">
                       <div
-                        className="bg-blue-500 h-full rounded-full transition-all duration-300"
+                        className="bg-brand-primary h-full rounded-full transition-all duration-300"
                         style={{ width: `${job.progress}%` }}
                       />
                     </div>
@@ -375,7 +375,7 @@ function Home(): React.JSX.Element {
                 onClick={() => handleSelectRecent(song)}
                 className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
                   currentSong?.songName === song.name
-                    ? 'bg-blue-600/20 text-blue-300 border border-blue-600/30'
+                    ? 'bg-brand-primary/20 text-brand-primary border border-brand-primary/30'
                     : 'text-neutral-400 hover:text-white hover:bg-neutral-800'
                 }`}
               >

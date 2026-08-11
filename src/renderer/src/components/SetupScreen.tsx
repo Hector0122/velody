@@ -48,7 +48,7 @@ function SetupScreen(): React.JSX.Element {
     <div className="min-h-screen bg-neutral-950 flex items-center justify-center p-8">
       <div className="w-full max-w-lg space-y-8">
         <div className="text-center">
-          <h1 className="text-4xl font-bold bg-gradient-to-r from-blue-400 to-purple-500 bg-clip-text text-transparent">
+          <h1 className="text-4xl font-bold bg-gradient-to-r from-brand-primary to-brand-accent bg-clip-text text-transparent">
             Velody
           </h1>
           <p className="mt-2 text-neutral-400">Setting up your environment</p>
@@ -72,7 +72,7 @@ function SetupScreen(): React.JSX.Element {
 
             <button
               onClick={handleStart}
-              className="w-full py-3 rounded-xl font-medium bg-gradient-to-r from-blue-500 to-purple-600 text-white hover:opacity-90 transition-opacity"
+              className="w-full py-3 rounded-xl font-medium bg-gradient-to-r from-brand-primary to-brand-accent text-white hover:opacity-90 transition-opacity"
             >
               Start setup
             </button>
@@ -86,7 +86,7 @@ function SetupScreen(): React.JSX.Element {
               </div>
               <div className="h-2 bg-neutral-800 rounded-full overflow-hidden">
                 <div
-                  className="h-full bg-gradient-to-r from-blue-500 to-purple-600 rounded-full transition-all duration-500"
+                  className="h-full bg-gradient-to-r from-brand-primary to-brand-accent rounded-full transition-all duration-500"
                   style={{ width: `${overallProgress}%` }}
                 />
               </div>
@@ -106,7 +106,7 @@ function SetupScreen(): React.JSX.Element {
                   >
                     <span>
                       {step.status === 'working' ? (
-                        <span className="w-4 h-4 border-2 border-blue-400 border-t-transparent rounded-full inline-block animate-spin" />
+                        <span className="w-4 h-4 border-2 border-brand-primary border-t-transparent rounded-full inline-block animate-spin" />
                       ) : step.status === 'done' ? (
                         <span className="text-green-400">✓</span>
                       ) : step.status === 'error' ? (
@@ -135,7 +135,7 @@ function SetupScreen(): React.JSX.Element {
             {steps.done?.status === 'done' && !running && (
               <button
                 onClick={() => window.location.reload()}
-                className="w-full py-3 rounded-xl font-medium bg-gradient-to-r from-blue-500 to-purple-600 text-white hover:opacity-90 transition-opacity"
+                className="w-full py-3 rounded-xl font-medium bg-gradient-to-r from-brand-primary to-brand-accent text-white hover:opacity-90 transition-opacity"
               >
                 Launch Velody
               </button>

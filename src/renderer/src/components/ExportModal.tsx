@@ -57,7 +57,7 @@ export default function ExportModal({
                 type="checkbox"
                 checked={!!exportSelection[key]}
                 onChange={() => onToggleSelection(key)}
-                className="accent-blue-500"
+                className="accent-brand-primary"
               />
               <span className="text-xs text-neutral-300">{meta.label}</span>
             </label>
@@ -71,7 +71,7 @@ export default function ExportModal({
               onClick={() => onSetFormat('wav')}
               className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors ${
                 exportFormat === 'wav'
-                  ? 'bg-blue-600 text-white'
+                  ? 'bg-brand-primary text-white'
                   : 'bg-neutral-800 text-neutral-400'
               }`}
             >
@@ -81,7 +81,7 @@ export default function ExportModal({
               onClick={() => onSetFormat('mp3')}
               className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors ${
                 exportFormat === 'mp3'
-                  ? 'bg-blue-600 text-white'
+                  ? 'bg-brand-primary text-white'
                   : 'bg-neutral-800 text-neutral-400'
               }`}
             >
@@ -95,7 +95,7 @@ export default function ExportModal({
             type="checkbox"
             checked={exportWithMetronome}
             onChange={(e) => onSetMetronome(e.target.checked)}
-            className="accent-blue-500"
+            className="accent-brand-primary"
           />
           Include metronome ({bpm} BPM)
         </label>
@@ -103,7 +103,7 @@ export default function ExportModal({
         <button
           onClick={onExport}
           disabled={exporting || Object.values(exportSelection).filter(Boolean).length === 0}
-          className="w-full px-3 py-2 rounded-lg text-xs font-semibold bg-blue-600 hover:bg-blue-500 disabled:bg-neutral-700 disabled:text-neutral-500 text-white transition-colors"
+          className="w-full px-3 py-2 rounded-lg text-xs font-semibold bg-brand-primary hover:bg-brand-primary/80 disabled:bg-neutral-700 disabled:text-neutral-500 text-white transition-colors"
         >
           {exporting ? 'Exporting...' : 'Export'}
         </button>

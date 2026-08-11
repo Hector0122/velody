@@ -54,12 +54,12 @@ function MasterPanel({
       <div className="flex items-center gap-2">
         <button
           onClick={onToggleMasterPlay}
-          className="w-12 h-12 rounded-full flex items-center justify-center bg-blue-600/20 hover:bg-blue-600/30 transition-colors"
+          className="w-12 h-12 rounded-full flex items-center justify-center bg-brand-primary/20 hover:bg-brand-primary/30 transition-colors"
         >
           {masterPlaying ? (
-            <span className="text-blue-400 text-base font-bold">| |</span>
+            <span className="text-brand-primary text-base font-bold">| |</span>
           ) : (
-            <span className="text-blue-400 text-base ml-0.5">&#9654;</span>
+            <span className="text-brand-primary text-base ml-0.5">&#9654;</span>
           )}
         </button>
         <button
@@ -83,7 +83,7 @@ function MasterPanel({
           step="0.01"
           value={masterVolume}
           onChange={onMasterVolumeChange}
-          className="accent-blue-500 cursor-pointer h-[120px] w-6 [writing-mode:vertical-lr] [direction:rtl]"
+          className="accent-brand-primary cursor-pointer h-[120px] w-6 [writing-mode:vertical-lr] [direction:rtl]"
         />
         <span className="text-xs text-neutral-500">{Math.round(masterVolume * 100)}%</span>
       </div>
@@ -146,7 +146,7 @@ function MasterPanel({
       <div className="border-t border-neutral-800 pt-3 w-full">
         <button
           onClick={onShowExportModal}
-          className="w-full px-2 py-1.5 rounded text-[10px] font-semibold bg-blue-600 hover:bg-blue-500 text-white transition-colors"
+          className="w-full px-2 py-1.5 rounded text-[10px] font-semibold bg-brand-primary hover:bg-brand-primary/80 text-white transition-colors"
         >
           Export Mix...
         </button>

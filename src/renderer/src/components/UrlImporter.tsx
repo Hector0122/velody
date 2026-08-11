@@ -80,12 +80,12 @@ function UrlImporter({ onImportStarted }: UrlImporterProps): React.JSX.Element {
           onKeyDown={handleKeyDown}
           placeholder="Paste YouTube link..."
           disabled={status === 'downloading'}
-          className="flex-1 px-4 py-3 rounded-xl bg-neutral-800 border border-neutral-700 text-neutral-200 placeholder-neutral-500 focus:outline-none focus:border-blue-500 transition-colors disabled:opacity-50"
+          className="flex-1 px-4 py-3 rounded-xl bg-neutral-800 border border-neutral-700 text-neutral-200 placeholder-neutral-500 focus:outline-none focus:border-brand-primary transition-colors disabled:opacity-50"
         />
         <button
           onClick={handleSubmit}
           disabled={!isValidUrl(url) || status === 'downloading'}
-          className="px-6 py-3 rounded-xl font-medium bg-gradient-to-r from-blue-500 to-purple-600 text-white hover:opacity-90 transition-opacity disabled:opacity-40 disabled:cursor-not-allowed"
+          className="px-6 py-3 rounded-xl font-medium bg-gradient-to-r from-brand-primary to-brand-accent text-white hover:opacity-90 transition-opacity disabled:opacity-40 disabled:cursor-not-allowed"
         >
           {status === 'downloading' ? 'Importing...' : 'Import'}
         </button>
@@ -100,7 +100,7 @@ function UrlImporter({ onImportStarted }: UrlImporterProps): React.JSX.Element {
           )}
           <div className="w-full bg-neutral-800 rounded-full h-2 overflow-hidden">
             <div
-              className="bg-blue-500 h-full rounded-full transition-all duration-300"
+              className="bg-brand-primary h-full rounded-full transition-all duration-300"
               style={{ width: `${progress}%` }}
             />
           </div>

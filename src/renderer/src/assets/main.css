@@ -1,1 +1,13 @@
 @import 'tailwindcss';
+
+/*
+ * Color de marca — formalizado desde brand-kit/tokens.ts (hues.blue /
+ * hues.purple). Antes era blue-500/600 + purple-500/600 de Tailwind sin
+ * curar; ahora son los mismos hex que el resto del sistema de diseño.
+ * Genera automáticamente bg-brand-primary, text-brand-accent, etc.
+ * (convención de Tailwind v4: cualquier --color-* dentro de @theme).
+ */
+@theme {
+  --color-brand-primary: #3b82f6;
+  --color-brand-accent: #7b6bf5;
+}

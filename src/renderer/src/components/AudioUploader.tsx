@@ -72,7 +72,7 @@ function AudioUploader({
   if (files.length > 0) {
     return (
       <div className="space-y-4">
-        <div className="border-2 border-blue-500/50 rounded-xl p-4 bg-blue-500/5 max-h-64 overflow-y-auto">
+        <div className="border-2 border-brand-primary/50 rounded-xl p-4 bg-brand-primary/5 max-h-64 overflow-y-auto">
           <div className="flex items-center justify-between mb-2">
             <p className="text-sm font-medium text-neutral-300">
               {files.length} file{files.length !== 1 ? 's' : ''} selected
@@ -99,7 +99,7 @@ function AudioUploader({
         <div className="flex gap-3">
           <button
             onClick={onProcessAll}
-            className="flex-1 py-3 rounded-xl font-medium bg-gradient-to-r from-blue-500 to-purple-600 text-white hover:opacity-90 transition-opacity"
+            className="flex-1 py-3 rounded-xl font-medium bg-gradient-to-r from-brand-primary to-brand-accent text-white hover:opacity-90 transition-opacity"
           >
             Process {files.length} file{files.length !== 1 ? 's' : ''}
           </button>
@@ -122,7 +122,7 @@ function AudioUploader({
       onClick={handleFileSelect}
       className={`border-2 border-dashed rounded-xl p-12 text-center cursor-pointer transition-all duration-200 ${
         isDragging
-          ? 'border-blue-400 bg-blue-400/10 scale-[1.02]'
+          ? 'border-brand-primary bg-brand-primary/10 scale-[1.02]'
           : 'border-neutral-700 hover:border-neutral-500 bg-neutral-900/50'
       }`}
     >
