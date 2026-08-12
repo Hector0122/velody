@@ -56,7 +56,7 @@ function SetupScreen(): React.JSX.Element {
 
         {!running && Object.keys(steps).length === 0 ? (
           <div className="space-y-6">
-            <div className="bg-neutral-900 rounded-xl p-6 border border-neutral-800">
+            <div className="bg-neutral-900 rounded-md p-6 border border-neutral-800">
               <p className="text-neutral-300 text-sm leading-relaxed">
                 Velody needs to install the following dependencies to run:
               </p>
@@ -72,21 +72,21 @@ function SetupScreen(): React.JSX.Element {
 
             <button
               onClick={handleStart}
-              className="w-full py-3 rounded-xl font-medium bg-gradient-to-r from-brand-primary to-brand-accent text-white hover:opacity-90 transition-opacity"
+              className="w-full py-3 rounded-md font-medium bg-gradient-to-r from-brand-primary to-brand-accent text-white hover:opacity-90 transition-opacity"
             >
               Start setup
             </button>
           </div>
         ) : (
           <div className="space-y-6">
-            <div className="bg-neutral-900 rounded-xl p-6 border border-neutral-800">
+            <div className="bg-neutral-900 rounded-md p-6 border border-neutral-800">
               <div className="flex justify-between text-sm text-neutral-400 mb-4">
                 <span>Installing dependencies...</span>
                 <span>{overallProgress}%</span>
               </div>
               <div className="h-2 bg-neutral-800 rounded-full overflow-hidden">
                 <div
-                  className="h-full bg-gradient-to-r from-brand-primary to-brand-accent rounded-full transition-all duration-500"
+                  className="h-full bg-gradient-to-r from-brand-primary to-brand-accent rounded-full transition-all duration-deliberate"
                   style={{ width: `${overallProgress}%` }}
                 />
               </div>
@@ -100,7 +100,7 @@ function SetupScreen(): React.JSX.Element {
                 return (
                   <div
                     key={s}
-                    className={`flex items-center gap-3 p-3 rounded-lg text-sm ${
+                    className={`flex items-center gap-3 p-3 rounded-sm text-sm ${
                       step.status === 'error' ? 'bg-red-900/20' : 'bg-neutral-900/50'
                     }`}
                   >
@@ -127,7 +127,7 @@ function SetupScreen(): React.JSX.Element {
             </div>
 
             {error && (
-              <div className="p-4 bg-red-900/30 border border-red-600 rounded-xl text-red-400 text-sm">
+              <div className="p-4 bg-red-900/30 border border-red-600 rounded-md text-red-400 text-sm">
                 {error}
               </div>
             )}
@@ -135,7 +135,7 @@ function SetupScreen(): React.JSX.Element {
             {steps.done?.status === 'done' && !running && (
               <button
                 onClick={() => window.location.reload()}
-                className="w-full py-3 rounded-xl font-medium bg-gradient-to-r from-brand-primary to-brand-accent text-white hover:opacity-90 transition-opacity"
+                className="w-full py-3 rounded-md font-medium bg-gradient-to-r from-brand-primary to-brand-accent text-white hover:opacity-90 transition-opacity"
               >
                 Launch Velody
               </button>
