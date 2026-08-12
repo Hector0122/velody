@@ -61,7 +61,7 @@ function UrlImporter({ onImportStarted }: UrlImporterProps): React.JSX.Element {
 
   return (
     <div className="space-y-4">
-      <div className="border-2 border-dashed rounded-xl p-8 text-center border-neutral-700 bg-neutral-900/50">
+      <div className="border-2 border-dashed rounded-md p-8 text-center border-neutral-700 bg-neutral-900/50">
         <div className="space-y-3">
           <div className="text-4xl text-neutral-400">🔗</div>
           <p className="text-lg font-medium text-neutral-300">Import from URL</p>
@@ -80,12 +80,12 @@ function UrlImporter({ onImportStarted }: UrlImporterProps): React.JSX.Element {
           onKeyDown={handleKeyDown}
           placeholder="Paste YouTube link..."
           disabled={status === 'downloading'}
-          className="flex-1 px-4 py-3 rounded-xl bg-neutral-800 border border-neutral-700 text-neutral-200 placeholder-neutral-500 focus:outline-none focus:border-brand-primary transition-colors disabled:opacity-50"
+          className="flex-1 px-4 py-3 rounded-md bg-neutral-800 border border-neutral-700 text-neutral-200 placeholder-neutral-500 focus:outline-none focus:border-brand-primary transition-colors disabled:opacity-50"
         />
         <button
           onClick={handleSubmit}
           disabled={!isValidUrl(url) || status === 'downloading'}
-          className="px-6 py-3 rounded-xl font-medium bg-gradient-to-r from-brand-primary to-brand-accent text-white hover:opacity-90 transition-opacity disabled:opacity-40 disabled:cursor-not-allowed"
+          className="px-6 py-3 rounded-md font-medium bg-gradient-to-r from-brand-primary to-brand-accent text-white hover:opacity-90 transition-opacity disabled:opacity-40 disabled:cursor-not-allowed"
         >
           {status === 'downloading' ? 'Importing...' : 'Import'}
         </button>
@@ -100,7 +100,7 @@ function UrlImporter({ onImportStarted }: UrlImporterProps): React.JSX.Element {
           )}
           <div className="w-full bg-neutral-800 rounded-full h-2 overflow-hidden">
             <div
-              className="bg-brand-primary h-full rounded-full transition-all duration-300"
+              className="bg-brand-primary h-full rounded-full transition-all duration-slow"
               style={{ width: `${progress}%` }}
             />
           </div>
@@ -109,7 +109,7 @@ function UrlImporter({ onImportStarted }: UrlImporterProps): React.JSX.Element {
       )}
 
       {status === 'error' && error && (
-        <div className="p-3 rounded-lg bg-red-900/30 border border-red-600 text-red-400 text-sm">
+        <div className="p-3 rounded-sm bg-red-900/30 border border-red-600 text-red-400 text-sm">
           {error}
         </div>
       )}

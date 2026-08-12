@@ -15,7 +15,7 @@ export default function RecordingConfirmationModal({
 }: RecordingConfirmationModalProps): React.JSX.Element {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-      <div className="bg-neutral-900 border border-neutral-700 rounded-2xl p-6 w-72 shadow-2xl flex flex-col items-center gap-4">
+      <div className="bg-neutral-900 border border-neutral-700 rounded-md p-6 w-72 shadow-2xl flex flex-col items-center gap-4">
         <h3 className="text-sm font-semibold text-neutral-400 uppercase tracking-wide">
           Save recording?
         </h3>
@@ -26,13 +26,13 @@ export default function RecordingConfirmationModal({
         <div className="flex gap-3 w-full">
           <button
             onClick={onDiscard}
-            className="flex-1 px-4 py-2 rounded-lg text-xs font-medium bg-neutral-800 text-neutral-400 hover:text-white transition-colors"
+            className="flex-1 px-4 py-2 rounded-sm text-xs font-medium bg-neutral-800 text-neutral-400 hover:text-white transition-colors"
           >
             Discard
           </button>
           <button
             onClick={onSave}
-            className="flex-1 px-4 py-2 rounded-lg text-xs font-semibold bg-red-600 hover:bg-red-500 text-white transition-colors"
+            className="flex-1 px-4 py-2 rounded-sm text-xs font-semibold bg-red-600 hover:bg-red-500 text-white transition-colors"
           >
             Save
           </button>

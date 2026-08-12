@@ -49,7 +49,7 @@ function MasterPanel({
   onShowExportModal
 }: MasterPanelProps): React.JSX.Element {
   return (
-    <div className="w-44 shrink-0 bg-neutral-900/80 rounded-xl border border-neutral-800 p-4 flex flex-col items-center gap-5 self-start order-1">
+    <div className="w-44 shrink-0 bg-neutral-900/80 rounded-md border border-neutral-800 p-4 flex flex-col items-center gap-5 self-start order-1">
       <h3 className="text-sm font-semibold text-neutral-400 uppercase tracking-wide">Master</h3>
       <div className="flex items-center gap-2">
         <button
@@ -108,7 +108,7 @@ function MasterPanel({
         <div className="flex items-center justify-center gap-2">
           <button
             onClick={() => onRecordingFormatChange('wav')}
-            className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors ${
+            className={`px-3 py-1 rounded-sm text-xs font-medium transition-colors ${
               recordingFormat === 'wav'
                 ? 'bg-red-600 text-white'
                 : 'bg-neutral-800 text-neutral-400'
@@ -118,7 +118,7 @@ function MasterPanel({
           </button>
           <button
             onClick={() => onRecordingFormatChange('mp3')}
-            className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors ${
+            className={`px-3 py-1 rounded-sm text-xs font-medium transition-colors ${
               recordingFormat === 'mp3'
                 ? 'bg-red-600 text-white'
                 : 'bg-neutral-800 text-neutral-400'
@@ -186,7 +186,7 @@ function MasterPanel({
         <div className="flex items-center justify-between px-1">
           <button
             onClick={onMetronomeToggle}
-            className={`px-4 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+            className={`px-4 py-1.5 rounded-sm text-xs font-semibold transition-colors ${
               metronomeOn
                 ? 'bg-orange-600 text-white'
                 : 'bg-neutral-800 text-neutral-400 hover:text-white'

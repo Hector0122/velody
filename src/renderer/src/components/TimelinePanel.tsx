@@ -37,7 +37,7 @@ function TimelinePanel({
   onRemoveMarker
 }: TimelinePanelProps): React.JSX.Element {
   return (
-    <div className="bg-neutral-900/80 rounded-xl border border-neutral-800 p-4">
+    <div className="bg-neutral-900/80 rounded-md border border-neutral-800 p-4">
       <div className="flex items-center justify-between mb-2">
         <div className="flex items-center gap-2">
           <span className="text-xs font-semibold text-neutral-400 uppercase tracking-wide">

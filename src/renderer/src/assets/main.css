@@ -32,4 +32,43 @@
   --color-brand-accent: #7b6bf5;
   --font-display: 'Archivo Black', system-ui, sans-serif;
   --font-mono-brand: 'IBM Plex Mono', ui-monospace, monospace;
+
+  /*
+   * Motion — formalizado desde brand-kit/tokens.ts `motion.duration` /
+   * `motion.easing`. Mismos tiempos que las 5 apps React Native (ver
+   * brand-kit/README.md#motion), aquí como variables de tema de Tailwind
+   * v4: generan las utilidades `duration-instant`/`duration-fast`/etc. y
+   * `ease-standard`/`ease-decelerate`/`ease-accelerate`.
+   */
+  --duration-instant: 100ms;
+  --duration-fast: 150ms;
+  --duration-base: 220ms;
+  --duration-slow: 350ms;
+  --duration-deliberate: 500ms;
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --ease-decelerate: cubic-bezier(0, 0, 0, 1);
+  --ease-accelerate: cubic-bezier(0.3, 0, 1, 1);
+
+  /* `motion.duration.fast` + `motion.easing.standard` como default de
+     cualquier `transition-*` sin duration/ease explícitos (27+ usos hoy:
+     hovers, cambios de color/opacidad) — mismo timing que el resto. */
+  --default-transition-duration: var(--duration-fast);
+  --default-transition-timing-function: var(--ease-standard);
+
+  /*
+   * Radios — formalizado desde brand-kit/tokens.ts `radius`. Reemplaza la
+   * escala default de Tailwind (`--radius-sm/md/lg/xl` = 4/6/8/12px) por la
+   * misma que usan las 5 apps React Native (ver brand-kit/README.md,
+   * sección "Cómo migrar una app"). Los 51 usos existentes de
+   * `rounded-lg`/`rounded-xl`/`rounded-2xl` se remapearon a
+   * `rounded-sm`/`rounded-md` bajo esta escala nueva — no es un rename
+   * cosmético, cambia el valor real que renderiza cada clase.
+   * `rounded-full` no se toca: ya es "pill" universal, equivalente a
+   * `radius.pill` (999) de las apps RN.
+   */
+  --radius-xs: 6px;
+  --radius-sm: 10px;
+  --radius-md: 14px;
+  --radius-lg: 20px;
+  --radius-xl: 28px;
 }

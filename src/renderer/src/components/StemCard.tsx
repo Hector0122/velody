@@ -60,7 +60,7 @@ function StemCard({
 }: StemCardProps): React.JSX.Element {
   return (
     <div
-      className={`rounded-xl border p-4 space-y-3 transition-all ${
+      className={`rounded-md border p-4 space-y-3 transition-all ${
         isInactive
           ? 'opacity-50 border-neutral-700 bg-neutral-900/20'
           : 'border-neutral-700 bg-neutral-900/50'
@@ -157,7 +157,7 @@ function StemCard({
         </button>
         <button
           onClick={onSolo}
-          className={`px-4 py-1 rounded-lg text-xs font-medium transition-colors ${
+          className={`px-4 py-1 rounded-sm text-xs font-medium transition-colors ${
             isSolo ? 'bg-yellow-600 text-white' : 'bg-neutral-800 text-neutral-400 hover:text-white'
           }`}
         >
@@ -166,14 +166,14 @@ function StemCard({
         <button
           onClick={onExport}
           disabled={exporting}
-          className="px-3 py-1 rounded-lg text-xs font-medium bg-neutral-800 text-neutral-400 hover:text-white hover:bg-neutral-700 transition-colors disabled:opacity-40"
+          className="px-3 py-1 rounded-sm text-xs font-medium bg-neutral-800 text-neutral-400 hover:text-white hover:bg-neutral-700 transition-colors disabled:opacity-40"
         >
           {exporting ? '...' : 'Export'}
         </button>
         {canTab && (
           <button
             onClick={onOpenTab}
-            className="px-3 py-1 rounded-lg text-xs font-medium bg-neutral-800 text-neutral-400 hover:text-white hover:bg-neutral-700 transition-colors"
+            className="px-3 py-1 rounded-sm text-xs font-medium bg-neutral-800 text-neutral-400 hover:text-white hover:bg-neutral-700 transition-colors"
             title="Search tabs on Ultimate Guitar"
           >
             Tabs
@@ -182,7 +182,7 @@ function StemCard({
         {canRecord && (
           <button
             onClick={onStartRecording}
-            className="px-3 py-1 rounded-lg text-xs font-medium bg-red-900/40 text-red-400 hover:text-red-300 hover:bg-red-800/50 transition-colors"
+            className="px-3 py-1 rounded-sm text-xs font-medium bg-red-900/40 text-red-400 hover:text-red-300 hover:bg-red-800/50 transition-colors"
           >
             REC
           </button>
@@ -190,7 +190,7 @@ function StemCard({
       </div>
 
       {isRecordingThis && (
-        <div className="flex items-center justify-between bg-red-900/20 rounded-lg px-3 py-2 -mt-1">
+        <div className="flex items-center justify-between bg-red-900/20 rounded-sm px-3 py-2 -mt-1">
           <div className="flex items-center gap-2">
             <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
             <span data-rec-elapsed className="text-red-400 text-xs font-mono-brand">
@@ -199,7 +199,7 @@ function StemCard({
           </div>
           <button
             onClick={onStopRecording}
-            className="px-3 py-1 rounded-lg text-xs font-medium bg-red-600 text-white hover:bg-red-500 transition-colors"
+            className="px-3 py-1 rounded-sm text-xs font-medium bg-red-600 text-white hover:bg-red-500 transition-colors"
           >
             ⏹ Stop
           </button>

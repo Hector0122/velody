@@ -36,7 +36,7 @@ export default function ExportModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-      <div className="bg-neutral-900 border border-neutral-700 rounded-2xl p-5 w-72 shadow-2xl flex flex-col gap-4">
+      <div className="bg-neutral-900 border border-neutral-700 rounded-md p-5 w-72 shadow-2xl flex flex-col gap-4">
         <div className="flex items-center justify-between">
           <h3 className="text-sm font-semibold text-neutral-400 uppercase tracking-wide">
             Export Mix
@@ -69,7 +69,7 @@ export default function ExportModal({
           <div className="flex gap-1">
             <button
               onClick={() => onSetFormat('wav')}
-              className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors ${
+              className={`px-3 py-1 rounded-sm text-xs font-medium transition-colors ${
                 exportFormat === 'wav'
                   ? 'bg-brand-primary text-white'
                   : 'bg-neutral-800 text-neutral-400'
@@ -79,7 +79,7 @@ export default function ExportModal({
             </button>
             <button
               onClick={() => onSetFormat('mp3')}
-              className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors ${
+              className={`px-3 py-1 rounded-sm text-xs font-medium transition-colors ${
                 exportFormat === 'mp3'
                   ? 'bg-brand-primary text-white'
                   : 'bg-neutral-800 text-neutral-400'
@@ -103,7 +103,7 @@ export default function ExportModal({
         <button
           onClick={onExport}
           disabled={exporting || Object.values(exportSelection).filter(Boolean).length === 0}
-          className="w-full px-3 py-2 rounded-lg text-xs font-semibold bg-brand-primary hover:bg-brand-primary/80 disabled:bg-neutral-700 disabled:text-neutral-500 text-white transition-colors"
+          className="w-full px-3 py-2 rounded-sm text-xs font-semibold bg-brand-primary hover:bg-brand-primary/80 disabled:bg-neutral-700 disabled:text-neutral-500 text-white transition-colors"
         >
           {exporting ? 'Exporting...' : 'Export'}
         </button>
