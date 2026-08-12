@@ -70,7 +70,7 @@ function MasterPanel({
           &#9664;&#9664;
         </button>
       </div>
-      <span className="text-[10px] font-mono text-neutral-500 -mt-2">
+      <span className="text-[10px] font-mono-brand text-neutral-500 -mt-2">
         <span data-live-time>0:00</span> / {formatTime(duration)}
       </span>
       <div className="flex flex-col items-center gap-2 w-full">
@@ -174,7 +174,7 @@ function MasterPanel({
               const v = parseInt(e.target.value, 10)
               if (!isNaN(v) && v >= BPM_MIN && v <= BPM_MAX) onBpmChange(v)
             }}
-            className="w-12 h-6 text-center text-xs font-mono text-white bg-neutral-800 border border-neutral-700 rounded focus:outline-none focus:border-orange-500 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+            className="w-12 h-6 text-center text-xs font-mono-brand text-white bg-neutral-800 border border-neutral-700 rounded focus:outline-none focus:border-orange-500 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
           />
           <button
             onClick={onBpmIncrement}

@@ -45,7 +45,7 @@ export default function TimelineMarkers({
               className={`h-3 w-0.5 rounded-full ${isLoopStart || isLoopEnd ? 'bg-orange-500' : 'bg-blue-500'}`}
             />
             <span
-              className={`text-[8px] font-mono mt-0.5 whitespace-nowrap ${isLoopStart || isLoopEnd ? 'text-orange-400' : 'text-blue-400'}`}
+              className={`text-[8px] font-mono-brand mt-0.5 whitespace-nowrap ${isLoopStart || isLoopEnd ? 'text-orange-400' : 'text-blue-400'}`}
             >
               {m.label}
             </span>

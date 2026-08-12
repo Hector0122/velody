@@ -1,6 +1,26 @@
 @import 'tailwindcss';
 
 /*
+ * Tipografía compartida del brand-kit (Archivo Black + IBM Plex Mono) —
+ * ver brand-kit/README.md#tipografía. Archivo web (no linking nativo como
+ * en las apps React Native): @font-face + archivo local.
+ */
+@font-face {
+  font-family: 'Archivo Black';
+  src: url('./fonts/ArchivoBlack-Regular.ttf') format('truetype');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'IBM Plex Mono';
+  src: url('./fonts/IBMPlexMono-Medium.ttf') format('truetype');
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+
+/*
  * Color de marca — formalizado desde brand-kit/tokens.ts (hues.blue /
  * hues.purple). Antes era blue-500/600 + purple-500/600 de Tailwind sin
  * curar; ahora son los mismos hex que el resto del sistema de diseño.
@@ -10,4 +30,6 @@
 @theme {
   --color-brand-primary: #3b82f6;
   --color-brand-accent: #7b6bf5;
+  --font-display: 'Archivo Black', system-ui, sans-serif;
+  --font-mono-brand: 'IBM Plex Mono', ui-monospace, monospace;
 }

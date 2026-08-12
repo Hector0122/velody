@@ -48,7 +48,7 @@ function SetupScreen(): React.JSX.Element {
     <div className="min-h-screen bg-neutral-950 flex items-center justify-center p-8">
       <div className="w-full max-w-lg space-y-8">
         <div className="text-center">
-          <h1 className="text-4xl font-bold bg-gradient-to-r from-brand-primary to-brand-accent bg-clip-text text-transparent">
+          <h1 className="text-4xl font-display font-normal bg-gradient-to-r from-brand-primary to-brand-accent bg-clip-text text-transparent">
             Velody
           </h1>
           <p className="mt-2 text-neutral-400">Setting up your environment</p>

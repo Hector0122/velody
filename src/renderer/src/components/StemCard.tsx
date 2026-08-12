@@ -193,7 +193,7 @@ function StemCard({
         <div className="flex items-center justify-between bg-red-900/20 rounded-lg px-3 py-2 -mt-1">
           <div className="flex items-center gap-2">
             <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
-            <span data-rec-elapsed className="text-red-400 text-xs font-mono">
+            <span data-rec-elapsed className="text-red-400 text-xs font-mono-brand">
               {formatTime(0)}
             </span>
           </div>

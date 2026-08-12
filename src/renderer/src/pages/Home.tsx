@@ -270,7 +270,7 @@ function Home(): React.JSX.Element {
       {/* Sidebar */}
       <aside className="w-52 shrink-0 border-r border-neutral-800 flex flex-col">
         <div className="p-4 border-b border-neutral-800">
-          <h1 className="text-xl font-bold bg-gradient-to-r from-brand-primary to-brand-accent bg-clip-text text-transparent">
+          <h1 className="text-xl font-display font-normal bg-gradient-to-r from-brand-primary to-brand-accent bg-clip-text text-transparent">
             Velody
           </h1>
         </div>

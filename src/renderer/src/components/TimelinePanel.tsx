@@ -43,7 +43,7 @@ function TimelinePanel({
           <span className="text-xs font-semibold text-neutral-400 uppercase tracking-wide">
             Timeline
           </span>
-          <span className="text-[10px] font-mono text-neutral-500">
+          <span className="text-[10px] font-mono-brand text-neutral-500">
             <span data-live-time>0:00</span> / {formatTime(masterWaveDuration || duration)}
           </span>
         </div>
