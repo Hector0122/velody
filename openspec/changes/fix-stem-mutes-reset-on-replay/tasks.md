@@ -1,22 +1,22 @@
 ## 1. Fix the reset
 
-- [ ] 1.1 In `useAudioContextEngine.ts`'s `toggleMasterPlay`, change the
+- [x] 1.1 In `useAudioContextEngine.ts`'s `toggleMasterPlay`, change the
       start-from-stopped branch's `active` rebuild from unconditionally
       setting every stem to `true`, to merging: keep every existing key in
       `activeRef.current` as-is, and only default a stem to `true` when it
       has no key in `activeRef.current` yet (`key in activeRef.current`
       check, not just falsy — a stem explicitly muted to `false` must stay
       `false`, not be treated as "missing").
-- [ ] 1.2 Confirm `ensureWaveSurfer(key)` still runs for every stem
+- [x] 1.2 Confirm `ensureWaveSurfer(key)` still runs for every stem
       regardless of active state (waveform creation is unrelated to mute
       state and must be unaffected by this change).
-- [ ] 1.3 Double check `toggleStem`'s existing merge behavior is unchanged
+- [x] 1.3 Double check `toggleStem`'s existing merge behavior is unchanged
       (it already does the right thing) and that both start paths now
       agree on the same "default only if untouched" semantics.
 
 ## 2. Tests
 
-- [ ] 2.1 Add/extend a test for `toggleMasterPlay` covering: first-ever
+- [x] 2.1 Add/extend a test for `toggleMasterPlay` covering: first-ever
       start activates all stems (unchanged behavior); starting after a
       stem was muted preserves that mute; starting after a stem was
       explicitly re-activated preserves that too; a stem with no prior
