@@ -5,10 +5,26 @@ import { useMetronome } from '../hooks/useMetronome'
 
 interface TrackedOsc {
   type: string
-  frequency: { value: number }
+  // woodblock (the only click preset now — see
+  // simplify-metronome-to-woodblock-only) sweeps frequency via
+  // setValueAtTime/exponentialRampToValueAtTime rather than assigning
+  // .value directly, so the stub tracks calls to those instead of a plain
+  // value.
+  frequency: {
+    value: number
+    setValueAtTime: ReturnType<typeof vi.fn>
+    exponentialRampToValueAtTime: ReturnType<typeof vi.fn>
+  }
   connect: ReturnType<typeof vi.fn>
   start: ReturnType<typeof vi.fn>
   stop: ReturnType<typeof vi.fn>
+}
+
+// The frequency setValueAtTime call's first argument is the sweep's start
+// frequency — 900 (accent) or 650 (non-accent) for woodblock — used below
+// in place of the old fixed-value .frequency.value checks.
+function startFreq(osc: TrackedOsc): number | undefined {
+  return osc.frequency.setValueAtTime.mock.calls[0]?.[0]
 }
 
 function stubAudioContext(oscillators: TrackedOsc[]): void {
@@ -19,7 +35,7 @@ function stubAudioContext(oscillators: TrackedOsc[]): void {
     createOscillator(): TrackedOsc {
       const osc: TrackedOsc = {
         type: '',
-        frequency: { value: 0 },
+        frequency: { value: 0, setValueAtTime: vi.fn(), exponentialRampToValueAtTime: vi.fn() },
         connect: vi.fn(),
         start: vi.fn(),
         stop: vi.fn()
@@ -47,7 +63,12 @@ function renderMetronome(
   positionRef: { current: number },
   beatTimesRef: { current: number[] },
   originalBpmRef: { current: number },
-  firstBeatOffsetRef: { current: number } = { current: 0 }
+  firstBeatOffsetRef: { current: number } = { current: 0 },
+  // Every existing call site exercises steady-state scheduling (playback
+  // already genuinely underway), never the count-in pre-roll gate —
+  // defaults false, matching real "already playing" behavior. See
+  // fix-count-in-handoff-precision.
+  playbackPendingRef: { current: boolean } = { current: false }
 ): ReturnType<typeof renderHook<ReturnType<typeof useMetronome>, unknown>> {
   const masterPlayingRef = { current: true }
   return renderHook(() =>
@@ -57,7 +78,8 @@ function renderMetronome(
       positionRef,
       firstBeatOffsetRef,
       originalBpmRef,
-      beatTimesRef
+      beatTimesRef,
+      playbackPendingRef
     )
   )
 }
@@ -69,15 +91,6 @@ describe('useMetronome - beat-grid scheduling', () => {
     vi.useFakeTimers()
     oscillators = []
     stubAudioContext(oscillators)
-    // These tests exercise the scheduler (beat-grid timing, accent
-    // alternation, constant-tempo fallback), not click synthesis — force
-    // the 'beep' preset, which is byte-for-byte the pre-add-metronome-
-    // click-sounds implementation (osc.frequency.value=, single
-    // oscillator/gain, no noise burst), so the existing assertions below
-    // stay meaningful without needing to also stub createBufferSource/
-    // createBiquadFilter for presets these tests aren't about. Click
-    // synthesis itself is covered by clickPresets.test.ts.
-    window.localStorage.setItem('velody:clickPreset', JSON.stringify('beep'))
   })
 
   afterEach(() => {
@@ -100,7 +113,7 @@ describe('useMetronome - beat-grid scheduling', () => {
 
     expect(oscillators).toHaveLength(1)
     expect(oscillators[0].start).toHaveBeenCalledWith(expect.closeTo(0.2, 5))
-    expect(oscillators[0].frequency.value).toBe(1600) // idx 0 % 4 === 0 -> accent
+    expect(startFreq(oscillators[0])).toBe(900) // idx 0 % 4 === 0 -> accent
 
     // Simulate a seek to just before beatTimes[3] (2.5), skipping over
     // beatTimes[1]/[2] entirely.
@@ -111,7 +124,7 @@ describe('useMetronome - beat-grid scheduling', () => {
 
     expect(oscillators).toHaveLength(2)
     expect(oscillators[1].start).toHaveBeenCalledWith(expect.closeTo(0.15, 5))
-    expect(oscillators[1].frequency.value).toBe(900) // idx 3 % 4 !== 0 -> not accent
+    expect(startFreq(oscillators[1])).toBe(650) // idx 3 % 4 !== 0 -> not accent
   })
 
   it('extrapolates at a constant interval anchored to the last detected beat once the grid runs out', () => {
@@ -154,6 +167,143 @@ describe('useMetronome - beat-grid scheduling', () => {
     expect(oscillators).toHaveLength(1)
     expect(oscillators[0].start).toHaveBeenCalledWith(expect.closeTo(0.242857, 4))
   })
+
+  // Regression coverage for fix-count-in-song-start-timing: before this
+  // fix, a song with a long intro (first detected beat well after position
+  // 0) produced total silence from the metronome until the song's position
+  // caught up to that first real beat — "the metronome goes quiet and only
+  // picks back up once the drums come in."
+  it('extrapolates backward from the first detected beat instead of staying silent through a long intro', () => {
+    const beatTimesRef = { current: [8.5, 9.0, 9.5, 10.0] } // 0.5s spacing == 120bpm, 8.5s intro
+    const originalBpmRef = { current: 120 }
+    const positionRef = { current: 0.25 } // deep in the intro, far before beatTimes[0]
+
+    const { result } = renderMetronome(positionRef, beatTimesRef, originalBpmRef)
+    act(() => {
+      result.current.setMetronomeOn(true)
+    })
+    act(() => {
+      vi.advanceTimersByTime(25)
+    })
+
+    // Nearest virtual beat before beatTimes[0]=8.5 at 0.5s spacing is
+    // 0.5s (idx -16), a 0.25s delay from t=0.25 — not silence.
+    expect(oscillators).toHaveLength(1)
+    expect(oscillators[0].start).toHaveBeenCalledWith(expect.closeTo(0.25, 5))
+    expect(startFreq(oscillators[0])).toBe(900) // idx -16 % 4 === 0 -> accent
+  })
+
+  it('keeps the correct accent pattern on a non-accented extrapolated beat', () => {
+    const beatTimesRef = { current: [8.5, 9.0, 9.5, 10.0] }
+    const originalBpmRef = { current: 120 }
+    const positionRef = { current: 0.75 } // nearest virtual beat is 1.0s (idx -15)
+
+    const { result } = renderMetronome(positionRef, beatTimesRef, originalBpmRef)
+    act(() => {
+      result.current.setMetronomeOn(true)
+    })
+    act(() => {
+      vi.advanceTimersByTime(25)
+    })
+
+    expect(oscillators).toHaveLength(1)
+    expect(oscillators[0].start).toHaveBeenCalledWith(expect.closeTo(0.25, 5))
+    expect(startFreq(oscillators[0])).toBe(650) // idx -15 % 4 !== 0 -> not accent
+  })
+
+  it('hands off seamlessly from extrapolated beats to the real grid with no gap or double click', () => {
+    const beatTimesRef = { current: [8.5, 9.0, 9.5, 10.0] }
+    const originalBpmRef = { current: 120 }
+    // Right before the last extrapolated beat (idx -1, at 8.0) comes into range.
+    const positionRef = { current: 7.75 }
+
+    const { result } = renderMetronome(positionRef, beatTimesRef, originalBpmRef)
+    act(() => {
+      result.current.setMetronomeOn(true)
+    })
+    act(() => {
+      vi.advanceTimersByTime(25)
+    })
+    expect(oscillators).toHaveLength(1)
+    expect(oscillators[0].start).toHaveBeenCalledWith(expect.closeTo(0.25, 5)) // idx -1 at 8.0
+
+    // Advance position to just before the real first beat (8.5) comes into range.
+    positionRef.current = 8.25
+    act(() => {
+      vi.advanceTimersByTime(25)
+    })
+    // Exactly one more click (the real beatTimes[0]), not zero (a gap) or
+    // two (a duplicate at the extrapolated/real boundary).
+    expect(oscillators).toHaveLength(2)
+    expect(oscillators[1].start).toHaveBeenCalledWith(expect.closeTo(0.25, 5))
+    expect(startFreq(oscillators[1])).toBe(900) // real idx 0 -> accent
+  })
+
+  it('schedules the real first beat directly when the intro is shorter than one beat interval (nothing to extrapolate)', () => {
+    // beatTimes[0] itself is inside the first interval — one beat back
+    // would land before the song's own start (t=0), so there's no virtual
+    // beat to schedule; the real first beat should just be picked up
+    // directly, the same as the non-intro case.
+    const beatTimesRef = { current: [0.3, 0.8, 1.3] } // 0.5s spacing == 120bpm
+    const originalBpmRef = { current: 120 }
+    const positionRef = { current: 0.05 }
+
+    const { result } = renderMetronome(positionRef, beatTimesRef, originalBpmRef)
+    act(() => {
+      result.current.setMetronomeOn(true)
+    })
+    act(() => {
+      vi.advanceTimersByTime(25)
+    })
+
+    expect(oscillators).toHaveLength(1)
+    expect(oscillators[0].start).toHaveBeenCalledWith(expect.closeTo(0.25, 5))
+    expect(startFreq(oscillators[0])).toBe(900) // real idx 0 -> accent
+  })
+
+  // Regression coverage for fix-count-in-handoff-precision: a song whose
+  // first real beat lands within LOOKAHEAD of the start/trim position is
+  // exactly what add-song-trim-points is *for* (trimming a song to start
+  // right on the beat) — without the playbackPendingRef gate, the
+  // scheduler would see position "close enough" to a real beat and
+  // wrongly schedule a click during the count-in's wait (while position is
+  // clamped, not really advancing), consuming the dedup ratchet so the
+  // real beat at the correct moment then gets silently skipped.
+  it('schedules nothing while playback is pending (pre-scheduled but not yet actually started), even if position is within LOOKAHEAD of a real beat', () => {
+    const beatTimesRef = { current: [0.1, 0.6, 1.1] } // first beat 0.1s in — well within LOOKAHEAD of position 0
+    const originalBpmRef = { current: 120 }
+    const positionRef = { current: 0 } // clamped at the start position, as it is during a count-in wait
+    const playbackPendingRef = { current: true }
+
+    const { result } = renderMetronome(
+      positionRef,
+      beatTimesRef,
+      originalBpmRef,
+      undefined,
+      playbackPendingRef
+    )
+    act(() => {
+      result.current.setMetronomeOn(true)
+    })
+    act(() => {
+      // Well past a single 25ms tick — simulates the scheduler polling
+      // repeatedly throughout a real count-in's multi-second wait.
+      vi.advanceTimersByTime(2000)
+    })
+
+    expect(oscillators).toHaveLength(0)
+
+    // Once real playback actually starts (pending clears, position starts
+    // advancing), the same real first beat schedules normally — nothing
+    // was consumed/skipped by a premature schedule above.
+    playbackPendingRef.current = false
+    positionRef.current = 0
+    act(() => {
+      vi.advanceTimersByTime(25)
+    })
+    expect(oscillators).toHaveLength(1)
+    expect(oscillators[0].start).toHaveBeenCalledWith(expect.closeTo(0.1, 5))
+  })
 })
 
 describe('useMetronome - metronome pan', () => {
@@ -162,10 +312,6 @@ describe('useMetronome - metronome pan', () => {
   beforeEach(() => {
     panNodes = []
     window.localStorage.clear()
-    // These tests exercise pan routing, not click synthesis — force 'beep'
-    // (simple oscillator, no frequency sweep) since this stub's
-    // createOscillator only supports the plain `frequency.value =` API.
-    window.localStorage.setItem('velody:clickPreset', JSON.stringify('beep'))
     class FakeAudioContext {
       state = 'running'
       currentTime = 0
@@ -173,7 +319,7 @@ describe('useMetronome - metronome pan', () => {
       createOscillator(): TrackedOsc {
         return {
           type: '',
-          frequency: { value: 0 },
+          frequency: { value: 0, setValueAtTime: vi.fn(), exponentialRampToValueAtTime: vi.fn() },
           connect: vi.fn(),
           start: vi.fn(),
           stop: vi.fn()

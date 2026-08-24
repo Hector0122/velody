@@ -64,6 +64,7 @@ function buildParams(
     durationRef: { current: 0 },
     onAudioTimeRef: { current: () => {} },
     lastScheduledBeatRef: { current: -1 },
+    playbackPendingRef: { current: false },
     progressRef: { current: 0 },
     setMasterPlaying: vi.fn(),
     setActive: vi.fn(),
@@ -503,5 +504,103 @@ describe('useAudioContextEngine - stem url resolution', () => {
     expect(setUrls).toHaveBeenCalledWith({ vocals: 'http://127.0.0.1:1234/song/vocals.wav' })
 
     errorSpy.mockRestore()
+  })
+})
+
+// Regression coverage for fix-count-in-handoff-precision: toggleMasterPlay
+// accepts an optional `when` (this engine's own AudioContext.currentTime
+// scale) to pre-schedule the song's actual first sample at an exact future
+// instant, instead of always starting "as soon as possible" reactively
+// once a count-in is detected to have finished.
+describe('useAudioContextEngine - pre-scheduled playback (count-in handoff)', () => {
+  beforeEach(() => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ arrayBuffer: async () => new ArrayBuffer(16) }))
+    )
+  })
+
+  it('starts sources at the given future `when` instead of immediately', async () => {
+    const createdSources: TrackedSource[] = []
+    stubTrackingAudioContext(createdSources)
+
+    const notifyStemDecodedRef = { current: vi.fn() }
+    const params = buildParams({ notifyStemDecodedRef, masterPlaying: false })
+    const { result } = renderHook(() => useAudioContextEngine(params))
+
+    await waitFor(() => expect(notifyStemDecodedRef.current).toHaveBeenCalledTimes(2))
+
+    act(() => {
+      result.current.toggleMasterPlay(5.0)
+    })
+
+    expect(createdSources).toHaveLength(2)
+    for (const src of createdSources) {
+      expect(src.start).toHaveBeenCalledWith(5.0, 0)
+    }
+  })
+
+  it('starts sources immediately (start(0, ...)) when no `when` is given', async () => {
+    const createdSources: TrackedSource[] = []
+    stubTrackingAudioContext(createdSources)
+
+    const notifyStemDecodedRef = { current: vi.fn() }
+    const params = buildParams({ notifyStemDecodedRef, masterPlaying: false })
+    const { result } = renderHook(() => useAudioContextEngine(params))
+
+    await waitFor(() => expect(notifyStemDecodedRef.current).toHaveBeenCalledTimes(2))
+
+    act(() => {
+      result.current.toggleMasterPlay()
+    })
+
+    for (const src of createdSources) {
+      expect(src.start).toHaveBeenCalledWith(0, 0)
+    }
+  })
+
+  it('marks playback as pending while a future `when` hasn’t arrived yet, and not pending for an immediate start', async () => {
+    stubTrackingAudioContext([])
+    const notifyStemDecodedRef = { current: vi.fn() }
+
+    // Future `when` -> pending.
+    const playbackPendingRef = { current: false }
+    const params = buildParams({ notifyStemDecodedRef, masterPlaying: false, playbackPendingRef })
+    const { result } = renderHook(() => useAudioContextEngine(params))
+    await waitFor(() => expect(notifyStemDecodedRef.current).toHaveBeenCalledTimes(2))
+
+    act(() => {
+      result.current.toggleMasterPlay(5.0)
+    })
+    expect(playbackPendingRef.current).toBe(true)
+  })
+
+  it('does not mark playback as pending for an immediate (no `when`) start', async () => {
+    stubTrackingAudioContext([])
+    const notifyStemDecodedRef = { current: vi.fn() }
+    const playbackPendingRef = { current: true } // starts true to prove it gets cleared
+    const params = buildParams({ notifyStemDecodedRef, masterPlaying: false, playbackPendingRef })
+    const { result } = renderHook(() => useAudioContextEngine(params))
+    await waitFor(() => expect(notifyStemDecodedRef.current).toHaveBeenCalledTimes(2))
+
+    act(() => {
+      result.current.toggleMasterPlay()
+    })
+    expect(playbackPendingRef.current).toBe(false)
+  })
+
+  it('does not mark playback as pending when `when` is not actually in the future', async () => {
+    stubTrackingAudioContext([])
+    const notifyStemDecodedRef = { current: vi.fn() }
+    const playbackPendingRef = { current: true }
+    const params = buildParams({ notifyStemDecodedRef, masterPlaying: false, playbackPendingRef })
+    const { result } = renderHook(() => useAudioContextEngine(params))
+    await waitFor(() => expect(notifyStemDecodedRef.current).toHaveBeenCalledTimes(2))
+
+    act(() => {
+      // FakeAudioContext.currentTime is 0 — a `when` of 0 is "now", not future.
+      result.current.toggleMasterPlay(0)
+    })
+    expect(playbackPendingRef.current).toBe(false)
   })
 })

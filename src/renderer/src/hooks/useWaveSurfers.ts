@@ -7,6 +7,7 @@ import {
   updateTimeDisplays,
   updateCursors
 } from '../utils'
+import { RESET_SCHEDULED_BEAT } from './useMetronome'
 
 interface StemItem {
   key: string
@@ -199,7 +200,7 @@ export function useWaveSurfers({
     ws.on('click', (relativeX: number) => {
       const d = masterWaveReady.current ? ws.getDuration() : durationRef.current
       const clickTime = relativeX * d
-      lastScheduledBeatRef.current = -1
+      lastScheduledBeatRef.current = RESET_SCHEDULED_BEAT
       positionRef.current = clickTime
       seekRef.current(clickTime)
       for (const sw of Object.values(stemWaves.current)) {

@@ -5,18 +5,20 @@ import RecordingConfirmationModal from './RecordingConfirmationModal'
 import StemGrid from './StemGrid'
 import MasterPanel from './MasterPanel'
 import TimelinePanel from './TimelinePanel'
-import { useMetronome } from '../hooks/useMetronome'
+import { useMetronome, RESET_SCHEDULED_BEAT } from '../hooks/useMetronome'
 import { useRecording } from '../hooks/useRecording'
-import useSongAnalysis from '../hooks/useSongAnalysis'
+import useSongAnalysis, { CACHE_VERSION } from '../hooks/useSongAnalysis'
+import { correctTempoOctave, type TempoOctaveDirection } from '../hooks/tempoOctaveCorrection'
 import useMarkers from '../hooks/useMarkers'
 import useTrim from '../hooks/useTrim'
 import useSongCountIn from '../hooks/useSongCountIn'
-import useCountIn from '../hooks/useCountIn'
+import useCountIn, { COUNT_IN_LEAD_IN } from '../hooks/useCountIn'
 import { useExportState } from '../hooks/useExportState'
 import { useWaveSurfers } from '../hooks/useWaveSurfers'
 import { useAudioContextEngine } from '../hooks/useAudioContextEngine'
 import {
   stemNameFromPath,
+  songDirFromStemPath,
   formatTime,
   BPM_MIN,
   BPM_MAX,
@@ -77,7 +79,6 @@ function StemPlayer({
 
   const positionRef = useRef(0)
   const onAudioTimeRef = useRef<(time: number) => void>(() => {})
-  const lastScheduledBeatRef = useRef(-1)
   const seekRef = useRef<(time: number) => void>(() => {})
   // Break the useWaveSurfers <-> useAudioContextEngine circular dependency the
   // same way seekRef does: a stable ref box owned by StemPlayer, written by one
@@ -87,6 +88,14 @@ function StemPlayer({
 
   const masterPlayingRef = useRef(masterPlaying)
   const durationRef = useRef(0)
+  // Written by useAudioContextEngine, read by useMetronome — same
+  // shared-ref pattern as firstBeatOffsetRef/originalBpmRef below. True
+  // while playback has been pre-scheduled (a count-in's stem-engine
+  // handoff) but the scheduled instant hasn't arrived yet, so
+  // useMetronome's in-song scheduler doesn't fire against a position
+  // that's clamped/not really advancing yet. See
+  // fix-count-in-handoff-precision.
+  const playbackPendingRef = useRef(false)
   const firstBeatOffsetRef = useRef(0)
   // originalBpmRef/beatTimesRef are written by useSongAnalysis and read by
   // useMetronome for grid-based scheduling — same shared-ref pattern as
@@ -105,18 +114,28 @@ function StemPlayer({
     setMetronomeOn,
     metroVolume,
     setMetroVolume,
-    clickPreset,
-    setClickPreset,
     metroPan,
     setMetroPan,
-    playClick
+    playClick,
+    ensureAudioCtx: ensureMetronomeAudioCtx,
+    // useMetronome owns the *real* scheduling ratchet its own scheduler
+    // functions read/write internally — this must be the exact same ref
+    // instance threaded into useAudioContextEngine/useWaveSurfers/the BPM
+    // handlers below for their "reset on seek/loop/restart/BPM-change"
+    // resets to actually reach the scheduler. Before this fix, StemPlayer
+    // declared its own separate `useRef(-1)` for this — a different object
+    // useMetronome never read, so every one of those resets was a no-op
+    // against the metronome's real internal ratchet (see
+    // fix-count-in-song-start-timing).
+    lastScheduledBeatRef
   } = useMetronome(
     masterPlaying,
     masterPlayingRef,
     positionRef,
     firstBeatOffsetRef,
     originalBpmRef,
-    beatTimesRef
+    beatTimesRef,
+    playbackPendingRef
   )
 
   useSongAnalysis(urls, stems, setBpm, firstBeatOffsetRef, originalBpmRef, beatTimesRef)
@@ -169,7 +188,7 @@ function StemPlayer({
     stemMeta: STEM_META,
     trimStart,
     trimEnd,
-    clickPreset
+    clickPreset: 'woodblock'
   })
 
   const stemItems = useMemo(() => {
@@ -232,7 +251,10 @@ function StemPlayer({
     handleStemVolume,
     handleStemPanning,
     seek,
-    audioCtxRef,
+    // Aliased to disambiguate from the metronome's own, separate
+    // ensureAudioCtx (destructured below as ensureMetronomeAudioCtx) — see
+    // the count-in handoff in handleToggleMasterPlayWithCountIn.
+    ensureAudioCtx: ensureStemAudioCtx,
     getDecodedBuffer,
     masterPan,
     setMasterPan
@@ -258,6 +280,7 @@ function StemPlayer({
     durationRef,
     onAudioTimeRef,
     lastScheduledBeatRef,
+    playbackPendingRef,
     progressRef,
     setMasterPlaying,
     setActive,
@@ -287,42 +310,74 @@ function StemPlayer({
   // cancels or interferes with the other. See openspec/changes/
   // add-song-count-in.
   const { playbackCountInBars, setPlaybackCountInBars } = useSongCountIn(stems)
-  const playbackCountIn = useCountIn(audioCtxRef, playClick)
+  // Must use the metronome's own ensureAudioCtx, not the stem-playback
+  // engine's audioCtxRef — playClick only ever plays through the
+  // metronome's own (separate) AudioContext. See useCountIn.ts.
+  const playbackCountIn = useCountIn(ensureMetronomeAudioCtx, playClick)
   const [playbackCounting, setPlaybackCounting] = useState(false)
   const [playbackCountRemaining, setPlaybackCountRemaining] = useState(0)
 
+  // Pre-schedules the song's actual first sample on the *stem engine's own*
+  // AudioContext clock, up front — at the same moment the count-in's clicks
+  // get scheduled on the *metronome's* separate AudioContext clock — rather
+  // than reactively calling toggleMasterPlay() only once the count-in is
+  // *detected* to have finished (the previous design). That reactive
+  // trigger, even after being moved off setTimeout onto an rAF poll of
+  // ctx.currentTime (fix-count-in-onbeat-handoff-jitter), was still bounded
+  // by ~1 animation frame (~16ms) of polling granularity — small, but
+  // enough to be perceptible to a musician listening critically for a tight
+  // click, and part of why the count-in→song handoff still didn't feel
+  // fully locked in.
+  //
+  // The fix: both AudioContexts tick at the same real-world rate (1 second
+  // of ctx.currentTime == 1 real second) even though their `currentTime`
+  // values start from unrelated zero-points — so computing "this context's
+  // own currentTime + the same real-seconds count-in duration" on *each*
+  // context independently, at the same synchronous moment (when Play is
+  // pressed), lines the two schedules up without ever needing to convert
+  // between the two clocks, and without any reactive polling step at the
+  // handoff at all. onComplete (below) becomes purely a UI-state signal for
+  // when the on-screen countdown overlay should disappear — no longer
+  // gates any audio.
+  // See openspec/changes/fix-count-in-handoff-precision.
   const handleToggleMasterPlayWithCountIn = useCallback((): void => {
     if (playbackCounting) {
       playbackCountIn.cancel()
       setPlaybackCounting(false)
+      // The stem engine's playback was already pre-scheduled (armed, even
+      // if not yet audible) the instant the count-in started — cancelling
+      // only the count-in's clicks would leave that scheduled start intact
+      // and the song would still begin unexpectedly at the original `when`.
+      // toggleMasterPlay() with no args takes its "already playing -> stop"
+      // branch here (masterPlaying is already true from the pre-schedule
+      // below), which stops every source, including ones scheduled for a
+      // still-future start time (AudioBufferSourceNode.stop() before its
+      // scheduled start correctly cancels it — see Web Audio spec).
+      toggleMasterPlay()
       return
     }
     if (!masterPlaying && playbackCountInBars > 0) {
-      // toggleMasterPlay normally creates the AudioContext lazily on first
-      // play; the count-in needs it to already exist to schedule clicks,
-      // so ensure it here first (mirrors useRecording's own fallback
-      // creation for the same reason).
-      if (!audioCtxRef.current) {
-        try {
-          audioCtxRef.current = new AudioContext()
-        } catch {
-          console.error('[StemPlayer] Failed to create AudioContext for count-in')
-          toggleMasterPlay()
-          return
-        }
-      }
-      if (audioCtxRef.current.state === 'suspended') audioCtxRef.current.resume()
-
       setPlaybackCounting(true)
+
+      const totalBeats = playbackCountInBars * 4
+      const interval = 60 / bpm
+      const countInDuration = COUNT_IN_LEAD_IN + totalBeats * interval
+      const stemCtx = ensureStemAudioCtx()
+      const stemWhen = stemCtx.currentTime + countInDuration
+
+      // Deliberately not relying on playbackCountIn's own onComplete to
+      // gate audio — see the comment above. It's given a no-op; only the
+      // visual countdown state needs to clear, handled via a plain timeout
+      // matched to the same duration (imprecision here is inaudible —
+      // display only).
       playbackCountIn.start(
         playbackCountInBars,
         bpm,
         (remaining) => setPlaybackCountRemaining(remaining),
-        () => {
-          setPlaybackCounting(false)
-          toggleMasterPlay()
-        }
+        () => {}
       )
+      setTimeout(() => setPlaybackCounting(false), countInDuration * 1000)
+      toggleMasterPlay(stemWhen)
       return
     }
     toggleMasterPlay()
@@ -331,9 +386,9 @@ function StemPlayer({
     masterPlaying,
     playbackCountInBars,
     bpm,
-    audioCtxRef,
     playbackCountIn,
-    toggleMasterPlay
+    toggleMasterPlay,
+    ensureStemAudioCtx
   ])
 
   const onAudioTime = useCallback(
@@ -371,7 +426,7 @@ function StemPlayer({
     handleDiscardRecording,
     handleSaveRecording
   } = useRecording({
-    audioCtxRef,
+    ensureAudioCtx: ensureMetronomeAudioCtx,
     seek,
     stemWaves,
     waveUrlsRef,
@@ -441,23 +496,105 @@ function StemPlayer({
   const handleBpmDecrement = useCallback((): void => {
     setBpm((prev) => {
       const next = Math.max(BPM_MIN, prev - 1)
-      lastScheduledBeatRef.current = -1
+      lastScheduledBeatRef.current = RESET_SCHEDULED_BEAT
       return next
     })
-  }, [setBpm])
+  }, [setBpm, lastScheduledBeatRef])
   const handleBpmIncrement = useCallback((): void => {
     setBpm((prev) => {
       const next = Math.min(BPM_MAX, prev + 1)
-      lastScheduledBeatRef.current = -1
+      lastScheduledBeatRef.current = RESET_SCHEDULED_BEAT
       return next
     })
-  }, [setBpm])
+  }, [setBpm, lastScheduledBeatRef])
   const handleBpmChange = useCallback(
     (v: number): void => {
       setBpm(v)
-      lastScheduledBeatRef.current = -1
+      lastScheduledBeatRef.current = RESET_SCHEDULED_BEAT
     },
-    [setBpm]
+    [setBpm, lastScheduledBeatRef]
+  )
+
+  const [correctingTempoOctave, setCorrectingTempoOctave] = useState(false)
+
+  // Applies a tempo-octave correction's result (however it was obtained)
+  // and persists it — shared by both the redetected and the arithmetic-
+  // fallback paths in handleCorrectTempoOctave below.
+  const applyTempoOctaveCorrection = useCallback(
+    (correction: { bpm: number; firstBeatOffset: number; beatTimes: number[] }): void => {
+      beatTimesRef.current = correction.beatTimes
+      firstBeatOffsetRef.current = correction.firstBeatOffset
+      originalBpmRef.current = correction.bpm
+      lastScheduledBeatRef.current = RESET_SCHEDULED_BEAT
+      setBpm(correction.bpm)
+
+      const songDir = songDirFromStemPath(stems[0])
+      window.api?.saveMeta(songDir, {
+        bpm: correction.bpm,
+        firstBeatOffset: correction.firstBeatOffset,
+        beatTimes: correction.beatTimes,
+        _version: CACHE_VERSION
+      })
+    },
+    [stems, beatTimesRef, originalBpmRef, firstBeatOffsetRef, lastScheduledBeatRef, setBpm]
+  )
+
+  // Corrects a tempo-octave detection error (detector locked onto half or
+  // double the real tempo) while keeping the metronome locked to a real,
+  // onset-aligned beat grid — unlike just re-typing a doubled/halved BPM
+  // (handleBpmChange above), which would fall out of grid mode into plain
+  // constant-tempo scheduling.
+  //
+  // Re-runs beat detection with the corrected tempo as an explicit prior
+  // (detect_bpm.py's --bpm-hint) rather than arithmetically interpolating/
+  // decimating the already-detected grid client-side: the original
+  // arithmetic-only approach (tempoOctaveCorrection.ts) assumes perfectly
+  // uniform spacing between detected beats, which real recordings (natural
+  // human timing, non-quantized performances) don't actually have —
+  // reported as an audible "se adelanta y se atrasa" (drifts ahead/behind)
+  // alternating pattern on doubling, since every other click (the
+  // arithmetic midpoint) landed slightly off the real transient while the
+  // originally-detected clicks stayed correct. Re-detecting via librosa's
+  // beat tracker at the corrected tempo instead finds genuinely
+  // onset-aligned positions directly from the audio. Falls back to the
+  // arithmetic approach only if redetection itself fails (e.g. the Python
+  // worker errors) — an imperfect grid is still better than none.
+  // See openspec/changes/add-tempo-octave-correction.
+  const handleCorrectTempoOctave = useCallback(
+    (direction: TempoOctaveDirection): void => {
+      if (stems.length === 0 || correctingTempoOctave) return
+      const hintBpm =
+        direction === 'double' ? originalBpmRef.current * 2 : originalBpmRef.current / 2
+
+      setCorrectingTempoOctave(true)
+      ;(async (): Promise<void> => {
+        try {
+          const redetected = await window.api?.detectBpm(stems[0], hintBpm)
+          if (redetected && redetected.beatTimes.length > 0) {
+            applyTempoOctaveCorrection(redetected)
+            return
+          }
+        } catch {
+          /* fall through to the arithmetic fallback below */
+        }
+        applyTempoOctaveCorrection(
+          correctTempoOctave(
+            beatTimesRef.current,
+            originalBpmRef.current,
+            firstBeatOffsetRef.current,
+            direction
+          )
+        )
+      })().finally(() => setCorrectingTempoOctave(false))
+    },
+    [
+      stems,
+      correctingTempoOctave,
+      originalBpmRef,
+      beatTimesRef,
+      firstBeatOffsetRef,
+      applyTempoOctaveCorrection
+    ]
   )
 
   const handleMetronomeToggle = useCallback((): void => {
@@ -557,7 +694,6 @@ function StemPlayer({
           metronomeOn={metronomeOn}
           metroVolume={metroVolume}
           metroPan={metroPan}
-          clickPreset={clickPreset}
           monitorVolume={monitorVolume}
           recordingFormat={recordingFormat}
           countInBars={countInBars}
@@ -570,10 +706,11 @@ function StemPlayer({
           onBpmDecrement={handleBpmDecrement}
           onBpmChange={handleBpmChange}
           onBpmIncrement={handleBpmIncrement}
+          onCorrectTempoOctave={handleCorrectTempoOctave}
+          correctingTempoOctave={correctingTempoOctave}
           onMetronomeToggle={handleMetronomeToggle}
           onMetroVolumeChange={handleMetroVolumeChange}
           onMetroPanChange={setMetroPan}
-          onClickPresetChange={setClickPreset}
           onMonitorVolumeChange={handleMonitorVolumeChange}
           onRecordingFormatChange={handleRecordingFormatChange}
           onCountInBarsChange={handleCountInBarsChange}

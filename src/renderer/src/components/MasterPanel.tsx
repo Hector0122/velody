@@ -1,6 +1,6 @@
-import { memo } from 'react'
+import { memo, useState } from 'react'
 import { formatTime, BPM_MIN, BPM_MAX } from '../utils'
-import { CLICK_PRESET_LABELS, type ClickPreset } from '../hooks/clickPresets'
+import type { TempoOctaveDirection } from '../hooks/tempoOctaveCorrection'
 
 interface MasterPanelProps {
   masterPlaying: boolean
@@ -11,7 +11,6 @@ interface MasterPanelProps {
   metronomeOn: boolean
   metroVolume: number
   metroPan: number
-  clickPreset: ClickPreset
   monitorVolume: number
   recordingFormat: 'wav' | 'mp3'
   countInBars: number
@@ -24,10 +23,11 @@ interface MasterPanelProps {
   onBpmDecrement: () => void
   onBpmChange: (v: number) => void
   onBpmIncrement: () => void
+  onCorrectTempoOctave: (direction: TempoOctaveDirection) => void
+  correctingTempoOctave: boolean
   onMetronomeToggle: () => void
   onMetroVolumeChange: (v: number) => void
   onMetroPanChange: (v: number) => void
-  onClickPresetChange: (preset: ClickPreset) => void
   onMonitorVolumeChange: (v: number) => void
   onRecordingFormatChange: (fmt: 'wav' | 'mp3') => void
   onCountInBarsChange: (bars: number) => void
@@ -43,7 +43,6 @@ function MasterPanel({
   metronomeOn,
   metroVolume,
   metroPan,
-  clickPreset,
   monitorVolume,
   recordingFormat,
   countInBars,
@@ -56,15 +55,22 @@ function MasterPanel({
   onBpmDecrement,
   onBpmChange,
   onBpmIncrement,
+  onCorrectTempoOctave,
+  correctingTempoOctave,
   onMetronomeToggle,
   onMetroVolumeChange,
   onMetroPanChange,
-  onClickPresetChange,
   onMonitorVolumeChange,
   onRecordingFormatChange,
   onCountInBarsChange,
   onShowExportModal
 }: MasterPanelProps): React.JSX.Element {
+  // Collapsed by default — Record is settings for an action that actually
+  // lives on each stem card (the record button), not something needed at a
+  // glance; keeping it closed until wanted saves permanent sidebar height.
+  // Local-only, not persisted — same rationale as any other disclosure
+  // widget, no need to remember this across sessions.
+  const [recordOpen, setRecordOpen] = useState(false)
   return (
     <div className="w-44 shrink-0 bg-neutral-900/80 rounded-md border border-neutral-800 p-4 flex flex-col items-center gap-5 self-start order-1">
       <h3 className="text-sm font-semibold text-neutral-400 uppercase tracking-wide">Master</h3>
@@ -126,58 +132,74 @@ function MasterPanel({
       </div>
 
       <div className="border-t border-neutral-800 pt-4 w-full flex flex-col gap-3">
-        <h3 className="text-sm font-semibold text-neutral-400 uppercase tracking-wide text-center">
+        <button
+          onClick={() => setRecordOpen((prev) => !prev)}
+          className="flex items-center justify-center gap-1.5 w-full text-sm font-semibold text-neutral-400 hover:text-white uppercase tracking-wide transition-colors"
+          aria-expanded={recordOpen}
+        >
+          <span
+            className={`text-[10px] transition-transform ${recordOpen ? 'rotate-90' : ''}`}
+            aria-hidden="true"
+          >
+            &#9654;
+          </span>
           Record
-        </h3>
-        <div className="flex flex-col gap-2 w-full">
-          <span className="text-[10px] text-neutral-500 text-center">Monitor volume</span>
-          <input
-            type="range"
-            aria-label="Monitor volume"
-            min="0"
-            max="1"
-            step="0.01"
-            value={monitorVolume}
-            onChange={(e) => onMonitorVolumeChange(parseFloat(e.target.value))}
-            className="accent-red-500 cursor-pointer w-full"
-          />
-        </div>
-        <div className="flex items-center justify-center gap-2">
-          <button
-            onClick={() => onRecordingFormatChange('wav')}
-            className={`px-3 py-1 rounded-sm text-xs font-medium transition-colors ${
-              recordingFormat === 'wav'
-                ? 'bg-red-600 text-white'
-                : 'bg-neutral-800 text-neutral-400'
-            }`}
-          >
-            WAV
-          </button>
-          <button
-            onClick={() => onRecordingFormatChange('mp3')}
-            className={`px-3 py-1 rounded-sm text-xs font-medium transition-colors ${
-              recordingFormat === 'mp3'
-                ? 'bg-red-600 text-white'
-                : 'bg-neutral-800 text-neutral-400'
-            }`}
-          >
-            MP3
-          </button>
-        </div>
-        <div className="flex items-center justify-center gap-1.5">
-          <span className="text-[10px] text-neutral-500">Count-in</span>
-          {[0, 1, 2, 4].map((bars) => (
-            <button
-              key={bars}
-              onClick={() => onCountInBarsChange(bars)}
-              className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors ${
-                countInBars === bars ? 'bg-red-600 text-white' : 'bg-neutral-800 text-neutral-400'
-              }`}
-            >
-              {bars === 0 ? 'OFF' : `${bars}`}
-            </button>
-          ))}
-        </div>
+        </button>
+        {recordOpen && (
+          <>
+            <div className="flex flex-col gap-2 w-full">
+              <span className="text-[10px] text-neutral-500 text-center">Monitor volume</span>
+              <input
+                type="range"
+                aria-label="Monitor volume"
+                min="0"
+                max="1"
+                step="0.01"
+                value={monitorVolume}
+                onChange={(e) => onMonitorVolumeChange(parseFloat(e.target.value))}
+                className="accent-red-500 cursor-pointer w-full"
+              />
+            </div>
+            <div className="flex items-center justify-center gap-2">
+              <button
+                onClick={() => onRecordingFormatChange('wav')}
+                className={`px-3 py-1 rounded-sm text-xs font-medium transition-colors ${
+                  recordingFormat === 'wav'
+                    ? 'bg-red-600 text-white'
+                    : 'bg-neutral-800 text-neutral-400'
+                }`}
+              >
+                WAV
+              </button>
+              <button
+                onClick={() => onRecordingFormatChange('mp3')}
+                className={`px-3 py-1 rounded-sm text-xs font-medium transition-colors ${
+                  recordingFormat === 'mp3'
+                    ? 'bg-red-600 text-white'
+                    : 'bg-neutral-800 text-neutral-400'
+                }`}
+              >
+                MP3
+              </button>
+            </div>
+            <div className="flex items-center justify-center gap-1.5">
+              <span className="text-[10px] text-neutral-500">Count-in</span>
+              {[0, 1, 2, 4].map((bars) => (
+                <button
+                  key={bars}
+                  onClick={() => onCountInBarsChange(bars)}
+                  className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors ${
+                    countInBars === bars
+                      ? 'bg-red-600 text-white'
+                      : 'bg-neutral-800 text-neutral-400'
+                  }`}
+                >
+                  {bars === 0 ? 'OFF' : `${bars}`}
+                </button>
+              ))}
+            </div>
+          </>
+        )}
       </div>
 
       <div className="border-t border-neutral-800 pt-3 w-full">
@@ -218,6 +240,30 @@ function MasterPanel({
             className="w-6 h-6 rounded bg-neutral-800 text-neutral-400 hover:text-white text-xs flex items-center justify-center"
           >
             +
+          </button>
+        </div>
+        <div className="flex items-center justify-center gap-1.5">
+          <span
+            className="text-[10px] text-neutral-500"
+            title="Detected tempo sounds wrong (off by exactly half or double)? Correct it while keeping the metronome locked to the real beat grid."
+          >
+            {correctingTempoOctave ? 'Correcting…' : 'Tempo wrong?'}
+          </span>
+          <button
+            onClick={() => onCorrectTempoOctave('halve')}
+            disabled={correctingTempoOctave}
+            title="Halve tempo (detector doubled the real tempo)"
+            className="px-2 py-0.5 rounded text-[10px] font-medium bg-neutral-800 text-neutral-400 hover:text-white transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            ½
+          </button>
+          <button
+            onClick={() => onCorrectTempoOctave('double')}
+            disabled={correctingTempoOctave}
+            title="Double tempo (detector halved the real tempo)"
+            className="px-2 py-0.5 rounded text-[10px] font-medium bg-neutral-800 text-neutral-400 hover:text-white transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            ×2
           </button>
         </div>
         <div className="flex items-center justify-between px-1">
@@ -270,24 +316,6 @@ function MasterPanel({
           Click on L, mix on R — plug a separate speaker/monitor into each of your interface&apos;s
           L/R jacks.
         </p>
-        <div className="flex flex-col items-center gap-1.5 w-full">
-          <span className="text-[10px] text-neutral-500">Click sound</span>
-          <div className="grid grid-cols-2 gap-1 w-full">
-            {(Object.keys(CLICK_PRESET_LABELS) as ClickPreset[]).map((preset) => (
-              <button
-                key={preset}
-                onClick={() => onClickPresetChange(preset)}
-                className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors ${
-                  clickPreset === preset
-                    ? 'bg-orange-600 text-white'
-                    : 'bg-neutral-800 text-neutral-400 hover:text-white'
-                }`}
-              >
-                {CLICK_PRESET_LABELS[preset]}
-              </button>
-            ))}
-          </div>
-        </div>
         <div className="flex items-center justify-center gap-1.5">
           <span className="text-[10px] text-neutral-500" title="Click before playback starts">
             Count-in on Play

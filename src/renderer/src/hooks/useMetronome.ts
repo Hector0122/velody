@@ -1,11 +1,23 @@
 import { useState, useRef, useEffect, useCallback, useLayoutEffect } from 'react'
-import useClickPreset from './useClickPreset'
 import useLocalStoragePreference from './useLocalStoragePreference'
-import { type ClickPreset, CLICK_PRESETS } from './clickPresets'
+import { CLICK_PRESETS } from './clickPresets'
 
 const LOOKAHEAD = 0.3
 
 const isFiniteNumber = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v)
+
+// Sentinel for lastScheduledBeatRef meaning "nothing scheduled yet this
+// playback session" — reset here and by every seek/loop/restart/BPM-change
+// site elsewhere (useAudioContextEngine, useWaveSurfers, StemPlayer's BPM
+// handlers; they all must share this exact ref instance, returned below).
+// Must be smaller than any real index the scheduler can produce. -1 used to
+// suffice when the smallest real index was 0 (scheduleFromGrid) or 1
+// (scheduleConstantTempo) — now that scheduleFromGrid extrapolates
+// *backward* from the first detected beat with negative indices (see
+// fix-count-in-song-start-timing), a fresh -1 could be less-negative than a
+// legitimate backward-extrapolated starting index, wrongly clamping it away
+// via the `Math.max(computed, lastScheduledBeatRef.current + 1)` ratchet.
+export const RESET_SCHEDULED_BEAT = -Infinity
 
 // First index in `sortedTimes` whose value is >= target (binary search).
 // `beatTimes` is sorted ascending and typically a few hundred entries for a
@@ -28,7 +40,16 @@ export function useMetronome(
   positionRef: React.MutableRefObject<number>,
   firstBeatOffsetRef: React.MutableRefObject<number>,
   originalBpmRef: React.MutableRefObject<number>,
-  beatTimesRef: React.MutableRefObject<number[]>
+  beatTimesRef: React.MutableRefObject<number[]>,
+  // Owned/written by useAudioContextEngine — true while playback has been
+  // pre-scheduled (a future `when`) but that instant hasn't arrived yet, so
+  // positionRef is still clamped at the starting position rather than
+  // genuinely advancing. Without checking this, a song whose first real
+  // beat lands within LOOKAHEAD of the start/trim position (common — see
+  // add-song-trim-points) would get a click wrongly scheduled during a
+  // count-in's wait, consuming the dedup ratchet so the real beat at the
+  // correct moment then gets skipped. See fix-count-in-handoff-precision.
+  playbackPendingRef: React.MutableRefObject<boolean>
 ): {
   bpm: number
   setBpm: (v: number | ((prev: number) => number)) => void
@@ -36,19 +57,34 @@ export function useMetronome(
   setMetronomeOn: (v: boolean | ((prev: boolean) => boolean)) => void
   metroVolume: number
   setMetroVolume: (v: number) => void
-  clickPreset: ClickPreset
-  setClickPreset: (v: ClickPreset) => void
   metroPan: number
   setMetroPan: (v: number) => void
   lastScheduledBeatRef: React.MutableRefObject<number>
   bpmRef: React.MutableRefObject<number>
   playClick: (accent: boolean, scheduledTime: number) => void
+  // Creates the metronome's own AudioContext if it doesn't exist yet (and
+  // resumes it if suspended) — playClick silently no-ops without this
+  // having been called at least once. Exposed so callers that need to
+  // schedule clicks before playback (recording pre-roll, playback
+  // count-in) can guarantee a context exists first; the in-song scheduler
+  // (below) already calls it itself once metronomeOn && masterPlaying.
+  ensureAudioCtx: () => AudioContext | null
 } {
   const [metronomeOn, setMetronomeOn] = useState(false)
   const [bpm, setBpm] = useState(120)
-  const [metroVolume, setMetroVolume] = useState(0.5)
-  const [clickPreset, setClickPreset] = useClickPreset()
-  // Global (not per-song) preference, like clickPreset — see
+  // Global (not per-song) preference, persisted like metroPan below —
+  // previously a plain useState defaulting to 0.5 and reset every launch,
+  // which meant "turn it up louder" never stuck; reported as feeling
+  // perpetually quiet even after raising it. Default raised to 0.85 (was
+  // 0.5) so a fresh install/cleared storage also starts loud enough to
+  // actually hear over a full band — see
+  // simplify-metronome-to-woodblock-only.
+  const [metroVolume, setMetroVolume] = useLocalStoragePreference(
+    'velody:metroVolume',
+    0.85,
+    isFiniteNumber
+  )
+  // Global (not per-song) preference — see
   // openspec/changes/add-metronome-and-mix-panning: lets the click be
   // panned hard to one channel (e.g. to a drummer's monitor via a
   // stereo-splitter cable) independent of the overall mix's pan.
@@ -57,7 +93,6 @@ export function useMetronome(
   const metronomeOnRef = useRef(metronomeOn)
   const bpmRef = useRef(bpm)
   const metroVolumeRef = useRef(metroVolume)
-  const clickPresetRef = useRef(clickPreset)
   // Dual-purpose dedup counter: "last scheduled beat number" in constant-tempo
   // mode, "last scheduled beat-grid index" in grid mode. The two modes are
   // mutually exclusive per tick, and every transition between them (song
@@ -65,7 +100,7 @@ export function useMetronome(
   // (StemPlayer, useWaveSurfers, useRecording), so reinterpreting its stored
   // value between modes is safe — see design.md, "use-detected-beat-grid-for-
   // metronome" change.
-  const lastScheduledBeatRef = useRef(-1)
+  const lastScheduledBeatRef = useRef(RESET_SCHEDULED_BEAT)
   const audioCtxRef = useRef<AudioContext | null>(null)
   // Persistent — created once alongside audioCtxRef, not per click like the
   // short-lived oscillator/gain/noise nodes each preset creates. Every
@@ -78,11 +113,10 @@ export function useMetronome(
     metronomeOnRef.current = metronomeOn
     bpmRef.current = bpm
     metroVolumeRef.current = metroVolume
-    clickPresetRef.current = clickPreset
     if (panNodeRef.current) panNodeRef.current.pan.value = metroPan
   })
 
-  const getAudioCtx = useCallback((): AudioContext | null => {
+  const ensureAudioCtx = useCallback((): AudioContext | null => {
     if (!audioCtxRef.current) {
       try {
         audioCtxRef.current = new AudioContext()
@@ -102,13 +136,7 @@ export function useMetronome(
     const ctx = audioCtxRef.current
     if (!ctx) return
     const destination = panNodeRef.current ?? ctx.destination
-    CLICK_PRESETS[clickPresetRef.current](
-      ctx,
-      accent,
-      scheduledTime,
-      metroVolumeRef.current,
-      destination
-    )
+    CLICK_PRESETS.woodblock(ctx, accent, scheduledTime, metroVolumeRef.current, destination)
   }, [])
 
   // Constant-tempo extrapolation from `offset`/beat 0 — today's algorithm,
@@ -133,13 +161,37 @@ export function useMetronome(
   // past the last detected beat, falls back to the same constant-tempo
   // formula as above, anchored at the last real beat's time/index instead of
   // the song start (see design.md - Decisions).
+  //
+  // Before the first detected beat (e.g. a song with a long intro before
+  // the drums/downbeat), beatTimeAt(idx) extrapolates *backward* from
+  // beatTimes[0] at constant tempo for negative idx, instead of the
+  // scheduler staying silent for the whole intro — beatTimes[idx] - t was
+  // never < LOOKAHEAD that far out, so nothing ever got scheduled until the
+  // real grid began, which is exactly "the metronome goes quiet and only
+  // picks back up once the drums come in" (see
+  // fix-count-in-song-start-timing). idx still advances through negative
+  // values into the real [0, beatTimes.length) range via the same single
+  // loop/ratchet below, so the handoff from extrapolated to real beats is
+  // seamless — no separate branch, no double-scheduling at the boundary.
   const scheduleFromGrid = useCallback(
     (ctx: AudioContext, t: number, beatTimes: number[], bpmValue: number): void => {
-      let idx = Math.max(lowerBound(beatTimes, t), lastScheduledBeatRef.current + 1)
+      const interval = 60 / bpmValue
+      const beatTimeAt = (i: number): number => (i < 0 ? beatTimes[0] + i * interval : beatTimes[i])
 
-      while (idx < beatTimes.length && beatTimes[idx] - t < LOOKAHEAD) {
-        const delaySong = beatTimes[idx] - t
-        playClick(idx % 4 === 0, ctx.currentTime + Math.max(0, delaySong))
+      let idx =
+        t < beatTimes[0]
+          ? Math.max(Math.ceil((t - beatTimes[0]) / interval), lastScheduledBeatRef.current + 1)
+          : Math.max(lowerBound(beatTimes, t), lastScheduledBeatRef.current + 1)
+
+      while (idx < beatTimes.length && beatTimeAt(idx) - t < LOOKAHEAD) {
+        const beatTime = beatTimeAt(idx)
+        // A backward-extrapolated beat can land before the song's own
+        // start (idx very negative, small beatTimes[0]) — never click at a
+        // negative audio position, just consume the ratchet past it.
+        if (beatTime >= 0) {
+          const delaySong = beatTime - t
+          playClick(idx % 4 === 0, ctx.currentTime + Math.max(0, delaySong))
+        }
         lastScheduledBeatRef.current = idx
         idx++
       }
@@ -166,6 +218,11 @@ export function useMetronome(
 
   const schedulerTick = useCallback((): void => {
     if (!metronomeOnRef.current || !masterPlayingRef.current) return
+    // Playback has been pre-scheduled but hasn't actually started yet
+    // (count-in handoff) — positionRef is still clamped at the starting
+    // position, not genuinely advancing, so there's nothing real to
+    // schedule against yet. See the param's doc comment.
+    if (playbackPendingRef.current) return
     const ctx = audioCtxRef.current
     if (!ctx || ctx.state === 'closed') return
     if (ctx.state === 'suspended') {
@@ -194,19 +251,20 @@ export function useMetronome(
     firstBeatOffsetRef,
     originalBpmRef,
     beatTimesRef,
+    playbackPendingRef,
     scheduleFromGrid,
     scheduleConstantTempo
   ])
 
   useEffect(() => {
     if (metronomeOn && masterPlaying) {
-      getAudioCtx()
-      lastScheduledBeatRef.current = -1
+      ensureAudioCtx()
+      lastScheduledBeatRef.current = RESET_SCHEDULED_BEAT
       const id = window.setInterval(schedulerTick, 25)
       return () => clearInterval(id)
     }
     return
-  }, [metronomeOn, masterPlaying, getAudioCtx, schedulerTick])
+  }, [metronomeOn, masterPlaying, ensureAudioCtx, schedulerTick])
 
   return {
     bpm,
@@ -215,12 +273,11 @@ export function useMetronome(
     setMetronomeOn,
     metroVolume,
     setMetroVolume,
-    clickPreset,
-    setClickPreset,
     metroPan,
     setMetroPan,
     lastScheduledBeatRef,
     bpmRef,
-    playClick
+    playClick,
+    ensureAudioCtx
   }
 }

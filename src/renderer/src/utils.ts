@@ -7,6 +7,14 @@ export function stemNameFromPath(path: string): string {
   )
 }
 
+// A song's stem paths all share one directory (the song's own folder under
+// output/stems/) — this is where the .velody metadata sidecar (BPM, beat
+// grid, markers, trim points) lives. Strips just the last path segment
+// (the filename) rather than assuming any particular stem name.
+export function songDirFromStemPath(stemPath: string): string {
+  return stemPath.replace(/[/\\][^/\\]+$/, '')
+}
+
 export function formatTime(seconds: number): string {
   const m = Math.floor(seconds / 60)
   const s = Math.floor(seconds % 60)

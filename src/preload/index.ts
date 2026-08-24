@@ -125,7 +125,7 @@ const api = {
       bpm?: number
       trimStart?: number
       trimEnd?: number
-      clickPreset?: 'pingpong' | 'woodblock' | 'rimclick' | 'beep'
+      clickPreset?: 'woodblock'
     }
   ) => ipcRenderer.invoke('export:mix', filePaths, outputPath, options),
   exportSingle: (
@@ -143,8 +143,8 @@ const api = {
   saveMeta: (songDir: string, meta: Record<string, unknown>) =>
     ipcRenderer.invoke('song:saveMeta', songDir, meta),
   loadMeta: (songDir: string) => ipcRenderer.invoke('song:loadMeta', songDir),
-  detectBpm: (stemPath: string) =>
-    ipcRenderer.invoke('song:detectBpm', stemPath) as Promise<{
+  detectBpm: (stemPath: string, bpmHint?: number) =>
+    ipcRenderer.invoke('song:detectBpm', stemPath, bpmHint) as Promise<{
       bpm: number
       firstBeatOffset: number
       beatTimes: number[]

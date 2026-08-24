@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   stemNameFromPath,
+  songDirFromStemPath,
   formatTime,
   filterSongsByQuery,
   reorderSetlistSongs,
@@ -38,6 +39,18 @@ describe('stemNameFromPath', () => {
 
   it('handles nested directories', () => {
     expect(stemNameFromPath('/a/b/c/d/e/f/other.flac')).toBe('other')
+  })
+})
+
+describe('songDirFromStemPath', () => {
+  it('strips the filename from a Unix path', () => {
+    expect(songDirFromStemPath('/output/stems/My Song/vocals.wav')).toBe('/output/stems/My Song')
+  })
+
+  it('strips the filename from a Windows path', () => {
+    expect(songDirFromStemPath('C:\\output\\stems\\My Song\\drums.mp3')).toBe(
+      'C:\\output\\stems\\My Song'
+    )
   })
 })
 

@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react'
+import { songDirFromStemPath } from '../utils'
 
 // Bumped from 17: older caches never stored the detected beat-time grid, so
 // they must be treated as stale rather than silently falling back to
@@ -30,7 +31,7 @@ export default function useSongAnalysis(
     ;(async (): Promise<void> => {
       if (!window.api) return
 
-      const songDir = stems[0].replace(/[/\\][^/\\]+$/, '')
+      const songDir = songDirFromStemPath(stems[0])
       const cached = (await window.api.loadMeta(songDir)) as {
         bpm?: number
         firstBeatOffset?: number

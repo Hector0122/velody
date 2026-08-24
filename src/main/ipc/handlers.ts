@@ -16,6 +16,15 @@ interface BpmDetectionResult {
 }
 
 let bpmDetectionRunning: Promise<BpmDetectionResult | null> | null = null
+// Separate singleflight guard for hint-based redetection (see
+// add-tempo-octave-correction) — kept independent from bpmDetectionRunning
+// above so a correction redetect for one song can't return the wrong
+// song's normal-detection result (or vice versa) if both happen to be
+// in flight at once. Also lower-risk to run concurrently with a normal
+// detection than two normal detections are with each other: the hint path
+// skips TempoCNN/TensorFlow entirely (the actual OOM risk on low-RAM
+// machines — see CLAUDE.md), it's just librosa's beat tracker.
+let bpmRedetectionRunning: Promise<BpmDetectionResult | null> | null = null
 
 const STEM_NAMES = ['vocals', 'drums', 'bass', 'other', 'piano', 'guitar']
 
@@ -46,71 +55,36 @@ export function trimOutputArgs(trimStart?: number, trimEnd?: number): string[] {
   return ['-t', String(duration)]
 }
 
-// Raw-PCM equivalents of the renderer's Web-Audio click presets
-// (clickPresets.ts) — see openspec/changes/add-metronome-click-sounds. No
-// Web Audio API exists in the main process, so each preset is synthesized
-// directly as a sample value at `beatPos` (seconds since the last beat).
-// The frequency sweeps use a simple linear freq(t)*t approximation rather
-// than a true chirp's phase integral — an acceptable simplification for a
-// <20ms transient, and already more than the original fixed-frequency
-// export click did. Kept independent from the renderer's ClickPreset type
-// rather than shared — the two implementations (Web Audio vs. raw PCM) are
-// unrelated code with no common runtime.
-export type ClickTrackPreset = 'pingpong' | 'woodblock' | 'rimclick' | 'beep'
+// Raw-PCM equivalent of the renderer's Web-Audio 'woodblock' click
+// (clickPresets.ts) — see openspec/changes/add-metronome-click-sounds and
+// simplify-metronome-to-woodblock-only. No Web Audio API exists in the main
+// process, so the click is synthesized directly as a sample value at
+// `beatPos` (seconds since the last beat). The frequency sweep uses a
+// simple linear freq(t)*t approximation rather than a true chirp's phase
+// integral — an acceptable simplification for a <30ms transient. Kept
+// independent from the renderer's ClickPreset type rather than shared — the
+// two implementations (Web Audio vs. raw PCM) are unrelated code with no
+// common runtime.
+export type ClickTrackPreset = 'woodblock'
 
 // `beatPos` is a *signed* offset from the nearest beat (see the caller:
 // `t - Math.round(t / beatInterval) * beatInterval`), so it's negative for
 // roughly the second half of every beat interval (samples closer to the
-// *next* beat than the previous one). Every case below requires
-// `beatPos >= 0` in addition to the upper bound — omitting the lower bound
-// (a bug present in the original pre-add-metronome-click-sounds 'beep'
-// math, fixed here rather than preserved) would otherwise trigger the
-// click branch across that entire negative half with an unbounded,
-// clipping `(1 - phase)` envelope for very negative `beatPos`.
-export function clickSampleValue(
-  preset: ClickTrackPreset,
-  beatPos: number,
-  accent: boolean
-): number {
-  switch (preset) {
-    case 'pingpong': {
-      const decay = 0.018
-      let sample = 0
-      if (beatPos >= 0 && beatPos < decay) {
-        const sweepDur = 0.012
-        const [start, end] = accent ? [2000, 1200] : [1400, 900]
-        const freq = beatPos < sweepDur ? start + (end - start) * (beatPos / sweepDur) : end
-        sample =
-          Math.sin(2 * Math.PI * freq * beatPos) * (1 - beatPos / decay) * (accent ? 0.5 : 0.35)
-      }
-      const noiseDur = 0.004
-      if (beatPos >= 0 && beatPos < noiseDur) {
-        sample += (Math.random() * 2 - 1) * (1 - beatPos / noiseDur) * (accent ? 0.18 : 0.12)
-      }
-      return sample
-    }
-    case 'woodblock': {
-      const decay = 0.03
-      if (beatPos < 0 || beatPos >= decay) return 0
-      const [start, end] = accent ? [900, 500] : [650, 400]
-      const freq = start + (end - start) * (beatPos / decay)
-      return Math.sin(2 * Math.PI * freq * beatPos) * (1 - beatPos / decay) * (accent ? 0.5 : 0.35)
-    }
-    case 'rimclick': {
-      const decay = 0.006
-      if (beatPos < 0 || beatPos >= decay) return 0
-      return (Math.random() * 2 - 1) * (1 - beatPos / decay) * (accent ? 0.6 : 0.4)
-    }
-    case 'beep':
-    default: {
-      const clickDur = accent ? 0.002 : 0.001
-      if (beatPos < 0 || beatPos >= clickDur) return 0
-      const freq = accent ? 1600 : 900
-      return (
-        Math.sin(2 * Math.PI * freq * beatPos) * (1 - beatPos / clickDur) * (accent ? 0.5 : 0.3)
-      )
-    }
-  }
+// *next* beat than the previous one). Requires `beatPos >= 0` in addition
+// to the upper bound — omitting the lower bound (a bug present in the
+// original pre-add-metronome-click-sounds math, fixed here rather than
+// preserved) would otherwise trigger the click branch across that entire
+// negative half with an unbounded, clipping `(1 - phase)` envelope for very
+// negative `beatPos`. Gain multipliers match the renderer's boosted
+// woodblock (0.95/0.75, was 0.5/0.35 — reported as too quiet even at max
+// volume; see simplify-metronome-to-woodblock-only) so an exported mix's
+// baked-in click matches what's heard live.
+export function clickSampleValue(beatPos: number, accent: boolean): number {
+  const decay = 0.03
+  if (beatPos < 0 || beatPos >= decay) return 0
+  const [start, end] = accent ? [900, 500] : [650, 400]
+  const freq = start + (end - start) * (beatPos / decay)
+  return Math.sin(2 * Math.PI * freq * beatPos) * (1 - beatPos / decay) * (accent ? 0.95 : 0.75)
 }
 
 function getStemsRootDir(): string {
@@ -319,46 +293,57 @@ export function registerIpcHandlers(): void {
     }
   })
 
+  // `bpmHint`, when given, is threaded through as --bpm-hint — used by
+  // add-tempo-octave-correction to re-run librosa's beat tracker with a
+  // known-correct tempo as an explicit prior (finding real onset-aligned
+  // beat positions at that tempo) instead of TempoCNN's own estimate. See
+  // detect_bpm.py.
+  async function runDetectBpm(
+    stemPath: string,
+    bpmHint?: number
+  ): Promise<BpmDetectionResult | null> {
+    const pythonPath = setupManager?.getPythonPath() ?? 'python3'
+    const scriptPath = join(getPythonWorkerDir(), 'detect_bpm.py')
+    const ffmpegPath = setupManager?.getFfmpegPath() ?? 'ffmpeg'
+    const args = [scriptPath, stemPath, '--ffmpeg-path', ffmpegPath]
+    if (typeof bpmHint === 'number') args.push('--bpm-hint', String(bpmHint))
+    try {
+      const out = await new Promise<string>((resolve, reject) => {
+        execFile(pythonPath, args, { timeout: 600_000, maxBuffer: 65536 }, (err, stdout) =>
+          err ? reject(err) : resolve(stdout)
+        )
+      })
+      const lines = out.trim().split('\n')
+      const last = lines[lines.length - 1]
+      const parsed = last ? JSON.parse(last.trim()) : null
+      if (parsed && typeof parsed.bpm === 'number' && typeof parsed.firstBeatOffset === 'number') {
+        // beatTimes is new; default to [] so an older script build (or any
+        // unexpected shape) degrades to "no grid" rather than breaking.
+        const beatTimes = Array.isArray(parsed.beatTimes) ? parsed.beatTimes : []
+        return { bpm: parsed.bpm, firstBeatOffset: parsed.firstBeatOffset, beatTimes }
+      }
+      return null
+    } catch (err) {
+      console.error('[detectBpm]', err)
+      return null
+    }
+  }
+
   ipcMain.handle(
     'song:detectBpm',
-    async (_event, stemPath: string): Promise<BpmDetectionResult | null> => {
+    async (_event, stemPath: string, bpmHint?: number): Promise<BpmDetectionResult | null> => {
+      if (typeof bpmHint === 'number') {
+        if (bpmRedetectionRunning) return bpmRedetectionRunning
+        bpmRedetectionRunning = runDetectBpm(stemPath, bpmHint).finally(() => {
+          bpmRedetectionRunning = null
+        })
+        return bpmRedetectionRunning
+      }
+
       if (bpmDetectionRunning) return bpmDetectionRunning
-
-      bpmDetectionRunning = (async (): Promise<BpmDetectionResult | null> => {
-        const pythonPath = setupManager?.getPythonPath() ?? 'python3'
-        const scriptPath = join(getPythonWorkerDir(), 'detect_bpm.py')
-        const ffmpegPath = setupManager?.getFfmpegPath() ?? 'ffmpeg'
-        try {
-          const out = await new Promise<string>((resolve, reject) => {
-            execFile(
-              pythonPath,
-              [scriptPath, stemPath, '--ffmpeg-path', ffmpegPath],
-              { timeout: 600_000, maxBuffer: 65536 },
-              (err, stdout) => (err ? reject(err) : resolve(stdout))
-            )
-          })
-          const lines = out.trim().split('\n')
-          const last = lines[lines.length - 1]
-          const parsed = last ? JSON.parse(last.trim()) : null
-          if (
-            parsed &&
-            typeof parsed.bpm === 'number' &&
-            typeof parsed.firstBeatOffset === 'number'
-          ) {
-            // beatTimes is new; default to [] so an older script build (or any
-            // unexpected shape) degrades to "no grid" rather than breaking.
-            const beatTimes = Array.isArray(parsed.beatTimes) ? parsed.beatTimes : []
-            return { bpm: parsed.bpm, firstBeatOffset: parsed.firstBeatOffset, beatTimes }
-          }
-          return null
-        } catch (err) {
-          console.error('[detectBpm]', err)
-          return null
-        } finally {
-          bpmDetectionRunning = null
-        }
-      })()
-
+      bpmDetectionRunning = runDetectBpm(stemPath).finally(() => {
+        bpmDetectionRunning = null
+      })
       return bpmDetectionRunning
     }
   )
@@ -407,7 +392,6 @@ export function registerIpcHandlers(): void {
     filePath: string,
     bpm: number,
     durationSec: number,
-    preset: ClickTrackPreset = 'pingpong',
     sampleRate = 44100
   ): Promise<void> {
     const totalSamples = Math.floor(sampleRate * durationSec)
@@ -445,7 +429,7 @@ export function registerIpcHandlers(): void {
           const t = (offset + i) / sampleRate
           const beatNum = Math.round(t / beatInterval)
           const beatPos = t - beatNum * beatInterval
-          const sample = clickSampleValue(preset, beatPos, beatNum % 4 === 0)
+          const sample = clickSampleValue(beatPos, beatNum % 4 === 0)
           const intSample = Math.max(-32768, Math.min(32767, Math.floor(sample * 32767)))
           buf.writeInt16LE(intSample, i * 2)
         }
@@ -518,12 +502,11 @@ export function registerIpcHandlers(): void {
         const dur = await getLongestDuration(filePaths)
         const tmpDir = await mkdtemp(join(tmpdir(), 'velody-click-'))
         const clickPath = join(tmpDir, 'click.wav')
-        await generateClickTrackWavAsync(
-          clickPath,
-          options.bpm,
-          Math.ceil(dur),
-          options.clickPreset ?? 'pingpong'
-        )
+        // options.clickPreset accepted for forward-compat (there's only one
+        // click sound today — see simplify-metronome-to-woodblock-only) but
+        // not threaded through: generateClickTrackWavAsync/clickSampleValue
+        // have only the one behavior.
+        await generateClickTrackWavAsync(clickPath, options.bpm, Math.ceil(dur))
         allPaths.push(clickPath)
       }
 

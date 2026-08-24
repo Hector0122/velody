@@ -26,8 +26,8 @@ __pycache__/
 .venv/
 venv/
 
-# Generated stems
-output/stems/
+# Generated stems, setlists, and other local-only app output
+/output/
 
 # Environment variables
 .env

@@ -3,7 +3,9 @@ import { formatTime, updateTimeDisplays } from '../utils'
 import useCountIn from './useCountIn'
 
 interface UseRecordingParams {
-  audioCtxRef: React.MutableRefObject<AudioContext | null>
+  // useMetronome's own ensureAudioCtx — see useCountIn.ts for why this must
+  // be the metronome's context, not the stem-playback engine's.
+  ensureAudioCtx: () => AudioContext | null
   seek: (time: number) => void
   stemWaves: React.MutableRefObject<Record<string, unknown>>
   waveUrlsRef: React.MutableRefObject<Record<string, string>>
@@ -18,7 +20,7 @@ interface UseRecordingParams {
 }
 
 export function useRecording({
-  audioCtxRef,
+  ensureAudioCtx,
   seek,
   bpm,
   positionRef,
@@ -67,7 +69,7 @@ export function useRecording({
   const plainCountdownId = useRef<ReturnType<typeof setInterval> | null>(null)
   const recordingElapsedRef = useRef(0)
 
-  const countIn = useCountIn(audioCtxRef, playClick)
+  const countIn = useCountIn(ensureAudioCtx, playClick)
 
   const beginCapture = useCallback(
     (stream: MediaStream): void => {
@@ -116,19 +118,13 @@ export function useRecording({
         recordingChunksRef.current = []
 
         if (countInBars > 0) {
-          let ctx = audioCtxRef.current
-          if (!ctx) {
-            try {
-              ctx = new AudioContext()
-              audioCtxRef.current = ctx
-            } catch {
-              console.error('[useRecording] Failed to create AudioContext')
-              stream.getTracks().forEach((t) => t.stop())
-              return
-            }
-          }
-          if (ctx.state === 'suspended') {
-            ctx.resume()
+          // ensureAudioCtx creates the metronome's AudioContext if needed
+          // and resumes it if suspended — a fresh check on every call, no
+          // manual state tracking needed here.
+          if (!ensureAudioCtx()) {
+            console.error('[useRecording] Failed to create AudioContext')
+            stream.getTracks().forEach((t) => t.stop())
+            return
           }
           const interval = 60 / bpm
 
@@ -171,7 +167,7 @@ export function useRecording({
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [audioCtxRef, seek, bpm, countInBars, positionRef, audioStartRef, countIn, beginCapture]
+    [ensureAudioCtx, seek, bpm, countInBars, positionRef, audioStartRef, countIn, beginCapture]
   )
 
   const cancelCountdown = useCallback((): void => {
