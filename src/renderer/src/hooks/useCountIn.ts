@@ -1,5 +1,13 @@
 import { useEffect, useRef, useCallback } from 'react'
 
+// Exported so callers that need to independently pre-schedule something
+// else to land at the exact same real-world instant the count-in finishes
+// (e.g. StemPlayer pre-scheduling the song's actual first sample on the
+// *stem engine's own* AudioContext — a different clock than this hook's
+// ctx — see fix-count-in-handoff-precision) can compute an identical
+// duration without duplicating/risking drift from this magic number.
+export const COUNT_IN_LEAD_IN = 0.05
+
 interface UseCountInReturn {
   // Schedules `bars * 4` metronome clicks (accenting every 4th click — the
   // downbeat of each bar) via `playClick`, starting ~50ms in the future.
@@ -69,7 +77,7 @@ export default function useCountIn(
 
       const totalBeats = bars * 4
       const interval = 60 / bpm
-      const scheduleTime = ctx.currentTime + 0.05
+      const scheduleTime = ctx.currentTime + COUNT_IN_LEAD_IN
 
       for (let i = 0; i < totalBeats; i++) {
         playClick(i % 4 === 0, scheduleTime + i * interval)
@@ -82,7 +90,7 @@ export default function useCountIn(
       // tie it to the audio clock.
       const ids: ReturnType<typeof setTimeout>[] = []
       for (let i = 0; i < totalBeats; i++) {
-        const msDelay = i * interval * 1000 + 50
+        const msDelay = i * interval * 1000 + COUNT_IN_LEAD_IN * 1000
         ids.push(setTimeout(() => onTick(totalBeats - i), msDelay))
       }
       timeoutIdsRef.current = ids

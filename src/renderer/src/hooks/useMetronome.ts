@@ -40,7 +40,16 @@ export function useMetronome(
   positionRef: React.MutableRefObject<number>,
   firstBeatOffsetRef: React.MutableRefObject<number>,
   originalBpmRef: React.MutableRefObject<number>,
-  beatTimesRef: React.MutableRefObject<number[]>
+  beatTimesRef: React.MutableRefObject<number[]>,
+  // Owned/written by useAudioContextEngine — true while playback has been
+  // pre-scheduled (a future `when`) but that instant hasn't arrived yet, so
+  // positionRef is still clamped at the starting position rather than
+  // genuinely advancing. Without checking this, a song whose first real
+  // beat lands within LOOKAHEAD of the start/trim position (common — see
+  // add-song-trim-points) would get a click wrongly scheduled during a
+  // count-in's wait, consuming the dedup ratchet so the real beat at the
+  // correct moment then gets skipped. See fix-count-in-handoff-precision.
+  playbackPendingRef: React.MutableRefObject<boolean>
 ): {
   bpm: number
   setBpm: (v: number | ((prev: number) => number)) => void
@@ -209,6 +218,11 @@ export function useMetronome(
 
   const schedulerTick = useCallback((): void => {
     if (!metronomeOnRef.current || !masterPlayingRef.current) return
+    // Playback has been pre-scheduled but hasn't actually started yet
+    // (count-in handoff) — positionRef is still clamped at the starting
+    // position, not genuinely advancing, so there's nothing real to
+    // schedule against yet. See the param's doc comment.
+    if (playbackPendingRef.current) return
     const ctx = audioCtxRef.current
     if (!ctx || ctx.state === 'closed') return
     if (ctx.state === 'suspended') {
@@ -237,6 +251,7 @@ export function useMetronome(
     firstBeatOffsetRef,
     originalBpmRef,
     beatTimesRef,
+    playbackPendingRef,
     scheduleFromGrid,
     scheduleConstantTempo
   ])

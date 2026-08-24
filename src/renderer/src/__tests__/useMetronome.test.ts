@@ -63,7 +63,12 @@ function renderMetronome(
   positionRef: { current: number },
   beatTimesRef: { current: number[] },
   originalBpmRef: { current: number },
-  firstBeatOffsetRef: { current: number } = { current: 0 }
+  firstBeatOffsetRef: { current: number } = { current: 0 },
+  // Every existing call site exercises steady-state scheduling (playback
+  // already genuinely underway), never the count-in pre-roll gate —
+  // defaults false, matching real "already playing" behavior. See
+  // fix-count-in-handoff-precision.
+  playbackPendingRef: { current: boolean } = { current: false }
 ): ReturnType<typeof renderHook<ReturnType<typeof useMetronome>, unknown>> {
   const masterPlayingRef = { current: true }
   return renderHook(() =>
@@ -73,7 +78,8 @@ function renderMetronome(
       positionRef,
       firstBeatOffsetRef,
       originalBpmRef,
-      beatTimesRef
+      beatTimesRef,
+      playbackPendingRef
     )
   )
 }
@@ -253,6 +259,50 @@ describe('useMetronome - beat-grid scheduling', () => {
     expect(oscillators).toHaveLength(1)
     expect(oscillators[0].start).toHaveBeenCalledWith(expect.closeTo(0.25, 5))
     expect(startFreq(oscillators[0])).toBe(900) // real idx 0 -> accent
+  })
+
+  // Regression coverage for fix-count-in-handoff-precision: a song whose
+  // first real beat lands within LOOKAHEAD of the start/trim position is
+  // exactly what add-song-trim-points is *for* (trimming a song to start
+  // right on the beat) — without the playbackPendingRef gate, the
+  // scheduler would see position "close enough" to a real beat and
+  // wrongly schedule a click during the count-in's wait (while position is
+  // clamped, not really advancing), consuming the dedup ratchet so the
+  // real beat at the correct moment then gets silently skipped.
+  it('schedules nothing while playback is pending (pre-scheduled but not yet actually started), even if position is within LOOKAHEAD of a real beat', () => {
+    const beatTimesRef = { current: [0.1, 0.6, 1.1] } // first beat 0.1s in — well within LOOKAHEAD of position 0
+    const originalBpmRef = { current: 120 }
+    const positionRef = { current: 0 } // clamped at the start position, as it is during a count-in wait
+    const playbackPendingRef = { current: true }
+
+    const { result } = renderMetronome(
+      positionRef,
+      beatTimesRef,
+      originalBpmRef,
+      undefined,
+      playbackPendingRef
+    )
+    act(() => {
+      result.current.setMetronomeOn(true)
+    })
+    act(() => {
+      // Well past a single 25ms tick — simulates the scheduler polling
+      // repeatedly throughout a real count-in's multi-second wait.
+      vi.advanceTimersByTime(2000)
+    })
+
+    expect(oscillators).toHaveLength(0)
+
+    // Once real playback actually starts (pending clears, position starts
+    // advancing), the same real first beat schedules normally — nothing
+    // was consumed/skipped by a premature schedule above.
+    playbackPendingRef.current = false
+    positionRef.current = 0
+    act(() => {
+      vi.advanceTimersByTime(25)
+    })
+    expect(oscillators).toHaveLength(1)
+    expect(oscillators[0].start).toHaveBeenCalledWith(expect.closeTo(0.1, 5))
   })
 })
 

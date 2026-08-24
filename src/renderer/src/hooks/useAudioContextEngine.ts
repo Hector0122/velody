@@ -60,6 +60,17 @@ interface UseAudioContextEngineParams {
   durationRef: React.MutableRefObject<number>
   onAudioTimeRef: React.MutableRefObject<(time: number) => void>
   lastScheduledBeatRef: React.MutableRefObject<number>
+  // True from the moment playback is pre-scheduled with a future `when`
+  // (see startSources) until that instant actually arrives — read by
+  // useMetronome to keep its in-song scheduler from firing while
+  // positionRef is still clamped at the starting position (see
+  // fix-count-in-handoff-precision: without this, a song whose first real
+  // beat lands within the metronome's LOOKAHEAD window of the start/trim
+  // position — common exactly because add-song-trim-points exists to make
+  // songs start right on the beat — would get an extra, wrongly-timed
+  // click scheduled during the count-in wait, and the real beat at the
+  // correct moment would then be skipped by the dedup ratchet).
+  playbackPendingRef: React.MutableRefObject<boolean>
 
   progressRef: React.MutableRefObject<number>
   setMasterPlaying: (v: boolean | ((prev: boolean) => boolean)) => void
@@ -90,7 +101,7 @@ interface UseAudioContextEngineParams {
 
 export function useAudioContextEngine(params: UseAudioContextEngineParams): {
   toggleStem: (key: string) => void
-  toggleMasterPlay: () => void
+  toggleMasterPlay: (when?: number) => void
   handleRestart: () => void
   toggleSolo: (key: string) => void
   handleDeleteRecording: (path: string) => Promise<void>
@@ -99,6 +110,12 @@ export function useAudioContextEngine(params: UseAudioContextEngineParams): {
   handleStemPanning: (key: string, value: number) => void
   seek: (time: number) => void
   audioCtxRef: React.MutableRefObject<AudioContext | null>
+  // Creates this engine's own AudioContext if it doesn't exist yet (and
+  // resumes it if suspended), returning it. Exposed (mirrors useMetronome's
+  // own ensureAudioCtx) so callers that need to read this context's
+  // currentTime *before* actually starting playback — e.g. the count-in
+  // handoff, to compute a future `when` — can guarantee it exists first.
+  ensureAudioCtx: () => AudioContext
   getDecodedBuffer: (key: string) => AudioBuffer | undefined
   masterPan: number
   setMasterPan: (v: number) => void
@@ -125,6 +142,7 @@ export function useAudioContextEngine(params: UseAudioContextEngineParams): {
     durationRef,
     onAudioTimeRef,
     lastScheduledBeatRef,
+    playbackPendingRef,
     progressRef,
     setMasterPlaying,
     setActive,
@@ -236,8 +254,16 @@ export function useAudioContextEngine(params: UseAudioContextEngineParams): {
   // wasn't part of the initial active set (or wasn't decoded yet) when
   // playback began, it either got a dormant, never-started source or no
   // source at all.
+  //
+  // `when` (this AudioContext's own `currentTime` scale), if given, defers
+  // the actual start to that exact future sample-accurate instant instead
+  // of "as soon as possible" (`start(0)`) — used by the count-in handoff
+  // (see fix-count-in-handoff-precision) to pre-schedule the song's first
+  // sample up front, rather than reactively triggering it once the count-in
+  // is *detected* to have finished, which is bounded by JS polling
+  // granularity (rAF/setTimeout) rather than being truly sample-accurate.
   const startSourceForKey = useCallback(
-    (key: string, buffer: AudioBuffer, position: number): void => {
+    (key: string, buffer: AudioBuffer, position: number, when?: number): void => {
       const ctx = audioCtxRef.current
       if (!ctx) return
       ensureNodes(key)
@@ -248,29 +274,34 @@ export function useAudioContextEngine(params: UseAudioContextEngineParams): {
       const gain = computeGain(key)
       gainNodesRef.current[key].gain.setValueAtTime(gain, ctx.currentTime)
 
-      source.start(0, Math.max(0, position))
+      source.start(when ?? 0, Math.max(0, position))
       sourcesRef.current[key] = source
     },
     [computeGain, ensureNodes]
   )
 
   const startSources = useCallback(
-    (position: number): void => {
+    (position: number, when?: number): void => {
       const ctx = audioCtxRef.current
       if (!ctx) return
 
-      startTimeRef.current = ctx.currentTime
+      startTimeRef.current = when ?? ctx.currentTime
       startRef.current = position
       positionRef.current = position
+      // Set synchronously here (not left solely to tick()'s next RAF frame)
+      // so there's no window where a stale previous value could let
+      // useMetronome's scheduler fire even once before the real pending
+      // state is reflected — see the field's doc comment.
+      playbackPendingRef.current = typeof when === 'number' && when > ctx.currentTime
 
       for (const [key, buffer] of Object.entries(buffersRef.current)) {
         if (!buffer) continue
-        startSourceForKey(key, buffer, position)
+        startSourceForKey(key, buffer, position, when)
       }
 
       isPlayingRef.current = true
     },
-    [startSourceForKey, positionRef]
+    [startSourceForKey, positionRef, playbackPendingRef]
   )
 
   // A stem that finishes decoding after playback has already started never
@@ -278,12 +309,19 @@ export function useAudioContextEngine(params: UseAudioContextEngineParams): {
   // buffer). Join it into the currently playing mix now, at the correct
   // elapsed position, instead of leaving it silent until the next seek/loop/
   // restart recreates all sources from scratch.
+  //
+  // Clamped at 0: if playback was pre-scheduled to start in the future
+  // (`startTimeRef.current` is a `when` still ahead of `ctx.currentTime` —
+  // e.g. a stem finishes decoding during a count-in's lead-in), elapsed
+  // would otherwise go negative.
   const joinLateDecodedStem = useCallback(
     (key: string, buffer: AudioBuffer): void => {
       const ctx = audioCtxRef.current
       if (!ctx || !isPlayingRef.current || sourcesRef.current[key]) return
-      const position = startRef.current + (ctx.currentTime - startTimeRef.current)
-      startSourceForKey(key, buffer, position)
+      const elapsed = Math.max(0, ctx.currentTime - startTimeRef.current)
+      const position = startRef.current + elapsed
+      const when = ctx.currentTime < startTimeRef.current ? startTimeRef.current : undefined
+      startSourceForKey(key, buffer, position, when)
     },
     [startSourceForKey]
   )
@@ -346,7 +384,16 @@ export function useAudioContextEngine(params: UseAudioContextEngineParams): {
     const ctx = audioCtxRef.current
     if (!ctx || !isPlayingRef.current) return
 
-    const position = startRef.current + (ctx.currentTime - startTimeRef.current)
+    // Clamped at 0 elapsed: playback may have been pre-scheduled to start
+    // at a future `when` (see startSources/startSourceForKey) — before
+    // that instant arrives, position must hold at startRef.current, not go
+    // negative.
+    const elapsed = Math.max(0, ctx.currentTime - startTimeRef.current)
+    const position = startRef.current + elapsed
+    // Self-correcting each frame (cheap): stays true while still waiting
+    // for a pre-scheduled `when`, flips false the first frame it's
+    // actually passed — see the field's doc comment.
+    playbackPendingRef.current = ctx.currentTime < startTimeRef.current
 
     const action = resolveTickAction(position, loopRef.current, trimRef.current)
 
@@ -383,7 +430,8 @@ export function useAudioContextEngine(params: UseAudioContextEngineParams): {
     onAudioTimeRef,
     lastScheduledBeatRef,
     positionRef,
-    setMasterPlaying
+    setMasterPlaying,
+    playbackPendingRef
   ])
 
   useEffect(() => {
@@ -493,45 +541,54 @@ export function useAudioContextEngine(params: UseAudioContextEngineParams): {
     ]
   )
 
-  const toggleMasterPlay = useCallback((): void => {
-    if (masterPlaying) {
-      setMasterPlaying(false)
-    } else {
-      lastScheduledBeatRef.current = RESET_SCHEDULED_BEAT
-      ensureCtx()
-      // Preserve any mute/solo choice the user already made — only default a
-      // stem to active if it has no entry yet (first-ever play for this
-      // song, or a stem that was just added, e.g. a new recording). Without
-      // this, every Stop -> Play cycle silently re-activated every stem,
-      // undoing mutes the user had just set (see fix-stem-mutes-reset-on-
-      // replay).
-      const merged: Record<string, boolean> = { ...activeRef.current }
-      for (const path of allStems) {
-        const key = stemNameFromPath(path)
-        if (!(key in merged)) merged[key] = true
-        ensureWaveSurfer(key)
+  // `when` (this AudioContext's own currentTime scale), if given, defers
+  // the actual audio start to that exact future instant — see
+  // startSourceForKey's comment. Omitted for the plain "press Play, start
+  // now" case; passed by the count-in handoff (StemPlayer) to pre-schedule
+  // playback up front instead of reactively starting it once the count-in
+  // is detected to have finished.
+  const toggleMasterPlay = useCallback(
+    (when?: number): void => {
+      if (masterPlaying) {
+        setMasterPlaying(false)
+      } else {
+        lastScheduledBeatRef.current = RESET_SCHEDULED_BEAT
+        ensureCtx()
+        // Preserve any mute/solo choice the user already made — only default a
+        // stem to active if it has no entry yet (first-ever play for this
+        // song, or a stem that was just added, e.g. a new recording). Without
+        // this, every Stop -> Play cycle silently re-activated every stem,
+        // undoing mutes the user had just set (see fix-stem-mutes-reset-on-
+        // replay).
+        const merged: Record<string, boolean> = { ...activeRef.current }
+        for (const path of allStems) {
+          const key = stemNameFromPath(path)
+          if (!(key in merged)) merged[key] = true
+          ensureWaveSurfer(key)
+        }
+        isPlayingRef.current = true
+        activeRef.current = merged
+        masterPlayingRef.current = true
+        startSources(positionRef.current, when)
+        rafRef.current = requestAnimationFrame(tick)
+        setActive(merged)
+        setMasterPlaying(true)
       }
-      isPlayingRef.current = true
-      activeRef.current = merged
-      masterPlayingRef.current = true
-      startSources(positionRef.current)
-      rafRef.current = requestAnimationFrame(tick)
-      setActive(merged)
-      setMasterPlaying(true)
-    }
-  }, [
-    masterPlaying,
-    ensureCtx,
-    ensureWaveSurfer,
-    startSources,
-    tick,
-    setActive,
-    setMasterPlaying,
-    lastScheduledBeatRef,
-    allStems,
-    positionRef,
-    masterPlayingRef
-  ])
+    },
+    [
+      masterPlaying,
+      ensureCtx,
+      ensureWaveSurfer,
+      startSources,
+      tick,
+      setActive,
+      setMasterPlaying,
+      lastScheduledBeatRef,
+      allStems,
+      positionRef,
+      masterPlayingRef
+    ]
+  )
 
   const handleRestart = useCallback((): void => {
     lastScheduledBeatRef.current = RESET_SCHEDULED_BEAT
@@ -649,6 +706,7 @@ export function useAudioContextEngine(params: UseAudioContextEngineParams): {
     handleStemPanning,
     seek,
     audioCtxRef,
+    ensureAudioCtx: ensureCtx,
     getDecodedBuffer,
     masterPan,
     setMasterPan

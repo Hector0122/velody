@@ -12,7 +12,7 @@ import { correctTempoOctave, type TempoOctaveDirection } from '../hooks/tempoOct
 import useMarkers from '../hooks/useMarkers'
 import useTrim from '../hooks/useTrim'
 import useSongCountIn from '../hooks/useSongCountIn'
-import useCountIn from '../hooks/useCountIn'
+import useCountIn, { COUNT_IN_LEAD_IN } from '../hooks/useCountIn'
 import { useExportState } from '../hooks/useExportState'
 import { useWaveSurfers } from '../hooks/useWaveSurfers'
 import { useAudioContextEngine } from '../hooks/useAudioContextEngine'
@@ -88,6 +88,14 @@ function StemPlayer({
 
   const masterPlayingRef = useRef(masterPlaying)
   const durationRef = useRef(0)
+  // Written by useAudioContextEngine, read by useMetronome — same
+  // shared-ref pattern as firstBeatOffsetRef/originalBpmRef below. True
+  // while playback has been pre-scheduled (a count-in's stem-engine
+  // handoff) but the scheduled instant hasn't arrived yet, so
+  // useMetronome's in-song scheduler doesn't fire against a position
+  // that's clamped/not really advancing yet. See
+  // fix-count-in-handoff-precision.
+  const playbackPendingRef = useRef(false)
   const firstBeatOffsetRef = useRef(0)
   // originalBpmRef/beatTimesRef are written by useSongAnalysis and read by
   // useMetronome for grid-based scheduling — same shared-ref pattern as
@@ -126,7 +134,8 @@ function StemPlayer({
     positionRef,
     firstBeatOffsetRef,
     originalBpmRef,
-    beatTimesRef
+    beatTimesRef,
+    playbackPendingRef
   )
 
   useSongAnalysis(urls, stems, setBpm, firstBeatOffsetRef, originalBpmRef, beatTimesRef)
@@ -242,6 +251,10 @@ function StemPlayer({
     handleStemVolume,
     handleStemPanning,
     seek,
+    // Aliased to disambiguate from the metronome's own, separate
+    // ensureAudioCtx (destructured below as ensureMetronomeAudioCtx) — see
+    // the count-in handoff in handleToggleMasterPlayWithCountIn.
+    ensureAudioCtx: ensureStemAudioCtx,
     getDecodedBuffer,
     masterPan,
     setMasterPan
@@ -267,6 +280,7 @@ function StemPlayer({
     durationRef,
     onAudioTimeRef,
     lastScheduledBeatRef,
+    playbackPendingRef,
     progressRef,
     setMasterPlaying,
     setActive,
@@ -303,27 +317,79 @@ function StemPlayer({
   const [playbackCounting, setPlaybackCounting] = useState(false)
   const [playbackCountRemaining, setPlaybackCountRemaining] = useState(0)
 
+  // Pre-schedules the song's actual first sample on the *stem engine's own*
+  // AudioContext clock, up front — at the same moment the count-in's clicks
+  // get scheduled on the *metronome's* separate AudioContext clock — rather
+  // than reactively calling toggleMasterPlay() only once the count-in is
+  // *detected* to have finished (the previous design). That reactive
+  // trigger, even after being moved off setTimeout onto an rAF poll of
+  // ctx.currentTime (fix-count-in-onbeat-handoff-jitter), was still bounded
+  // by ~1 animation frame (~16ms) of polling granularity — small, but
+  // enough to be perceptible to a musician listening critically for a tight
+  // click, and part of why the count-in→song handoff still didn't feel
+  // fully locked in.
+  //
+  // The fix: both AudioContexts tick at the same real-world rate (1 second
+  // of ctx.currentTime == 1 real second) even though their `currentTime`
+  // values start from unrelated zero-points — so computing "this context's
+  // own currentTime + the same real-seconds count-in duration" on *each*
+  // context independently, at the same synchronous moment (when Play is
+  // pressed), lines the two schedules up without ever needing to convert
+  // between the two clocks, and without any reactive polling step at the
+  // handoff at all. onComplete (below) becomes purely a UI-state signal for
+  // when the on-screen countdown overlay should disappear — no longer
+  // gates any audio.
+  // See openspec/changes/fix-count-in-handoff-precision.
   const handleToggleMasterPlayWithCountIn = useCallback((): void => {
     if (playbackCounting) {
       playbackCountIn.cancel()
       setPlaybackCounting(false)
+      // The stem engine's playback was already pre-scheduled (armed, even
+      // if not yet audible) the instant the count-in started — cancelling
+      // only the count-in's clicks would leave that scheduled start intact
+      // and the song would still begin unexpectedly at the original `when`.
+      // toggleMasterPlay() with no args takes its "already playing -> stop"
+      // branch here (masterPlaying is already true from the pre-schedule
+      // below), which stops every source, including ones scheduled for a
+      // still-future start time (AudioBufferSourceNode.stop() before its
+      // scheduled start correctly cancels it — see Web Audio spec).
+      toggleMasterPlay()
       return
     }
     if (!masterPlaying && playbackCountInBars > 0) {
       setPlaybackCounting(true)
+
+      const totalBeats = playbackCountInBars * 4
+      const interval = 60 / bpm
+      const countInDuration = COUNT_IN_LEAD_IN + totalBeats * interval
+      const stemCtx = ensureStemAudioCtx()
+      const stemWhen = stemCtx.currentTime + countInDuration
+
+      // Deliberately not relying on playbackCountIn's own onComplete to
+      // gate audio — see the comment above. It's given a no-op; only the
+      // visual countdown state needs to clear, handled via a plain timeout
+      // matched to the same duration (imprecision here is inaudible —
+      // display only).
       playbackCountIn.start(
         playbackCountInBars,
         bpm,
         (remaining) => setPlaybackCountRemaining(remaining),
-        () => {
-          setPlaybackCounting(false)
-          toggleMasterPlay()
-        }
+        () => {}
       )
+      setTimeout(() => setPlaybackCounting(false), countInDuration * 1000)
+      toggleMasterPlay(stemWhen)
       return
     }
     toggleMasterPlay()
-  }, [playbackCounting, masterPlaying, playbackCountInBars, bpm, playbackCountIn, toggleMasterPlay])
+  }, [
+    playbackCounting,
+    masterPlaying,
+    playbackCountInBars,
+    bpm,
+    playbackCountIn,
+    toggleMasterPlay,
+    ensureStemAudioCtx
+  ])
 
   const onAudioTime = useCallback(
     (time: number): void => {
