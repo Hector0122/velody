@@ -5,7 +5,7 @@ import RecordingConfirmationModal from './RecordingConfirmationModal'
 import StemGrid from './StemGrid'
 import MasterPanel from './MasterPanel'
 import TimelinePanel from './TimelinePanel'
-import { useMetronome } from '../hooks/useMetronome'
+import { useMetronome, RESET_SCHEDULED_BEAT } from '../hooks/useMetronome'
 import { useRecording } from '../hooks/useRecording'
 import useSongAnalysis from '../hooks/useSongAnalysis'
 import useMarkers from '../hooks/useMarkers'
@@ -77,7 +77,6 @@ function StemPlayer({
 
   const positionRef = useRef(0)
   const onAudioTimeRef = useRef<(time: number) => void>(() => {})
-  const lastScheduledBeatRef = useRef(-1)
   const seekRef = useRef<(time: number) => void>(() => {})
   // Break the useWaveSurfers <-> useAudioContextEngine circular dependency the
   // same way seekRef does: a stable ref box owned by StemPlayer, written by one
@@ -110,7 +109,17 @@ function StemPlayer({
     metroPan,
     setMetroPan,
     playClick,
-    ensureAudioCtx: ensureMetronomeAudioCtx
+    ensureAudioCtx: ensureMetronomeAudioCtx,
+    // useMetronome owns the *real* scheduling ratchet its own scheduler
+    // functions read/write internally — this must be the exact same ref
+    // instance threaded into useAudioContextEngine/useWaveSurfers/the BPM
+    // handlers below for their "reset on seek/loop/restart/BPM-change"
+    // resets to actually reach the scheduler. Before this fix, StemPlayer
+    // declared its own separate `useRef(-1)` for this — a different object
+    // useMetronome never read, so every one of those resets was a no-op
+    // against the metronome's real internal ratchet (see
+    // fix-count-in-song-start-timing).
+    lastScheduledBeatRef
   } = useMetronome(
     masterPlaying,
     masterPlayingRef,
@@ -421,23 +430,23 @@ function StemPlayer({
   const handleBpmDecrement = useCallback((): void => {
     setBpm((prev) => {
       const next = Math.max(BPM_MIN, prev - 1)
-      lastScheduledBeatRef.current = -1
+      lastScheduledBeatRef.current = RESET_SCHEDULED_BEAT
       return next
     })
-  }, [setBpm])
+  }, [setBpm, lastScheduledBeatRef])
   const handleBpmIncrement = useCallback((): void => {
     setBpm((prev) => {
       const next = Math.min(BPM_MAX, prev + 1)
-      lastScheduledBeatRef.current = -1
+      lastScheduledBeatRef.current = RESET_SCHEDULED_BEAT
       return next
     })
-  }, [setBpm])
+  }, [setBpm, lastScheduledBeatRef])
   const handleBpmChange = useCallback(
     (v: number): void => {
       setBpm(v)
-      lastScheduledBeatRef.current = -1
+      lastScheduledBeatRef.current = RESET_SCHEDULED_BEAT
     },
-    [setBpm]
+    [setBpm, lastScheduledBeatRef]
   )
 
   const handleMetronomeToggle = useCallback((): void => {

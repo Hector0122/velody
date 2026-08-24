@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useCallback, useRef } from 'react'
 import type WaveSurfer from 'wavesurfer.js'
 import { stemNameFromPath } from '../utils'
 import useLocalStoragePreference from './useLocalStoragePreference'
+import { RESET_SCHEDULED_BEAT } from './useMetronome'
 
 const isFiniteNumber = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v)
 
@@ -350,7 +351,7 @@ export function useAudioContextEngine(params: UseAudioContextEngineParams): {
     const action = resolveTickAction(position, loopRef.current, trimRef.current)
 
     if (action.type === 'loop') {
-      lastScheduledBeatRef.current = -1
+      lastScheduledBeatRef.current = RESET_SCHEDULED_BEAT
       stopSources()
       startSources(action.to)
       positionRef.current = action.to
@@ -465,7 +466,7 @@ export function useAudioContextEngine(params: UseAudioContextEngineParams): {
     (key: string): void => {
       if (!masterPlayingRef.current) {
         if (activeRef.current[key]) return
-        lastScheduledBeatRef.current = -1
+        lastScheduledBeatRef.current = RESET_SCHEDULED_BEAT
         ensureCtx()
         ensureWaveSurfer(key)
         isPlayingRef.current = true
@@ -496,7 +497,7 @@ export function useAudioContextEngine(params: UseAudioContextEngineParams): {
     if (masterPlaying) {
       setMasterPlaying(false)
     } else {
-      lastScheduledBeatRef.current = -1
+      lastScheduledBeatRef.current = RESET_SCHEDULED_BEAT
       ensureCtx()
       // Preserve any mute/solo choice the user already made — only default a
       // stem to active if it has no entry yet (first-ever play for this
@@ -533,7 +534,7 @@ export function useAudioContextEngine(params: UseAudioContextEngineParams): {
   ])
 
   const handleRestart = useCallback((): void => {
-    lastScheduledBeatRef.current = -1
+    lastScheduledBeatRef.current = RESET_SCHEDULED_BEAT
     // Restart jumps to the song's trim start (0 when no trim is set — same
     // as before this existed) rather than always hardcoded 0, so a song
     // with a long intro trimmed off skips it every time the user restarts

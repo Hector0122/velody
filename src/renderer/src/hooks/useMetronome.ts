@@ -7,6 +7,19 @@ const LOOKAHEAD = 0.3
 
 const isFiniteNumber = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v)
 
+// Sentinel for lastScheduledBeatRef meaning "nothing scheduled yet this
+// playback session" — reset here and by every seek/loop/restart/BPM-change
+// site elsewhere (useAudioContextEngine, useWaveSurfers, StemPlayer's BPM
+// handlers; they all must share this exact ref instance, returned below).
+// Must be smaller than any real index the scheduler can produce. -1 used to
+// suffice when the smallest real index was 0 (scheduleFromGrid) or 1
+// (scheduleConstantTempo) — now that scheduleFromGrid extrapolates
+// *backward* from the first detected beat with negative indices (see
+// fix-count-in-song-start-timing), a fresh -1 could be less-negative than a
+// legitimate backward-extrapolated starting index, wrongly clamping it away
+// via the `Math.max(computed, lastScheduledBeatRef.current + 1)` ratchet.
+export const RESET_SCHEDULED_BEAT = -Infinity
+
 // First index in `sortedTimes` whose value is >= target (binary search).
 // `beatTimes` is sorted ascending and typically a few hundred entries for a
 // full song, so this is negligible cost on the 25ms scheduler tick, and it
@@ -72,7 +85,7 @@ export function useMetronome(
   // (StemPlayer, useWaveSurfers, useRecording), so reinterpreting its stored
   // value between modes is safe — see design.md, "use-detected-beat-grid-for-
   // metronome" change.
-  const lastScheduledBeatRef = useRef(-1)
+  const lastScheduledBeatRef = useRef(RESET_SCHEDULED_BEAT)
   const audioCtxRef = useRef<AudioContext | null>(null)
   // Persistent — created once alongside audioCtxRef, not per click like the
   // short-lived oscillator/gain/noise nodes each preset creates. Every
@@ -140,13 +153,37 @@ export function useMetronome(
   // past the last detected beat, falls back to the same constant-tempo
   // formula as above, anchored at the last real beat's time/index instead of
   // the song start (see design.md - Decisions).
+  //
+  // Before the first detected beat (e.g. a song with a long intro before
+  // the drums/downbeat), beatTimeAt(idx) extrapolates *backward* from
+  // beatTimes[0] at constant tempo for negative idx, instead of the
+  // scheduler staying silent for the whole intro — beatTimes[idx] - t was
+  // never < LOOKAHEAD that far out, so nothing ever got scheduled until the
+  // real grid began, which is exactly "the metronome goes quiet and only
+  // picks back up once the drums come in" (see
+  // fix-count-in-song-start-timing). idx still advances through negative
+  // values into the real [0, beatTimes.length) range via the same single
+  // loop/ratchet below, so the handoff from extrapolated to real beats is
+  // seamless — no separate branch, no double-scheduling at the boundary.
   const scheduleFromGrid = useCallback(
     (ctx: AudioContext, t: number, beatTimes: number[], bpmValue: number): void => {
-      let idx = Math.max(lowerBound(beatTimes, t), lastScheduledBeatRef.current + 1)
+      const interval = 60 / bpmValue
+      const beatTimeAt = (i: number): number => (i < 0 ? beatTimes[0] + i * interval : beatTimes[i])
 
-      while (idx < beatTimes.length && beatTimes[idx] - t < LOOKAHEAD) {
-        const delaySong = beatTimes[idx] - t
-        playClick(idx % 4 === 0, ctx.currentTime + Math.max(0, delaySong))
+      let idx =
+        t < beatTimes[0]
+          ? Math.max(Math.ceil((t - beatTimes[0]) / interval), lastScheduledBeatRef.current + 1)
+          : Math.max(lowerBound(beatTimes, t), lastScheduledBeatRef.current + 1)
+
+      while (idx < beatTimes.length && beatTimeAt(idx) - t < LOOKAHEAD) {
+        const beatTime = beatTimeAt(idx)
+        // A backward-extrapolated beat can land before the song's own
+        // start (idx very negative, small beatTimes[0]) — never click at a
+        // negative audio position, just consume the ratchet past it.
+        if (beatTime >= 0) {
+          const delaySong = beatTime - t
+          playClick(idx % 4 === 0, ctx.currentTime + Math.max(0, delaySong))
+        }
         lastScheduledBeatRef.current = idx
         idx++
       }
@@ -208,7 +245,7 @@ export function useMetronome(
   useEffect(() => {
     if (metronomeOn && masterPlaying) {
       ensureAudioCtx()
-      lastScheduledBeatRef.current = -1
+      lastScheduledBeatRef.current = RESET_SCHEDULED_BEAT
       const id = window.setInterval(schedulerTick, 25)
       return () => clearInterval(id)
     }

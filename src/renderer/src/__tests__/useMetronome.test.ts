@@ -154,6 +154,99 @@ describe('useMetronome - beat-grid scheduling', () => {
     expect(oscillators).toHaveLength(1)
     expect(oscillators[0].start).toHaveBeenCalledWith(expect.closeTo(0.242857, 4))
   })
+
+  // Regression coverage for fix-count-in-song-start-timing: before this
+  // fix, a song with a long intro (first detected beat well after position
+  // 0) produced total silence from the metronome until the song's position
+  // caught up to that first real beat — "the metronome goes quiet and only
+  // picks back up once the drums come in."
+  it('extrapolates backward from the first detected beat instead of staying silent through a long intro', () => {
+    const beatTimesRef = { current: [8.5, 9.0, 9.5, 10.0] } // 0.5s spacing == 120bpm, 8.5s intro
+    const originalBpmRef = { current: 120 }
+    const positionRef = { current: 0.25 } // deep in the intro, far before beatTimes[0]
+
+    const { result } = renderMetronome(positionRef, beatTimesRef, originalBpmRef)
+    act(() => {
+      result.current.setMetronomeOn(true)
+    })
+    act(() => {
+      vi.advanceTimersByTime(25)
+    })
+
+    // Nearest virtual beat before beatTimes[0]=8.5 at 0.5s spacing is
+    // 0.5s (idx -16), a 0.25s delay from t=0.25 — not silence.
+    expect(oscillators).toHaveLength(1)
+    expect(oscillators[0].start).toHaveBeenCalledWith(expect.closeTo(0.25, 5))
+    expect(oscillators[0].frequency.value).toBe(1600) // idx -16 % 4 === 0 -> accent
+  })
+
+  it('keeps the correct accent pattern on a non-accented extrapolated beat', () => {
+    const beatTimesRef = { current: [8.5, 9.0, 9.5, 10.0] }
+    const originalBpmRef = { current: 120 }
+    const positionRef = { current: 0.75 } // nearest virtual beat is 1.0s (idx -15)
+
+    const { result } = renderMetronome(positionRef, beatTimesRef, originalBpmRef)
+    act(() => {
+      result.current.setMetronomeOn(true)
+    })
+    act(() => {
+      vi.advanceTimersByTime(25)
+    })
+
+    expect(oscillators).toHaveLength(1)
+    expect(oscillators[0].start).toHaveBeenCalledWith(expect.closeTo(0.25, 5))
+    expect(oscillators[0].frequency.value).toBe(900) // idx -15 % 4 !== 0 -> not accent
+  })
+
+  it('hands off seamlessly from extrapolated beats to the real grid with no gap or double click', () => {
+    const beatTimesRef = { current: [8.5, 9.0, 9.5, 10.0] }
+    const originalBpmRef = { current: 120 }
+    // Right before the last extrapolated beat (idx -1, at 8.0) comes into range.
+    const positionRef = { current: 7.75 }
+
+    const { result } = renderMetronome(positionRef, beatTimesRef, originalBpmRef)
+    act(() => {
+      result.current.setMetronomeOn(true)
+    })
+    act(() => {
+      vi.advanceTimersByTime(25)
+    })
+    expect(oscillators).toHaveLength(1)
+    expect(oscillators[0].start).toHaveBeenCalledWith(expect.closeTo(0.25, 5)) // idx -1 at 8.0
+
+    // Advance position to just before the real first beat (8.5) comes into range.
+    positionRef.current = 8.25
+    act(() => {
+      vi.advanceTimersByTime(25)
+    })
+    // Exactly one more click (the real beatTimes[0]), not zero (a gap) or
+    // two (a duplicate at the extrapolated/real boundary).
+    expect(oscillators).toHaveLength(2)
+    expect(oscillators[1].start).toHaveBeenCalledWith(expect.closeTo(0.25, 5))
+    expect(oscillators[1].frequency.value).toBe(1600) // real idx 0 -> accent
+  })
+
+  it('schedules the real first beat directly when the intro is shorter than one beat interval (nothing to extrapolate)', () => {
+    // beatTimes[0] itself is inside the first interval — one beat back
+    // would land before the song's own start (t=0), so there's no virtual
+    // beat to schedule; the real first beat should just be picked up
+    // directly, the same as the non-intro case.
+    const beatTimesRef = { current: [0.3, 0.8, 1.3] } // 0.5s spacing == 120bpm
+    const originalBpmRef = { current: 120 }
+    const positionRef = { current: 0.05 }
+
+    const { result } = renderMetronome(positionRef, beatTimesRef, originalBpmRef)
+    act(() => {
+      result.current.setMetronomeOn(true)
+    })
+    act(() => {
+      vi.advanceTimersByTime(25)
+    })
+
+    expect(oscillators).toHaveLength(1)
+    expect(oscillators[0].start).toHaveBeenCalledWith(expect.closeTo(0.25, 5))
+    expect(oscillators[0].frequency.value).toBe(1600) // real idx 0 -> accent
+  })
 })
 
 describe('useMetronome - metronome pan', () => {
