@@ -108,10 +108,16 @@ const api = {
   openDirectoryDialog: () => ipcRenderer.invoke('dialog:openDirectory'),
   saveFileDialog: (defaultName: string, filters?: { name: string; extensions: string[] }[]) =>
     ipcRenderer.invoke('dialog:saveFile', defaultName, filters ?? []),
-  exportMix: (filePaths: string[], outputPath: string, options?: { bpm?: number }) =>
-    ipcRenderer.invoke('export:mix', filePaths, outputPath, options),
-  exportSingle: (filePath: string, outputPath: string) =>
-    ipcRenderer.invoke('export:single', filePath, outputPath),
+  exportMix: (
+    filePaths: string[],
+    outputPath: string,
+    options?: { bpm?: number; trimStart?: number; trimEnd?: number }
+  ) => ipcRenderer.invoke('export:mix', filePaths, outputPath, options),
+  exportSingle: (
+    filePath: string,
+    outputPath: string,
+    options?: { trimStart?: number; trimEnd?: number }
+  ) => ipcRenderer.invoke('export:single', filePath, outputPath, options),
   saveRecording: (songDir: string, data: number[], name: string, format: string, offset: number) =>
     ipcRenderer.invoke('record:save', songDir, data, name, format, offset),
   transposeStems: (stemPaths: string[], semitones: number) =>

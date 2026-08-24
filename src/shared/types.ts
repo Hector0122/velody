@@ -83,9 +83,13 @@ export interface VelodyAPI {
   exportMix: (
     filePaths: string[],
     outputPath: string,
-    options?: { bpm?: number }
+    options?: { bpm?: number; trimStart?: number; trimEnd?: number }
   ) => Promise<ExportResult>
-  exportSingle: (filePath: string, outputPath: string) => Promise<ExportResult>
+  exportSingle: (
+    filePath: string,
+    outputPath: string,
+    options?: { trimStart?: number; trimEnd?: number }
+  ) => Promise<ExportResult>
   saveRecording: (
     songDir: string,
     data: number[],

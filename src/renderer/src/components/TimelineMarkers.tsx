@@ -8,6 +8,8 @@ interface TimelineMarkersProps {
   loopStart: number | null
   loopEnd: number | null
   loopEnabled: boolean
+  trimStart?: number
+  trimEnd?: number | null
   duration: number
   onMarkerClick: (marker: MarkerItem, index: number) => void
   onMarkerContextMenu: (index: number) => void
@@ -18,6 +20,8 @@ export default function TimelineMarkers({
   loopStart,
   loopEnd,
   loopEnabled,
+  trimStart = 0,
+  trimEnd = null,
   duration,
   onMarkerClick,
   onMarkerContextMenu
@@ -26,6 +30,18 @@ export default function TimelineMarkers({
 
   return (
     <>
+      {trimStart > 0 && (
+        <div
+          className="absolute top-0 bottom-0 left-0 bg-black/50 pointer-events-none"
+          style={{ width: `${(trimStart / d) * 100}%`, zIndex: 4 }}
+        />
+      )}
+      {trimEnd !== null && trimEnd < d && (
+        <div
+          className="absolute top-0 bottom-0 right-0 bg-black/50 pointer-events-none"
+          style={{ width: `${((d - trimEnd) / d) * 100}%`, zIndex: 4 }}
+        />
+      )}
       {markers.map((m, i) => {
         const leftPct = d > 0 ? (m.time / d) * 100 : 0
         const isLoopStart = loopStart === m.time

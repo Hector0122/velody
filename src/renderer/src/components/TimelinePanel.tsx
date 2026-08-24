@@ -12,6 +12,8 @@ interface TimelinePanelProps {
   loopStart: number | null
   loopEnd: number | null
   loopEnabled: boolean
+  trimStart: number
+  trimEnd: number | null
   masterWaveDuration: number
   duration: number
   masterWaveContainerRef: React.RefObject<HTMLDivElement | null>
@@ -20,6 +22,9 @@ interface TimelinePanelProps {
   onToggleLoop: () => void
   onClearMarkers: () => void
   onRemoveMarker: (i: number) => void
+  onSetTrimStart: () => void
+  onSetTrimEnd: () => void
+  onClearTrim: () => void
 }
 
 function TimelinePanel({
@@ -27,6 +32,8 @@ function TimelinePanel({
   loopStart,
   loopEnd,
   loopEnabled,
+  trimStart,
+  trimEnd,
   masterWaveDuration,
   duration,
   masterWaveContainerRef,
@@ -34,8 +41,12 @@ function TimelinePanel({
   onSetLoopEnd,
   onToggleLoop,
   onClearMarkers,
-  onRemoveMarker
+  onRemoveMarker,
+  onSetTrimStart,
+  onSetTrimEnd,
+  onClearTrim
 }: TimelinePanelProps): React.JSX.Element {
+  const trimIsSet = trimStart > 0 || trimEnd !== null
   return (
     <div className="bg-neutral-900/80 rounded-md border border-neutral-800 p-4">
       <div className="flex items-center justify-between mb-2">
@@ -109,6 +120,31 @@ function TimelinePanel({
           </button>
         </div>
       </div>
+      <div className="flex items-center gap-2 mb-2">
+        <span className="text-[10px] text-neutral-600">Trim:</span>
+        <button
+          onClick={onSetTrimStart}
+          className="px-2 py-0.5 rounded text-[10px] font-medium bg-neutral-800 text-neutral-400 hover:text-white transition-colors"
+          title="Set trim start to the current position — skips everything before it on Restart"
+        >
+          Set Start ({formatTime(trimStart)})
+        </button>
+        <button
+          onClick={onSetTrimEnd}
+          className="px-2 py-0.5 rounded text-[10px] font-medium bg-neutral-800 text-neutral-400 hover:text-white transition-colors"
+          title="Set trim end to the current position — playback stops there"
+        >
+          Set End{trimEnd !== null ? ` (${formatTime(trimEnd)})` : ''}
+        </button>
+        {trimIsSet && (
+          <button
+            onClick={onClearTrim}
+            className="px-2 py-0.5 rounded text-[10px] font-medium bg-neutral-800 text-neutral-500 hover:text-white transition-colors"
+          >
+            Clear Trim
+          </button>
+        )}
+      </div>
       <div className="relative">
         <div
           ref={masterWaveContainerRef}
@@ -119,6 +155,8 @@ function TimelinePanel({
           loopStart={loopStart}
           loopEnd={loopEnd}
           loopEnabled={loopEnabled}
+          trimStart={trimStart}
+          trimEnd={trimEnd}
           duration={masterWaveDuration || duration}
           onMarkerClick={(m) => {
             if (loopStart === m.time) onSetLoopStart(null)

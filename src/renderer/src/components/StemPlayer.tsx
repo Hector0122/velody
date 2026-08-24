@@ -9,6 +9,7 @@ import { useMetronome } from '../hooks/useMetronome'
 import { useRecording } from '../hooks/useRecording'
 import useSongAnalysis from '../hooks/useSongAnalysis'
 import useMarkers from '../hooks/useMarkers'
+import useTrim from '../hooks/useTrim'
 import { useExportState } from '../hooks/useExportState'
 import { useWaveSurfers } from '../hooks/useWaveSurfers'
 import { useAudioContextEngine } from '../hooks/useAudioContextEngine'
@@ -25,6 +26,7 @@ import {
 interface StemPlayerProps {
   stems: string[]
   songName: string
+  onToast?: (message: string, type?: 'error' | 'success') => void
 }
 
 const STEM_META: Record<string, { color: string; label: string }> = {
@@ -47,7 +49,7 @@ const RECORDING_COLORS = [
   '#f97316'
 ]
 
-function StemPlayer({ stems, songName }: StemPlayerProps): React.JSX.Element {
+function StemPlayer({ stems, songName, onToast }: StemPlayerProps): React.JSX.Element {
   const progressRef = useRef(0)
   const [masterVolume, setMasterVolume] = useState(1)
   const [masterPlaying, setMasterPlaying] = useState(false)
@@ -112,6 +114,18 @@ function StemPlayer({ stems, songName }: StemPlayerProps): React.JSX.Element {
     handleRemoveMarker
   } = useMarkers()
 
+  const { trimStart, trimEnd, handleSetTrimStart, handleSetTrimEnd, handleClearTrim } =
+    useTrim(stems)
+
+  const handleSetTrimEndWithToast = useCallback(
+    (time: number): void => {
+      if (!handleSetTrimEnd(time)) {
+        onToast?.('Trim end must be after trim start', 'error')
+      }
+    },
+    [handleSetTrimEnd, onToast]
+  )
+
   const {
     showExportModal,
     setShowExportModal,
@@ -124,7 +138,7 @@ function StemPlayer({ stems, songName }: StemPlayerProps): React.JSX.Element {
     handleExportSingle,
     handleExportMix,
     toggleExportSelection
-  } = useExportState({ allStems, songName, bpm, stemMeta: STEM_META })
+  } = useExportState({ allStems, songName, bpm, stemMeta: STEM_META, trimStart, trimEnd })
 
   const stemItems = useMemo(() => {
     let recIdx = 0
@@ -201,6 +215,8 @@ function StemPlayer({ stems, songName }: StemPlayerProps): React.JSX.Element {
     loopEnabled,
     loopStart,
     loopEnd,
+    trimStart,
+    trimEnd,
     masterWaveDuration,
     duration,
     positionRef,
@@ -402,6 +418,8 @@ function StemPlayer({ stems, songName }: StemPlayerProps): React.JSX.Element {
             loopStart={loopStart}
             loopEnd={loopEnd}
             loopEnabled={loopEnabled}
+            trimStart={trimStart}
+            trimEnd={trimEnd}
             masterWaveDuration={masterWaveDuration}
             duration={duration}
             masterWaveContainerRef={masterWaveContainer}
@@ -410,6 +428,9 @@ function StemPlayer({ stems, songName }: StemPlayerProps): React.JSX.Element {
             onToggleLoop={handleToggleLoop}
             onClearMarkers={handleClearMarkers}
             onRemoveMarker={handleRemoveMarker}
+            onSetTrimStart={() => handleSetTrimStart(positionRef.current)}
+            onSetTrimEnd={() => handleSetTrimEndWithToast(positionRef.current)}
+            onClearTrim={handleClearTrim}
           />
 
           <StemGrid

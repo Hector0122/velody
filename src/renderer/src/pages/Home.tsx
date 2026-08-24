@@ -440,6 +440,7 @@ function Home(): React.JSX.Element {
             key={currentSong.songName}
             stems={currentSong.stems}
             songName={currentSong.songName}
+            onToast={addToast}
           />
         ) : (
           <div className="flex-1 flex items-center justify-center">

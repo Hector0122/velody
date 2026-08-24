@@ -2,6 +2,31 @@ import { useEffect, useLayoutEffect, useCallback, useRef } from 'react'
 import type WaveSurfer from 'wavesurfer.js'
 import { stemNameFromPath } from '../utils'
 
+export type TickAction =
+  | { type: 'loop'; to: number }
+  | { type: 'trimStop'; at: number }
+  | { type: 'continue' }
+
+// Pure decision logic for what the RAF playback tick should do at the
+// current position — kept separate from the side-effecting bits (stopping/
+// starting audio nodes, refs) so it's directly unit-testable without an
+// AudioContext. Loop wins over trim when both would apply at the same
+// position (a loop entirely inside the trimmed range must keep looping
+// unaffected by trimEnd) — see openspec/changes/add-song-trim-points.
+export function resolveTickAction(
+  position: number,
+  loop: { enabled: boolean; start: number | null; end: number | null },
+  trim: { start: number; end: number | null }
+): TickAction {
+  if (loop.enabled && loop.start !== null && loop.end !== null && position >= loop.end) {
+    return { type: 'loop', to: loop.start }
+  }
+  if (!loop.enabled && trim.end !== null && position >= trim.end) {
+    return { type: 'trimStop', at: trim.end }
+  }
+  return { type: 'continue' }
+}
+
 interface UseAudioContextEngineParams {
   allStems: string[]
   urls: Record<string, string>
@@ -17,6 +42,12 @@ interface UseAudioContextEngineParams {
   loopEnabled: boolean
   loopStart: number | null
   loopEnd: number | null
+  // Song's persisted playback range (see openspec/changes/add-song-trim-
+  // points) — trimStart is where Restart seeks to instead of 0; reaching
+  // trimEnd (when set and loop isn't active) stops playback instead of
+  // continuing into the rest of the file. Manual seeking is unaffected.
+  trimStart: number
+  trimEnd: number | null
   masterWaveDuration: number
   duration: number
 
@@ -79,6 +110,8 @@ export function useAudioContextEngine(params: UseAudioContextEngineParams): {
     loopEnabled,
     loopStart,
     loopEnd,
+    trimStart,
+    trimEnd,
     masterWaveDuration,
     duration,
     positionRef,
@@ -118,6 +151,7 @@ export function useAudioContextEngine(params: UseAudioContextEngineParams): {
   const stemPanningsRef = useRef(stemPannings)
   const masterVolumeRef = useRef(masterVolume)
   const loopRef = useRef({ enabled: loopEnabled, start: loopStart, end: loopEnd })
+  const trimRef = useRef({ start: trimStart, end: trimEnd })
 
   useLayoutEffect(() => {
     activeRef.current = active
@@ -126,6 +160,7 @@ export function useAudioContextEngine(params: UseAudioContextEngineParams): {
     stemPanningsRef.current = stemPannings
     masterVolumeRef.current = masterVolume
     loopRef.current = { enabled: loopEnabled, start: loopStart, end: loopEnd }
+    trimRef.current = { start: trimStart, end: trimEnd }
     masterPlayingRef.current = masterPlaying
     durationRef.current = masterWaveDuration || duration
   })
@@ -290,14 +325,28 @@ export function useAudioContextEngine(params: UseAudioContextEngineParams): {
 
     const position = startRef.current + (ctx.currentTime - startTimeRef.current)
 
-    const loop = loopRef.current
-    if (loop.enabled && loop.start !== null && loop.end !== null && position >= loop.end) {
+    const action = resolveTickAction(position, loopRef.current, trimRef.current)
+
+    if (action.type === 'loop') {
       lastScheduledBeatRef.current = -1
       stopSources()
-      startSources(loop.start)
-      positionRef.current = loop.start
-      onAudioTimeRef.current(loop.start)
+      startSources(action.to)
+      positionRef.current = action.to
+      onAudioTimeRef.current(action.to)
       rafRef.current = requestAnimationFrame(tick)
+      return
+    }
+
+    if (action.type === 'trimStop') {
+      // Matches the masterPlaying watcher effect below (stop sources, flip
+      // isPlayingRef, cancel the RAF loop implicitly by not scheduling the
+      // next frame) plus setMasterPlaying(false) so UI state (play/pause
+      // icon) stays consistent with playback actually having stopped.
+      stopSources()
+      isPlayingRef.current = false
+      positionRef.current = action.at
+      onAudioTimeRef.current(action.at)
+      setMasterPlaying(false)
       return
     }
 
@@ -305,7 +354,14 @@ export function useAudioContextEngine(params: UseAudioContextEngineParams): {
     onAudioTimeRef.current(position)
 
     rafRef.current = requestAnimationFrame(tick)
-  }, [stopSources, startSources, onAudioTimeRef, lastScheduledBeatRef, positionRef])
+  }, [
+    stopSources,
+    startSources,
+    onAudioTimeRef,
+    lastScheduledBeatRef,
+    positionRef,
+    setMasterPlaying
+  ])
 
   useEffect(() => {
     if (!masterPlaying && isPlayingRef.current) {
@@ -456,16 +512,22 @@ export function useAudioContextEngine(params: UseAudioContextEngineParams): {
 
   const handleRestart = useCallback((): void => {
     lastScheduledBeatRef.current = -1
+    // Restart jumps to the song's trim start (0 when no trim is set — same
+    // as before this existed) rather than always hardcoded 0, so a song
+    // with a long intro trimmed off skips it every time the user restarts
+    // (see openspec/changes/add-song-trim-points).
+    const restartTo = trimRef.current.start
     if (isPlayingRef.current) {
       stopSources()
-      startSources(0)
+      startSources(restartTo)
     } else {
-      positionRef.current = 0
+      positionRef.current = restartTo
     }
-    progressRef.current = 0
-    onAudioTimeRef.current(0)
+    progressRef.current = restartTo
+    onAudioTimeRef.current(restartTo)
+    const fraction = durationRef.current > 0 ? restartTo / durationRef.current : 0
     for (const sw of Object.values(stemWaves.current)) {
-      sw.seekTo(0)
+      sw.seekTo(fraction)
     }
   }, [
     stopSources,
@@ -474,7 +536,8 @@ export function useAudioContextEngine(params: UseAudioContextEngineParams): {
     progressRef,
     onAudioTimeRef,
     lastScheduledBeatRef,
-    stemWaves
+    stemWaves,
+    durationRef
   ])
 
   const toggleSolo = useCallback(

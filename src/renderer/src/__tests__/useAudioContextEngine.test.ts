@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { renderHook, act, waitFor } from '@testing-library/react'
-import { useAudioContextEngine } from '../hooks/useAudioContextEngine'
+import { useAudioContextEngine, resolveTickAction } from '../hooks/useAudioContextEngine'
 import type { VelodyAPI } from '../../../shared/types'
 
 // Minimal fake AudioContext: jsdom doesn't implement the Web Audio API, and
@@ -55,6 +55,8 @@ function buildParams(
     loopEnabled: false,
     loopStart: null,
     loopEnd: null,
+    trimStart: 0,
+    trimEnd: null,
     masterWaveDuration: 0,
     duration: 0,
     positionRef: { current: 0 },
@@ -78,6 +80,50 @@ function buildParams(
     ...overrides
   }
 }
+
+describe('resolveTickAction', () => {
+  const noLoop = { enabled: false, start: null, end: null }
+  const noTrim = { start: 0, end: null }
+
+  it('continues when nothing is enabled/set', () => {
+    expect(resolveTickAction(10, noLoop, noTrim)).toEqual({ type: 'continue' })
+  })
+
+  it('loops when position reaches loop.end and loop is enabled', () => {
+    const loop = { enabled: true, start: 5, end: 20 }
+    expect(resolveTickAction(20, loop, noTrim)).toEqual({ type: 'loop', to: 5 })
+    expect(resolveTickAction(25, loop, noTrim)).toEqual({ type: 'loop', to: 5 })
+    expect(resolveTickAction(19.9, loop, noTrim)).toEqual({ type: 'continue' })
+  })
+
+  it('stops at trimEnd when loop is off', () => {
+    const trim = { start: 0, end: 30 }
+    expect(resolveTickAction(30, noLoop, trim)).toEqual({ type: 'trimStop', at: 30 })
+    expect(resolveTickAction(35, noLoop, trim)).toEqual({ type: 'trimStop', at: 30 })
+    expect(resolveTickAction(29.9, noLoop, trim)).toEqual({ type: 'continue' })
+  })
+
+  it('does not stop at trimEnd when trimEnd is null', () => {
+    expect(resolveTickAction(1000, noLoop, { start: 0, end: null })).toEqual({ type: 'continue' })
+  })
+
+  it('loop bounds entirely inside the trimmed range keep looping, unaffected by trimEnd', () => {
+    // Loop is [40, 60], trim end is 200 — well past the loop, so the loop
+    // boundary is hit first every time and trimEnd never matters here.
+    const loop = { enabled: true, start: 40, end: 60 }
+    const trim = { start: 0, end: 200 }
+    expect(resolveTickAction(60, loop, trim)).toEqual({ type: 'loop', to: 40 })
+  })
+
+  it('loop takes priority over trimStop when loop is enabled, even past trimEnd', () => {
+    // Enabled loop, and position has already passed trimEnd too — loop
+    // still wins because the trimStop branch is only checked when
+    // !loop.enabled.
+    const loop = { enabled: true, start: 5, end: 10 }
+    const trim = { start: 0, end: 8 }
+    expect(resolveTickAction(10, loop, trim)).toEqual({ type: 'loop', to: 5 })
+  })
+})
 
 describe('useAudioContextEngine - decode + notify', () => {
   beforeEach(() => {
@@ -314,6 +360,40 @@ describe('useAudioContextEngine - toggleMasterPlay preserves mute state', () => 
     })
 
     expect(setActive).toHaveBeenCalledWith({ vocals: false, drums: true, bass: true })
+  })
+})
+
+describe('useAudioContextEngine - handleRestart respects trimStart', () => {
+  beforeEach(() => {
+    vi.stubGlobal('AudioContext', FakeAudioContext)
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ arrayBuffer: async () => new ArrayBuffer(16) }))
+    )
+  })
+
+  it('seeks to 0 when no trim is set (unchanged default behavior)', () => {
+    const positionRef = { current: 42 }
+    const params = buildParams({ positionRef, masterPlaying: false })
+    const { result } = renderHook(() => useAudioContextEngine(params))
+
+    act(() => {
+      result.current.handleRestart()
+    })
+
+    expect(positionRef.current).toBe(0)
+  })
+
+  it('seeks to trimStart instead of 0 when a trim start is set', () => {
+    const positionRef = { current: 42 }
+    const params = buildParams({ positionRef, trimStart: 17.5, masterPlaying: false })
+    const { result } = renderHook(() => useAudioContextEngine(params))
+
+    act(() => {
+      result.current.handleRestart()
+    })
+
+    expect(positionRef.current).toBe(17.5)
   })
 })
 

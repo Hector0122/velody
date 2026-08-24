@@ -123,12 +123,22 @@ reading (not assumption):
   changes what "Restart" and "reaching the end automatically" mean, per the
   Non-Goals above.
 - **Export takes an optional `{ trimStart?: number; trimEnd?: number }`,
-  applied as FFmpeg `-ss <trimStart>` (input-seek) and `-to <trimEnd>` (only
-  when set) args on both `export:mix` and `export:single`.** Matches the
-  existing `options?: { bpm?: number }` extension pattern on `export:mix`
-  exactly. `-ss` before `-i` is used for fast input-side seeking rather than
+  applied as FFmpeg `-ss <trimStart>` (input-seek) and `-t <duration>`
+  (duration = trimEnd - trimStart, only when trimEnd is set) args on both
+  `export:mix` and `export:single`.** Matches the existing
+  `options?: { bpm?: number }` extension pattern on `export:mix` exactly.
+  `-ss` before `-i` is used for fast input-side seeking rather than
   output-side (`-ss` after `-i`), consistent with FFmpeg best practice for a
   hard cut with no need for frame-accurate re-encoding at the boundary.
+  **Revised during implementation:** `-t` (output duration) is used instead
+  of an absolute `-to <trimEnd>`, because `export:mix` applies `-ss`
+  independently to *multiple* inputs (one per stem) feeding one output —
+  whether `-to`'s absolute timestamp is interpreted relative to each seeked
+  input or the original unseeked timeline is ambiguous/version-dependent
+  across FFmpeg, while `-t`'s output duration has no such ambiguity
+  regardless of how many inputs were seeked. `trimInputArgs`/
+  `trimOutputArgs` (`handlers.ts`) are small, pure, exported helpers shared
+  by both export paths and directly unit-tested.
   Renderer passes the currently-loaded trim range from `useTrim` by default;
   a future export-modal toggle to "export full/untrimmed" is easy to add
   later but not required for this proposal (default behavior — trimmed

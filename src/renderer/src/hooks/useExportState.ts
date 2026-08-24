@@ -6,6 +6,11 @@ interface UseExportStateParams {
   songName: string
   bpm: number
   stemMeta: Record<string, { color: string; label: string }>
+  // Song's current trim range (see openspec/changes/add-song-trim-points) —
+  // applied by default to both single-stem and mix exports, so an exported
+  // file matches the trimmed range the user hears live.
+  trimStart: number
+  trimEnd: number | null
 }
 
 interface UseExportStateReturn {
@@ -26,7 +31,9 @@ export function useExportState({
   allStems,
   songName,
   bpm,
-  stemMeta
+  stemMeta,
+  trimStart,
+  trimEnd
 }: UseExportStateParams): UseExportStateReturn {
   const [showExportModal, setShowExportModal] = useState(false)
   const [exportSelection, setExportSelection] = useState<Record<string, boolean>>({})
@@ -46,10 +53,17 @@ export function useExportState({
       )
       if (!outPath) return
       setExporting(true)
-      await window.api.exportSingle(stemPath, outPath)
+      const trimOptions: { trimStart?: number; trimEnd?: number } = {}
+      if (trimStart > 0) trimOptions.trimStart = trimStart
+      if (trimEnd !== null) trimOptions.trimEnd = trimEnd
+      await window.api.exportSingle(
+        stemPath,
+        outPath,
+        Object.keys(trimOptions).length > 0 ? trimOptions : undefined
+      )
       setExporting(false)
     },
-    [allStems, songName, exportFormat, stemMeta]
+    [allStems, songName, exportFormat, stemMeta, trimStart, trimEnd]
   )
 
   const handleExportMix = useCallback(async (): Promise<void> => {
@@ -67,9 +81,26 @@ export function useExportState({
     )
     if (!outPath) return
     setExporting(true)
-    await window.api.exportMix(paths, outPath, exportWithMetronome ? { bpm } : undefined)
+    const options: { bpm?: number; trimStart?: number; trimEnd?: number } = {}
+    if (exportWithMetronome) options.bpm = bpm
+    if (trimStart > 0) options.trimStart = trimStart
+    if (trimEnd !== null) options.trimEnd = trimEnd
+    await window.api.exportMix(
+      paths,
+      outPath,
+      Object.keys(options).length > 0 ? options : undefined
+    )
     setExporting(false)
-  }, [exportSelection, allStems, songName, exportFormat, exportWithMetronome, bpm])
+  }, [
+    exportSelection,
+    allStems,
+    songName,
+    exportFormat,
+    exportWithMetronome,
+    bpm,
+    trimStart,
+    trimEnd
+  ])
 
   const toggleExportSelection = useCallback((key: string): void => {
     setExportSelection((prev) => ({ ...prev, [key]: !prev[key] }))

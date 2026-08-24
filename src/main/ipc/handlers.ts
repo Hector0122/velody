@@ -30,6 +30,22 @@ export function setJobManager(mgr: JobManager): void {
   jobManager = mgr
 }
 
+// Pure FFmpeg trim-arg builders, extracted for direct unit testing (same
+// rationale as scanSongsLibrary above) — see openspec/changes/
+// add-song-trim-points. `-ss` before an input is a fast input-side seek;
+// duration (`-t`) rather than an absolute end-time (`-to`) is used on the
+// output side so the clip length is unambiguous regardless of how many
+// individually `-ss`'d inputs are combined (export:mix has one per stem).
+export function trimInputArgs(trimStart?: number): string[] {
+  return trimStart && trimStart > 0 ? ['-ss', String(trimStart)] : []
+}
+
+export function trimOutputArgs(trimStart?: number, trimEnd?: number): string[] {
+  if (trimEnd == null) return []
+  const duration = Math.max(0, trimEnd - (trimStart ?? 0))
+  return ['-t', String(duration)]
+}
+
 function getStemsRootDir(): string {
   if (app.isPackaged) {
     return join(app.getPath('userData'), 'output', 'stems')
@@ -332,7 +348,12 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle(
     'export:mix',
-    async (_event, filePaths: string[], outputPath: string, options?: { bpm?: number }) => {
+    async (
+      _event,
+      filePaths: string[],
+      outputPath: string,
+      options?: { bpm?: number; trimStart?: number; trimEnd?: number }
+    ) => {
       const ffmpeg = setupManager?.getFfmpegPath() ?? 'ffmpeg'
       const allPaths = [...filePaths]
 
@@ -347,13 +368,16 @@ export function registerIpcHandlers(): void {
       const count = allPaths.length
       if (count === 0) return { success: false, error: 'No files to mix' }
 
+      // Every input gets the same -ss so all stems (and the synthesized
+      // click track, if present) stay time-aligned once seeked.
       const args: string[] = []
-      for (const fp of allPaths) args.push('-i', fp)
+      for (const fp of allPaths) args.push(...trimInputArgs(options?.trimStart), '-i', fp)
 
       const inputs = allPaths.map((_, i) => `[${i}:a]`).join('')
       args.push(
         '-filter_complex',
         `${inputs}amix=inputs=${count}:duration=longest`,
+        ...trimOutputArgs(options?.trimStart, options?.trimEnd),
         '-y',
         outputPath
       )
@@ -462,26 +486,42 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle('export:single', async (_event, filePath: string, outputPath: string) => {
-    const ffmpeg = setupManager?.getFfmpegPath() ?? 'ffmpeg'
-    return new Promise<{ success: boolean; error?: string }>((resolve) => {
-      const proc = spawn(ffmpeg, ['-i', filePath, '-y', outputPath])
-      const timeout = setTimeout(() => proc.kill('SIGTERM'), 600_000)
-      let stderr = ''
-      proc.stderr.on('data', (data: Buffer) => {
-        stderr += data.toString()
+  ipcMain.handle(
+    'export:single',
+    async (
+      _event,
+      filePath: string,
+      outputPath: string,
+      options?: { trimStart?: number; trimEnd?: number }
+    ) => {
+      const ffmpeg = setupManager?.getFfmpegPath() ?? 'ffmpeg'
+      const args = [
+        ...trimInputArgs(options?.trimStart),
+        '-i',
+        filePath,
+        ...trimOutputArgs(options?.trimStart, options?.trimEnd),
+        '-y',
+        outputPath
+      ]
+      return new Promise<{ success: boolean; error?: string }>((resolve) => {
+        const proc = spawn(ffmpeg, args)
+        const timeout = setTimeout(() => proc.kill('SIGTERM'), 600_000)
+        let stderr = ''
+        proc.stderr.on('data', (data: Buffer) => {
+          stderr += data.toString()
+        })
+        proc.on('close', (code) => {
+          clearTimeout(timeout)
+          if (code === 0) resolve({ success: true })
+          else resolve({ success: false, error: stderr.slice(0, 500) })
+        })
+        proc.on('error', (err) => {
+          clearTimeout(timeout)
+          resolve({ success: false, error: err.message })
+        })
       })
-      proc.on('close', (code) => {
-        clearTimeout(timeout)
-        if (code === 0) resolve({ success: true })
-        else resolve({ success: false, error: stderr.slice(0, 500) })
-      })
-      proc.on('error', (err) => {
-        clearTimeout(timeout)
-        resolve({ success: false, error: err.message })
-      })
-    })
-  })
+    }
+  )
 
   ipcMain.handle('file:delete', async (_event, filePath: string) => {
     if (await fileExists(filePath)) {
