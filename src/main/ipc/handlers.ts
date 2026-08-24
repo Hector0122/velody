@@ -3,7 +3,7 @@ import { spawn, execFile } from 'child_process'
 import { join, dirname } from 'path'
 import { tmpdir } from 'os'
 import { createWriteStream } from 'fs'
-import { mkdir, writeFile, readFile, rm, readdir, stat, mkdtemp, access } from 'fs/promises'
+import { mkdir, writeFile, readFile, rm, readdir, stat, mkdtemp, access, rename } from 'fs/promises'
 import { constants } from 'fs'
 import crypto from 'crypto'
 import { SetupManager } from '../setup'
@@ -120,6 +120,64 @@ function getStemsRootDir(): string {
   return join(__dirname, '../../output/stems')
 }
 
+// Named setlists — ordered references to library songs by name (never a
+// copy of song data; the library scan via scanSongsLibrary remains the
+// single source of truth for what a song's stems actually are). See
+// openspec/changes/add-song-setlists.
+export interface Setlist {
+  id: string
+  name: string
+  songNames: string[]
+  updatedAt: number
+}
+
+function getSetlistsPath(): string {
+  return join(dirname(getStemsRootDir()), 'setlists.json')
+}
+
+// setlistsPath is a parameter (not read from getSetlistsPath() internally)
+// so these are directly unit-testable against a temp file, matching
+// scanSongsLibrary's own testability rationale above.
+export async function readSetlists(setlistsPath: string): Promise<Setlist[]> {
+  try {
+    const raw = await readFile(setlistsPath, 'utf-8')
+    const parsed = JSON.parse(raw)
+    if (!parsed || !Array.isArray(parsed.setlists)) return []
+    return parsed.setlists
+  } catch {
+    // Missing file or corrupted JSON — treat as "no setlists yet" rather
+    // than throwing.
+    return []
+  }
+}
+
+// Atomic write: serialize to a temp file in the same directory, then
+// rename over the target. A crash mid-write can only ever leave the stale
+// temp file behind, never a half-written setlists.json.
+export async function writeSetlists(setlistsPath: string, setlists: Setlist[]): Promise<void> {
+  const tmpPath = `${setlistsPath}.tmp-${crypto.randomUUID()}`
+  await writeFile(tmpPath, JSON.stringify({ setlists }), 'utf-8')
+  await rename(tmpPath, setlistsPath)
+}
+
+// Pure pruning logic for song:delete's setlist cleanup, extracted for
+// direct unit testing (same rationale as scanSongsLibrary above) — a
+// deleted song's name is removed from every setlist's songNames; setlists
+// that never referenced it come back unchanged (same object reference),
+// which the caller uses to skip writing back when nothing changed.
+export function pruneSongFromSetlists(
+  setlists: Setlist[],
+  songName: string
+): { pruned: Setlist[]; changed: boolean } {
+  let changed = false
+  const pruned = setlists.map((sl) => {
+    if (!sl.songNames.includes(songName)) return sl
+    changed = true
+    return { ...sl, songNames: sl.songNames.filter((n) => n !== songName) }
+  })
+  return { pruned, changed }
+}
+
 function getPythonWorkerDir(): string {
   if (app.isPackaged) {
     return join(process.resourcesPath, 'python-worker')
@@ -199,6 +257,39 @@ export function registerIpcHandlers(): void {
     const dir = join(getStemsRootDir(), songName)
     if (!(await fileExists(dir))) return { success: false, error: 'Song not found' }
     await rm(dir, { recursive: true, force: true })
+
+    // Prune the deleted song from every setlist that referenced it, so
+    // deleting a song is atomic from the user's perspective — no dangling
+    // reference left for the setlists UI to render awkwardly.
+    const setlistsPath = getSetlistsPath()
+    const { pruned, changed } = pruneSongFromSetlists(await readSetlists(setlistsPath), songName)
+    if (changed) await writeSetlists(setlistsPath, pruned)
+
+    return { success: true }
+  })
+
+  ipcMain.handle('setlists:list', async (): Promise<Setlist[]> => {
+    return readSetlists(getSetlistsPath())
+  })
+
+  ipcMain.handle('setlists:save', async (_event, setlist: Setlist): Promise<Setlist> => {
+    const setlistsPath = getSetlistsPath()
+    const setlists = await readSetlists(setlistsPath)
+    const toSave: Setlist = { ...setlist, updatedAt: Date.now() }
+    const idx = setlists.findIndex((sl) => sl.id === toSave.id)
+    const next =
+      idx === -1 ? [...setlists, toSave] : setlists.map((sl, i) => (i === idx ? toSave : sl))
+    await writeSetlists(setlistsPath, next)
+    return toSave
+  })
+
+  ipcMain.handle('setlists:delete', async (_event, id: string): Promise<{ success: boolean }> => {
+    const setlistsPath = getSetlistsPath()
+    const setlists = await readSetlists(setlistsPath)
+    await writeSetlists(
+      setlistsPath,
+      setlists.filter((sl) => sl.id !== id)
+    )
     return { success: true }
   })
 
@@ -669,8 +760,7 @@ export function registerIpcHandlers(): void {
           pythonPath,
           ['-m', 'pip', 'install', '-U', 'yt-dlp'],
           { timeout: 120_000 },
-          (err, _stdout, stderr) =>
-            resolve({ ok: !err, stderr: err?.message ?? stderr })
+          (err, _stdout, stderr) => resolve({ ok: !err, stderr: err?.message ?? stderr })
         )
       })
       return { success: ok, error: ok ? undefined : stderr.slice(0, 500) }

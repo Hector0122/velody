@@ -1,6 +1,7 @@
 import type {
   SetupProgress,
   SongItem,
+  Setlist,
   ExportResult,
   SeparationProgressEvent,
   SeparationCompleteEvent,
@@ -13,6 +14,7 @@ import type {
 export type {
   SetupProgress,
   SongItem,
+  Setlist,
   ExportResult,
   SeparationProgressEvent,
   SeparationCompleteEvent,

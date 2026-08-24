@@ -3,6 +3,8 @@ import {
   stemNameFromPath,
   formatTime,
   filterSongsByQuery,
+  reorderSetlistSongs,
+  resolveNextSetlistSong,
   extForFormat,
   formatFilter,
   BPM_MIN,
@@ -97,6 +99,71 @@ describe('filterSongsByQuery', () => {
       { name: 'La Flaca' },
       { name: 'Flaca (Calamaro)' }
     ])
+  })
+})
+
+describe('reorderSetlistSongs', () => {
+  it('swaps a song with its previous neighbor on direction -1', () => {
+    expect(reorderSetlistSongs(['A', 'B', 'C'], 1, -1)).toEqual(['B', 'A', 'C'])
+  })
+
+  it('swaps a song with its next neighbor on direction 1', () => {
+    expect(reorderSetlistSongs(['A', 'B', 'C'], 1, 1)).toEqual(['A', 'C', 'B'])
+  })
+
+  it('returns the same array reference when moving the first song up', () => {
+    const songNames = ['A', 'B', 'C']
+    expect(reorderSetlistSongs(songNames, 0, -1)).toBe(songNames)
+  })
+
+  it('returns the same array reference when moving the last song down', () => {
+    const songNames = ['A', 'B', 'C']
+    expect(reorderSetlistSongs(songNames, 2, 1)).toBe(songNames)
+  })
+
+  it('does not mutate the input array', () => {
+    const songNames = ['A', 'B', 'C']
+    reorderSetlistSongs(songNames, 0, 1)
+    expect(songNames).toEqual(['A', 'B', 'C'])
+  })
+})
+
+describe('resolveNextSetlistSong', () => {
+  const songs = [{ name: 'Song A' }, { name: 'Song B' }, { name: 'Song C' }]
+  const setlists = [
+    { id: 'sl1', songNames: ['Song A', 'Song B', 'Song C'] },
+    { id: 'sl2', songNames: ['Song A'] }
+  ]
+
+  it('returns none when context is null', () => {
+    expect(resolveNextSetlistSong(setlists, null, songs)).toEqual({ type: 'none', skipped: [] })
+  })
+
+  it('returns none when the setlist no longer exists', () => {
+    const result = resolveNextSetlistSong(setlists, { setlistId: 'gone', index: 0 }, songs)
+    expect(result).toEqual({ type: 'none', skipped: [] })
+  })
+
+  it('finds the immediate next song when it resolves', () => {
+    const result = resolveNextSetlistSong(setlists, { setlistId: 'sl1', index: 0 }, songs)
+    expect(result).toEqual({ type: 'found', song: songs[1], index: 1, skipped: [] })
+  })
+
+  it('returns none with no skips at the end of the setlist', () => {
+    const result = resolveNextSetlistSong(setlists, { setlistId: 'sl2', index: 0 }, songs)
+    expect(result).toEqual({ type: 'none', skipped: [] })
+  })
+
+  it('skips entries that no longer resolve to a library song and finds the next one that does', () => {
+    const setlistsWithGap = [{ id: 'sl1', songNames: ['Song A', 'Deleted Song', 'Song C'] }]
+    const result = resolveNextSetlistSong(setlistsWithGap, { setlistId: 'sl1', index: 0 }, songs)
+    expect(result).toEqual({ type: 'found', song: songs[2], index: 2, skipped: ['Deleted Song'] })
+  })
+
+  it('returns none with the skipped names when every remaining entry is missing', () => {
+    const setlistsAllGone = [{ id: 'sl1', songNames: ['Song A', 'Deleted 1', 'Deleted 2'] }]
+    const result = resolveNextSetlistSong(setlistsAllGone, { setlistId: 'sl1', index: 0 }, songs)
+    expect(result).toEqual({ type: 'none', skipped: ['Deleted 1', 'Deleted 2'] })
   })
 })
 

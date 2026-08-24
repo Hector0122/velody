@@ -19,6 +19,13 @@ export interface SeparationCancelledEvent {
   jobId: string
 }
 
+export interface Setlist {
+  id: string
+  name: string
+  songNames: string[]
+  updatedAt: number
+}
+
 export interface SeparationJob {
   id: string
   songPath: string
@@ -99,6 +106,9 @@ const api = {
 
   listSongs: () => ipcRenderer.invoke('songs:list'),
   deleteSong: (songName: string) => ipcRenderer.invoke('song:delete', songName),
+  listSetlists: () => ipcRenderer.invoke('setlists:list'),
+  saveSetlist: (setlist: Setlist) => ipcRenderer.invoke('setlists:save', setlist),
+  deleteSetlist: (id: string) => ipcRenderer.invoke('setlists:delete', id),
   readAudioFile: (filePath: string) => ipcRenderer.invoke('audio:readFile', filePath),
   getAudioUrl: (filePath: string) => ipcRenderer.invoke('audio:url', filePath),
   getSetupStatus: () => ipcRenderer.invoke('setup:status'),

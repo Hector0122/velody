@@ -2,7 +2,8 @@ import { useState, useEffect, useCallback, useRef, useLayoutEffect, useMemo } fr
 import AudioUploader from '../components/AudioUploader'
 import UrlImporter from '../components/UrlImporter'
 import StemPlayer from '../components/StemPlayer'
-import { filterSongsByQuery } from '../utils'
+import SetlistPanel from '../components/SetlistPanel'
+import { filterSongsByQuery, reorderSetlistSongs, resolveNextSetlistSong } from '../utils'
 
 interface RecentSong {
   name: string
@@ -36,6 +37,16 @@ function Home(): React.JSX.Element {
   const [importMode, setImportMode] = useState<'local' | 'url'>('local')
   const [showNewSongMenu, setShowNewSongMenu] = useState(false)
   const [songSearch, setSongSearch] = useState('')
+  const [sidebarView, setSidebarView] = useState<'library' | 'setlists'>('library')
+  const [setlists, setSetlists] = useState<Setlist[]>([])
+  const [activeSetlistId, setActiveSetlistId] = useState<string | null>(null)
+  // Which setlist + index the currently open song was opened from, so
+  // "Next song" (StemPlayer) knows what to advance to. Cleared whenever a
+  // song is opened from anywhere other than the active setlist's song list.
+  const [songSetlistContext, setSongSetlistContext] = useState<{
+    setlistId: string
+    index: number
+  } | null>(null)
   const newSongMenuRef = useRef<HTMLDivElement>(null)
   const jobQueueRef = useRef<SeparationJob[]>([])
 
@@ -138,6 +149,7 @@ function Home(): React.JSX.Element {
     if (!window.api) return
     window.api.listSongs().then(setRecentSongs)
     window.api.listSeparationJobs().then(setJobQueue)
+    window.api.listSetlists().then(setSetlists)
   }, [])
 
   // Close new song menu on outside click
@@ -220,6 +232,7 @@ function Home(): React.JSX.Element {
   const handleSelectRecent = useCallback((song: RecentSong): void => {
     setError(null)
     setCurrentSong({ stems: song.stems, songName: song.name })
+    setSongSetlistContext(null)
   }, [])
 
   const handleUrlImport = useCallback((url: string, jobId: string, songName: string): void => {
@@ -253,7 +266,105 @@ function Home(): React.JSX.Element {
     setRecentSongs((prev) => prev.filter((s) => s.name !== song.name))
     setJobQueue((prev) => prev.filter((j) => j.songName.toLowerCase() !== normalized))
     if (currentSong?.songName === song.name) setCurrentSong(null)
+    // The backend already pruned this song from every setlist's songNames
+    // (song:delete) — re-fetch to pick up that change locally rather than
+    // re-implementing the same pruning logic client-side.
+    window.api.listSetlists().then(setSetlists)
   }
+
+  const handleCreateSetlist = useCallback(async (name: string): Promise<void> => {
+    if (!window.api) return
+    const saved = await window.api.saveSetlist({
+      id: crypto.randomUUID(),
+      name,
+      songNames: [],
+      updatedAt: Date.now()
+    })
+    setSetlists((prev) => [...prev, saved])
+    setActiveSetlistId(saved.id)
+  }, [])
+
+  const handleDeleteSetlist = useCallback(
+    async (id: string): Promise<void> => {
+      if (!window.api) return
+      await window.api.deleteSetlist(id)
+      setSetlists((prev) => prev.filter((sl) => sl.id !== id))
+      if (activeSetlistId === id) setActiveSetlistId(null)
+      if (songSetlistContext?.setlistId === id) setSongSetlistContext(null)
+    },
+    [activeSetlistId, songSetlistContext]
+  )
+
+  const handleSelectSetlistSong = useCallback(
+    (song: RecentSong, setlistId: string, index: number): void => {
+      setError(null)
+      setCurrentSong({ stems: song.stems, songName: song.name })
+      setSongSetlistContext({ setlistId, index })
+    },
+    []
+  )
+
+  const persistSetlist = useCallback(async (updated: Setlist): Promise<void> => {
+    if (!window.api) return
+    const saved = await window.api.saveSetlist(updated)
+    setSetlists((prev) => prev.map((sl) => (sl.id === saved.id ? saved : sl)))
+  }, [])
+
+  const handleRemoveSongFromSetlist = useCallback(
+    (setlistId: string, songName: string): void => {
+      const sl = setlists.find((s) => s.id === setlistId)
+      if (!sl) return
+      persistSetlist({ ...sl, songNames: sl.songNames.filter((n) => n !== songName) })
+    },
+    [setlists, persistSetlist]
+  )
+
+  const handleMoveSongInSetlist = useCallback(
+    (setlistId: string, index: number, direction: -1 | 1): void => {
+      const sl = setlists.find((s) => s.id === setlistId)
+      if (!sl) return
+      const songNames = reorderSetlistSongs(sl.songNames, index, direction)
+      if (songNames === sl.songNames) return // out of bounds — no-op
+      persistSetlist({ ...sl, songNames })
+    },
+    [setlists, persistSetlist]
+  )
+
+  const handleAddSongToActiveSetlist = useCallback(
+    (song: RecentSong): void => {
+      if (!activeSetlistId) return
+      const sl = setlists.find((s) => s.id === activeSetlistId)
+      if (!sl) return
+      if (sl.songNames.includes(song.name)) {
+        addToast(`Already in "${sl.name}"`, 'error')
+        return
+      }
+      persistSetlist({ ...sl, songNames: [...sl.songNames, song.name] })
+      addToast(`Added to "${sl.name}"`, 'success')
+    },
+    [activeSetlistId, setlists, persistSetlist, addToast]
+  )
+
+  const nextSetlistSong = useMemo(
+    () => resolveNextSetlistSong(setlists, songSetlistContext, recentSongs),
+    [setlists, songSetlistContext, recentSongs]
+  )
+
+  const handleNextSongInSetlist = useCallback((): void => {
+    if (!songSetlistContext) return
+    if (nextSetlistSong.skipped.length > 0) {
+      const list = nextSetlistSong.skipped.map((n) => `"${n}"`).join(', ')
+      addToast(`Skipped ${list} — no longer in the library`, 'error')
+    }
+    if (nextSetlistSong.type !== 'found') return
+    handleSelectSetlistSong(
+      nextSetlistSong.song,
+      songSetlistContext.setlistId,
+      nextSetlistSong.index
+    )
+  }, [songSetlistContext, nextSetlistSong, addToast, handleSelectSetlistSong])
+
+  const hasNextSongInSetlist = nextSetlistSong.type === 'found'
 
   const queuedJobs = useMemo(
     () =>
@@ -305,6 +416,29 @@ function Home(): React.JSX.Element {
               </button>
             </div>
           )}
+        </div>
+
+        <div className="mx-3 mt-3 flex gap-1 bg-neutral-900 rounded-lg p-1 border border-neutral-800 shrink-0">
+          <button
+            onClick={() => setSidebarView('library')}
+            className={`flex-1 py-1 rounded text-xs font-medium transition-colors ${
+              sidebarView === 'library'
+                ? 'bg-neutral-800 text-white'
+                : 'text-neutral-500 hover:text-neutral-300'
+            }`}
+          >
+            Library
+          </button>
+          <button
+            onClick={() => setSidebarView('setlists')}
+            className={`flex-1 py-1 rounded text-xs font-medium transition-colors ${
+              sidebarView === 'setlists'
+                ? 'bg-neutral-800 text-white'
+                : 'text-neutral-500 hover:text-neutral-300'
+            }`}
+          >
+            Setlists
+          </button>
         </div>
 
         {/* Queue */}
@@ -372,59 +506,97 @@ function Home(): React.JSX.Element {
           </div>
         )}
 
-        <div className="mt-3 mx-3 shrink-0">
-          <h3 className="text-[10px] font-semibold text-neutral-500 uppercase tracking-wide mb-1.5">
-            Recent Songs
-          </h3>
-          <div className="relative">
-            <input
-              type="text"
-              value={songSearch}
-              onChange={(e) => setSongSearch(e.target.value)}
-              placeholder="Search songs..."
-              className="w-full px-2.5 py-1.5 pr-7 rounded-md bg-neutral-800 border border-neutral-700 text-neutral-200 text-xs placeholder-neutral-500 focus:outline-none focus:border-brand-primary transition-colors"
-            />
-            {songSearch && (
-              <button
-                onClick={() => setSongSearch('')}
-                className="absolute right-1.5 top-1/2 -translate-y-1/2 w-4 h-4 rounded flex items-center justify-center text-neutral-500 hover:text-white transition-colors text-xs"
-                title="Clear search"
-              >
-                ✕
-              </button>
-            )}
-          </div>
-        </div>
-
-        <div className="flex-1 overflow-y-auto px-3 mt-2 space-y-1">
-          {filteredSongs.length === 0 ? (
-            <p className="text-xs text-neutral-600 px-1 py-2">
-              {songSearch ? 'No songs found' : 'No songs yet'}
-            </p>
-          ) : (
-            filteredSongs.map((song) => (
-              <div key={song.name} className="relative group">
-                <button
-                  onClick={() => handleSelectRecent(song)}
-                  className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
-                    currentSong?.songName === song.name
-                      ? 'bg-brand-primary/20 text-brand-primary border border-brand-primary/30'
-                      : 'text-neutral-400 hover:text-white hover:bg-neutral-800'
-                  }`}
-                >
-                  <span className="truncate block">{song.name}</span>
-                </button>
-                <button
-                  onClick={(e) => handleDeleteSong(song, e)}
-                  className="absolute right-1 top-1/2 -translate-y-1/2 w-6 h-6 rounded flex items-center justify-center text-neutral-600 hover:text-red-400 hover:bg-red-900/30 transition-colors opacity-0 group-hover:opacity-100 text-xs"
-                  title="Delete song"
-                >
-                  ✕
-                </button>
+        {sidebarView === 'library' ? (
+          <>
+            <div className="mt-3 mx-3 shrink-0">
+              <h3 className="text-[10px] font-semibold text-neutral-500 uppercase tracking-wide mb-1.5">
+                Recent Songs
+              </h3>
+              <div className="relative">
+                <input
+                  type="text"
+                  value={songSearch}
+                  onChange={(e) => setSongSearch(e.target.value)}
+                  placeholder="Search songs..."
+                  className="w-full px-2.5 py-1.5 pr-7 rounded-md bg-neutral-800 border border-neutral-700 text-neutral-200 text-xs placeholder-neutral-500 focus:outline-none focus:border-brand-primary transition-colors"
+                />
+                {songSearch && (
+                  <button
+                    onClick={() => setSongSearch('')}
+                    className="absolute right-1.5 top-1/2 -translate-y-1/2 w-4 h-4 rounded flex items-center justify-center text-neutral-500 hover:text-white transition-colors text-xs"
+                    title="Clear search"
+                  >
+                    ✕
+                  </button>
+                )}
               </div>
-            ))
-          )}
-        </div>
+              {activeSetlistId && (
+                <p className="text-[10px] text-brand-primary mt-1.5 truncate">
+                  Adding to &ldquo;{setlists.find((sl) => sl.id === activeSetlistId)?.name}&rdquo;
+                </p>
+              )}
+            </div>
+
+            <div className="flex-1 overflow-y-auto px-3 mt-2 space-y-1">
+              {filteredSongs.length === 0 ? (
+                <p className="text-xs text-neutral-600 px-1 py-2">
+                  {songSearch ? 'No songs found' : 'No songs yet'}
+                </p>
+              ) : (
+                filteredSongs.map((song) => (
+                  <div key={song.name} className="relative group">
+                    <button
+                      onClick={() => handleSelectRecent(song)}
+                      className={`w-full text-left pl-3 py-2 rounded-lg text-sm transition-colors ${
+                        activeSetlistId ? 'pr-14' : 'pr-9'
+                      } ${
+                        currentSong?.songName === song.name
+                          ? 'bg-brand-primary/20 text-brand-primary border border-brand-primary/30'
+                          : 'text-neutral-400 hover:text-white hover:bg-neutral-800'
+                      }`}
+                    >
+                      <span className="truncate block">{song.name}</span>
+                    </button>
+                    <div className="absolute right-1 top-1/2 -translate-y-1/2 flex items-center opacity-0 group-hover:opacity-100 transition-opacity">
+                      {activeSetlistId && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            handleAddSongToActiveSetlist(song)
+                          }}
+                          className="w-6 h-6 rounded flex items-center justify-center text-neutral-600 hover:text-brand-primary hover:bg-brand-primary/10 transition-colors text-xs"
+                          title="Add to active setlist"
+                        >
+                          +
+                        </button>
+                      )}
+                      <button
+                        onClick={(e) => handleDeleteSong(song, e)}
+                        className="w-6 h-6 rounded flex items-center justify-center text-neutral-600 hover:text-red-400 hover:bg-red-900/30 transition-colors text-xs"
+                        title="Delete song"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </>
+        ) : (
+          <SetlistPanel
+            setlists={setlists}
+            activeSetlistId={activeSetlistId}
+            songs={recentSongs}
+            currentSongName={currentSong?.songName ?? null}
+            onSelectSetlist={setActiveSetlistId}
+            onCreateSetlist={handleCreateSetlist}
+            onDeleteSetlist={handleDeleteSetlist}
+            onSelectSong={handleSelectSetlistSong}
+            onRemoveSongFromSetlist={handleRemoveSongFromSetlist}
+            onMoveSong={handleMoveSongInSetlist}
+          />
+        )}
       </aside>
 
       {/* Main */}
@@ -441,6 +613,8 @@ function Home(): React.JSX.Element {
             stems={currentSong.stems}
             songName={currentSong.songName}
             onToast={addToast}
+            onNextSong={songSetlistContext ? handleNextSongInSetlist : undefined}
+            hasNextSong={hasNextSongInSetlist}
           />
         ) : (
           <div className="flex-1 flex items-center justify-center">

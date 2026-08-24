@@ -10,6 +10,15 @@ export interface SongItem {
   stems: string[]
 }
 
+// Named, ordered references to library songs by name — never a copy of
+// song data. See openspec/changes/add-song-setlists.
+export interface Setlist {
+  id: string
+  name: string
+  songNames: string[]
+  updatedAt: number
+}
+
 export interface ExportResult {
   success: boolean
   error?: string
@@ -69,6 +78,9 @@ export interface VelodyAPI {
 
   listSongs: () => Promise<SongItem[]>
   deleteSong: (songName: string) => Promise<{ success: boolean; error?: string }>
+  listSetlists: () => Promise<Setlist[]>
+  saveSetlist: (setlist: Setlist) => Promise<Setlist>
+  deleteSetlist: (id: string) => Promise<{ success: boolean }>
   readAudioFile: (filePath: string) => Promise<Uint8Array>
   getAudioUrl: (filePath: string) => Promise<string>
   getSetupStatus: () => Promise<{ complete: boolean }>

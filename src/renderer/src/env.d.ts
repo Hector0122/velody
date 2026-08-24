@@ -7,6 +7,7 @@ declare global {
 
   type SetupProgress = import('../shared/types').SetupProgress
   type SongItem = import('../shared/types').SongItem
+  type Setlist = import('../shared/types').Setlist
   type ExportResult = import('../shared/types').ExportResult
   type SeparationProgressEvent = import('../shared/types').SeparationProgressEvent
   type SeparationCompleteEvent = import('../shared/types').SeparationCompleteEvent

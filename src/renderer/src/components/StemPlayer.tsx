@@ -29,6 +29,11 @@ interface StemPlayerProps {
   stems: string[]
   songName: string
   onToast?: (message: string, type?: 'error' | 'success') => void
+  // Present only when this song was opened from an active setlist (see
+  // openspec/changes/add-song-setlists) — advances to the next song in
+  // that setlist's order.
+  onNextSong?: () => void
+  hasNextSong?: boolean
 }
 
 const STEM_META: Record<string, { color: string; label: string }> = {
@@ -51,7 +56,13 @@ const RECORDING_COLORS = [
   '#f97316'
 ]
 
-function StemPlayer({ stems, songName, onToast }: StemPlayerProps): React.JSX.Element {
+function StemPlayer({
+  stems,
+  songName,
+  onToast,
+  onNextSong,
+  hasNextSong
+}: StemPlayerProps): React.JSX.Element {
   const progressRef = useRef(0)
   const [masterVolume, setMasterVolume] = useState(1)
   const [masterPlaying, setMasterPlaying] = useState(false)
@@ -487,7 +498,16 @@ function StemPlayer({ stems, songName, onToast }: StemPlayerProps): React.JSX.El
           <div className="bg-neutral-900/80 rounded-md border border-neutral-800 p-5">
             <div className="flex items-center justify-between">
               <h2 className="text-xl font-bold text-white">{songName}</h2>
-              <div />
+              {onNextSong && (
+                <button
+                  onClick={onNextSong}
+                  disabled={!hasNextSong}
+                  className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-neutral-800 text-neutral-300 hover:text-white hover:bg-neutral-700 transition-colors disabled:opacity-30 disabled:hover:text-neutral-300 disabled:hover:bg-neutral-800 flex items-center gap-1.5"
+                  title={hasNextSong ? 'Next song in setlist' : 'End of setlist'}
+                >
+                  Next Song &#9654;
+                </button>
+              )}
             </div>
           </div>
 

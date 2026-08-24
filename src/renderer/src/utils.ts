@@ -22,6 +22,61 @@ export function filterSongsByQuery<T extends { name: string }>(songs: T[], query
   return songs.filter((song) => song.name.toLowerCase().includes(q))
 }
 
+// Swaps the song at `index` with its neighbor in `direction` (-1 = up,
+// 1 = down). Returns the original array reference unchanged when the move
+// would go out of bounds, so callers can skip persisting a no-op.
+// See openspec/changes/add-song-setlists.
+export function reorderSetlistSongs(
+  songNames: string[],
+  index: number,
+  direction: -1 | 1
+): string[] {
+  const target = index + direction
+  if (target < 0 || target >= songNames.length) return songNames
+  const next = [...songNames]
+  ;[next[index], next[target]] = [next[target], next[index]]
+  return next
+}
+
+interface SetlistLike {
+  id: string
+  songNames: string[]
+}
+
+interface SongLike {
+  name: string
+}
+
+export type NextSetlistSongResult<T extends SongLike> =
+  | { type: 'none'; skipped: string[] }
+  | { type: 'found'; song: T; index: number; skipped: string[] }
+
+// Resolves what "Next song" should do given the setlist the current song
+// was opened from, the index it was opened at, and the current library.
+// Skips forward past any entry that no longer resolves to a library song
+// (e.g. deleted outside the setlist-aware delete flow) instead of getting
+// stuck on it — `skipped` lists those names so the caller can toast about
+// them. Pure — no state mutation, no IPC — so the setlist-traversal logic
+// is directly testable without rendering Home.tsx.
+export function resolveNextSetlistSong<T extends SongLike>(
+  setlists: SetlistLike[],
+  context: { setlistId: string; index: number } | null,
+  songs: T[]
+): NextSetlistSongResult<T> {
+  if (!context) return { type: 'none', skipped: [] }
+  const setlist = setlists.find((sl) => sl.id === context.setlistId)
+  if (!setlist) return { type: 'none', skipped: [] }
+
+  const skipped: string[] = []
+  for (let i = context.index + 1; i < setlist.songNames.length; i++) {
+    const name = setlist.songNames[i]
+    const song = songs.find((s) => s.name === name)
+    if (song) return { type: 'found', song, index: i, skipped }
+    skipped.push(name)
+  }
+  return { type: 'none', skipped }
+}
+
 export const extForFormat = (fmt: string): string => (fmt === 'mp3' ? '.mp3' : '.wav')
 
 export const formatFilter = (fmt: string): { name: string; extensions: string[] } =>
