@@ -10,6 +10,8 @@ import { useRecording } from '../hooks/useRecording'
 import useSongAnalysis from '../hooks/useSongAnalysis'
 import useMarkers from '../hooks/useMarkers'
 import useTrim from '../hooks/useTrim'
+import useSongCountIn from '../hooks/useSongCountIn'
+import useCountIn from '../hooks/useCountIn'
 import { useExportState } from '../hooks/useExportState'
 import { useWaveSurfers } from '../hooks/useWaveSurfers'
 import { useAudioContextEngine } from '../hooks/useAudioContextEngine'
@@ -247,6 +249,61 @@ function StemPlayer({ stems, songName, onToast }: StemPlayerProps): React.JSX.El
     getDecodedBufferRef.current = getDecodedBuffer
   })
 
+  // Per-song "play a count-in before the song starts" setting — separate
+  // from useRecording's own (session-only, 0/1/2/4 bars) count-in, and
+  // from its useCountIn instance, so a countdown for one flow never
+  // cancels or interferes with the other. See openspec/changes/
+  // add-song-count-in.
+  const { playbackCountInBars, setPlaybackCountInBars } = useSongCountIn(stems)
+  const playbackCountIn = useCountIn(audioCtxRef, playClick)
+  const [playbackCounting, setPlaybackCounting] = useState(false)
+  const [playbackCountRemaining, setPlaybackCountRemaining] = useState(0)
+
+  const handleToggleMasterPlayWithCountIn = useCallback((): void => {
+    if (playbackCounting) {
+      playbackCountIn.cancel()
+      setPlaybackCounting(false)
+      return
+    }
+    if (!masterPlaying && playbackCountInBars > 0) {
+      // toggleMasterPlay normally creates the AudioContext lazily on first
+      // play; the count-in needs it to already exist to schedule clicks,
+      // so ensure it here first (mirrors useRecording's own fallback
+      // creation for the same reason).
+      if (!audioCtxRef.current) {
+        try {
+          audioCtxRef.current = new AudioContext()
+        } catch {
+          console.error('[StemPlayer] Failed to create AudioContext for count-in')
+          toggleMasterPlay()
+          return
+        }
+      }
+      if (audioCtxRef.current.state === 'suspended') audioCtxRef.current.resume()
+
+      setPlaybackCounting(true)
+      playbackCountIn.start(
+        playbackCountInBars,
+        bpm,
+        (remaining) => setPlaybackCountRemaining(remaining),
+        () => {
+          setPlaybackCounting(false)
+          toggleMasterPlay()
+        }
+      )
+      return
+    }
+    toggleMasterPlay()
+  }, [
+    playbackCounting,
+    masterPlaying,
+    playbackCountInBars,
+    bpm,
+    audioCtxRef,
+    playbackCountIn,
+    toggleMasterPlay
+  ])
+
   const onAudioTime = useCallback(
     (time: number): void => {
       progressRef.current = time
@@ -460,7 +517,9 @@ function StemPlayer({ stems, songName, onToast }: StemPlayerProps): React.JSX.El
           monitorVolume={monitorVolume}
           recordingFormat={recordingFormat}
           countInBars={countInBars}
-          onToggleMasterPlay={toggleMasterPlay}
+          playbackCountInBars={playbackCountInBars}
+          onToggleMasterPlay={handleToggleMasterPlayWithCountIn}
+          onPlaybackCountInBarsChange={setPlaybackCountInBars}
           onRestart={handleRestart}
           onMasterVolumeChange={handleMasterVolume}
           onBpmDecrement={handleBpmDecrement}
@@ -479,6 +538,14 @@ function StemPlayer({ stems, songName, onToast }: StemPlayerProps): React.JSX.El
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70">
           <span className="text-8xl font-bold text-white animate-pulse drop-shadow-2xl">
             {recordingCount > 0 ? recordingCount : ''}
+          </span>
+        </div>
+      )}
+
+      {playbackCounting && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70">
+          <span className="text-8xl font-bold text-brand-primary animate-pulse drop-shadow-2xl">
+            {playbackCountRemaining > 0 ? playbackCountRemaining : ''}
           </span>
         </div>
       )}

@@ -11,7 +11,9 @@ interface MasterPanelProps {
   monitorVolume: number
   recordingFormat: 'wav' | 'mp3'
   countInBars: number
+  playbackCountInBars: number
   onToggleMasterPlay: () => void
+  onPlaybackCountInBarsChange: (bars: number) => void
   onRestart: () => void
   onMasterVolumeChange: (e: React.ChangeEvent<HTMLInputElement>) => void
   onBpmDecrement: () => void
@@ -35,7 +37,9 @@ function MasterPanel({
   monitorVolume,
   recordingFormat,
   countInBars,
+  playbackCountInBars,
   onToggleMasterPlay,
+  onPlaybackCountInBarsChange,
   onRestart,
   onMasterVolumeChange,
   onBpmDecrement,
@@ -208,6 +212,24 @@ function MasterPanel({
             />
             <span className="text-xs text-neutral-500">{Math.round(metroVolume * 100)}%</span>
           </div>
+        </div>
+        <div className="flex items-center justify-center gap-1.5">
+          <span className="text-[10px] text-neutral-500" title="Click before playback starts">
+            Count-in on Play
+          </span>
+          {[0, 1, 2].map((bars) => (
+            <button
+              key={bars}
+              onClick={() => onPlaybackCountInBarsChange(bars)}
+              className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors ${
+                playbackCountInBars === bars
+                  ? 'bg-brand-primary text-white'
+                  : 'bg-neutral-800 text-neutral-400'
+              }`}
+            >
+              {bars === 0 ? 'OFF' : `${bars}`}
+            </button>
+          ))}
         </div>
       </div>
     </div>

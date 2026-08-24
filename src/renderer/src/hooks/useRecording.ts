@@ -1,5 +1,6 @@
 import { useState, useRef, useCallback } from 'react'
 import { formatTime, updateTimeDisplays } from '../utils'
+import useCountIn from './useCountIn'
 
 interface UseRecordingParams {
   audioCtxRef: React.MutableRefObject<AudioContext | null>
@@ -61,8 +62,12 @@ export function useRecording({
   const recordingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const recordingStartTimeRef = useRef(0)
   const recordingOffsetRef = useRef(0)
-  const recordingTimeoutIds = useRef<ReturnType<typeof setTimeout>[]>([])
+  // Only used for the non-musical (countInBars === 0) 3-2-1 setInterval
+  // countdown below — the bars > 0 path's scheduling is owned by useCountIn.
+  const plainCountdownId = useRef<ReturnType<typeof setInterval> | null>(null)
   const recordingElapsedRef = useRef(0)
+
+  const countIn = useCountIn(audioCtxRef, playClick)
 
   const beginCapture = useCallback(
     (stream: MediaStream): void => {
@@ -110,8 +115,7 @@ export function useRecording({
         setRecordingKey(key)
         recordingChunksRef.current = []
 
-        const totalBeats = countInBars * 4
-        if (totalBeats > 0) {
+        if (countInBars > 0) {
           let ctx = audioCtxRef.current
           if (!ctx) {
             try {
@@ -132,7 +136,7 @@ export function useRecording({
           const audioStart = audioStartRef.current
           let seekStart = positionRef.current
           if (nearStart && audioStart !== null && audioStart > 0) {
-            const countInDur = totalBeats * interval
+            const countInDur = countInBars * 4 * interval
             seekStart = Math.max(0, audioStart - countInDur)
             seek(seekStart)
             positionRef.current = seekStart
@@ -140,34 +144,21 @@ export function useRecording({
             updateTimeDisplays(seekStart)
           }
 
-          const now = ctx.currentTime
-          const scheduleTime = now + 0.05
-
-          for (let i = 0; i < totalBeats; i++) {
-            const scheduledTime = scheduleTime + i * interval
-            playClick(i === 0, scheduledTime)
-          }
-
           setRecording('countdown')
-          setRecordingCount(totalBeats)
-
-          recordingTimeoutIds.current = []
-          for (let i = 0; i < totalBeats; i++) {
-            const msDelay = i * interval * 1000 + 50
-            const id = setTimeout(() => setRecordingCount(totalBeats - i), msDelay)
-            recordingTimeoutIds.current.push(id)
-          }
-
-          const totalMs = totalBeats * interval * 1000 + 50
-          const beginId = setTimeout(() => beginCapture(stream), totalMs)
-          recordingTimeoutIds.current.push(beginId)
+          countIn.start(
+            countInBars,
+            bpm,
+            (remaining) => setRecordingCount(remaining),
+            () => beginCapture(stream)
+          )
         } else {
           setRecording('countdown')
           setRecordingCount(3)
-          const cd = setInterval(() => {
+          plainCountdownId.current = setInterval(() => {
             setRecordingCount((prev) => {
               if (prev <= 1) {
-                clearInterval(cd)
+                if (plainCountdownId.current) clearInterval(plainCountdownId.current)
+                plainCountdownId.current = null
                 beginCapture(stream)
                 return 0
               }
@@ -180,12 +171,19 @@ export function useRecording({
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [audioCtxRef, seek, bpm, countInBars, positionRef, audioStartRef, playClick, beginCapture]
+    [audioCtxRef, seek, bpm, countInBars, positionRef, audioStartRef, countIn, beginCapture]
   )
 
+  const cancelCountdown = useCallback((): void => {
+    countIn.cancel()
+    if (plainCountdownId.current) {
+      clearInterval(plainCountdownId.current)
+      plainCountdownId.current = null
+    }
+  }, [countIn])
+
   const handleStopRecording = useCallback((): void => {
-    for (const id of recordingTimeoutIds.current) clearTimeout(id)
-    recordingTimeoutIds.current = []
+    cancelCountdown()
     if (recordingTimerRef.current) {
       clearInterval(recordingTimerRef.current)
       recordingTimerRef.current = null
@@ -193,11 +191,10 @@ export function useRecording({
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
       mediaRecorderRef.current.stop()
     }
-  }, [])
+  }, [cancelCountdown])
 
   const handleDiscardRecording = useCallback((): void => {
-    for (const id of recordingTimeoutIds.current) clearTimeout(id)
-    recordingTimeoutIds.current = []
+    cancelCountdown()
     setRecording('idle')
     setRecordingKey(null)
     setRecordingBlob(null)
@@ -205,7 +202,7 @@ export function useRecording({
     setRecordingCount(3)
     setRecordingTake(1)
     recordingChunksRef.current = []
-  }, [])
+  }, [cancelCountdown])
 
   const handleSaveRecording = useCallback(async (): Promise<void> => {
     if (!window.api || !recordingBlob || !recordingKey) return
