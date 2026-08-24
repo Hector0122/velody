@@ -7,7 +7,8 @@ import MasterPanel from './MasterPanel'
 import TimelinePanel from './TimelinePanel'
 import { useMetronome, RESET_SCHEDULED_BEAT } from '../hooks/useMetronome'
 import { useRecording } from '../hooks/useRecording'
-import useSongAnalysis from '../hooks/useSongAnalysis'
+import useSongAnalysis, { CACHE_VERSION } from '../hooks/useSongAnalysis'
+import { correctTempoOctave, type TempoOctaveDirection } from '../hooks/tempoOctaveCorrection'
 import useMarkers from '../hooks/useMarkers'
 import useTrim from '../hooks/useTrim'
 import useSongCountIn from '../hooks/useSongCountIn'
@@ -17,6 +18,7 @@ import { useWaveSurfers } from '../hooks/useWaveSurfers'
 import { useAudioContextEngine } from '../hooks/useAudioContextEngine'
 import {
   stemNameFromPath,
+  songDirFromStemPath,
   formatTime,
   BPM_MIN,
   BPM_MAX,
@@ -447,6 +449,41 @@ function StemPlayer({
     [setBpm, lastScheduledBeatRef]
   )
 
+  // Corrects a tempo-octave detection error (detector locked onto half or
+  // double the real tempo — see tempoOctaveCorrection.ts) while keeping the
+  // metronome locked to the real detected beat grid, unlike just re-typing
+  // a doubled/halved BPM (handleBpmChange above), which would fall out of
+  // grid mode into plain constant-tempo scheduling. Rebuilds beatTimesRef
+  // itself, so it also updates originalBpmRef (not just the displayed bpm)
+  // to keep grid mode's `bpm === originalBpmRef.current` check satisfied,
+  // and persists the correction to the .velody cache so it isn't lost on
+  // next open. See openspec/changes/add-tempo-octave-correction.
+  const handleCorrectTempoOctave = useCallback(
+    (direction: TempoOctaveDirection): void => {
+      if (stems.length === 0) return
+      const correction = correctTempoOctave(
+        beatTimesRef.current,
+        originalBpmRef.current,
+        firstBeatOffsetRef.current,
+        direction
+      )
+      beatTimesRef.current = correction.beatTimes
+      firstBeatOffsetRef.current = correction.firstBeatOffset
+      originalBpmRef.current = correction.bpm
+      lastScheduledBeatRef.current = RESET_SCHEDULED_BEAT
+      setBpm(correction.bpm)
+
+      const songDir = songDirFromStemPath(stems[0])
+      window.api?.saveMeta(songDir, {
+        bpm: correction.bpm,
+        firstBeatOffset: correction.firstBeatOffset,
+        beatTimes: correction.beatTimes,
+        _version: CACHE_VERSION
+      })
+    },
+    [stems, beatTimesRef, originalBpmRef, firstBeatOffsetRef, lastScheduledBeatRef, setBpm]
+  )
+
   const handleMetronomeToggle = useCallback((): void => {
     setMetronomeOn((prev) => !prev)
   }, [setMetronomeOn])
@@ -556,6 +593,7 @@ function StemPlayer({
           onBpmDecrement={handleBpmDecrement}
           onBpmChange={handleBpmChange}
           onBpmIncrement={handleBpmIncrement}
+          onCorrectTempoOctave={handleCorrectTempoOctave}
           onMetronomeToggle={handleMetronomeToggle}
           onMetroVolumeChange={handleMetroVolumeChange}
           onMetroPanChange={setMetroPan}

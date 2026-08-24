@@ -1,5 +1,6 @@
 import { memo, useState } from 'react'
 import { formatTime, BPM_MIN, BPM_MAX } from '../utils'
+import type { TempoOctaveDirection } from '../hooks/tempoOctaveCorrection'
 
 interface MasterPanelProps {
   masterPlaying: boolean
@@ -22,6 +23,7 @@ interface MasterPanelProps {
   onBpmDecrement: () => void
   onBpmChange: (v: number) => void
   onBpmIncrement: () => void
+  onCorrectTempoOctave: (direction: TempoOctaveDirection) => void
   onMetronomeToggle: () => void
   onMetroVolumeChange: (v: number) => void
   onMetroPanChange: (v: number) => void
@@ -52,6 +54,7 @@ function MasterPanel({
   onBpmDecrement,
   onBpmChange,
   onBpmIncrement,
+  onCorrectTempoOctave,
   onMetronomeToggle,
   onMetroVolumeChange,
   onMetroPanChange,
@@ -235,6 +238,28 @@ function MasterPanel({
             className="w-6 h-6 rounded bg-neutral-800 text-neutral-400 hover:text-white text-xs flex items-center justify-center"
           >
             +
+          </button>
+        </div>
+        <div className="flex items-center justify-center gap-1.5">
+          <span
+            className="text-[10px] text-neutral-500"
+            title="Detected tempo sounds wrong (off by exactly half or double)? Correct it while keeping the metronome locked to the real beat grid."
+          >
+            Tempo wrong?
+          </span>
+          <button
+            onClick={() => onCorrectTempoOctave('halve')}
+            title="Halve tempo (detector doubled the real tempo)"
+            className="px-2 py-0.5 rounded text-[10px] font-medium bg-neutral-800 text-neutral-400 hover:text-white transition-colors"
+          >
+            ½
+          </button>
+          <button
+            onClick={() => onCorrectTempoOctave('double')}
+            title="Double tempo (detector halved the real tempo)"
+            className="px-2 py-0.5 rounded text-[10px] font-medium bg-neutral-800 text-neutral-400 hover:text-white transition-colors"
+          >
+            ×2
           </button>
         </div>
         <div className="flex items-center justify-between px-1">
