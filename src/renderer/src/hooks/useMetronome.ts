@@ -43,6 +43,13 @@ export function useMetronome(
   lastScheduledBeatRef: React.MutableRefObject<number>
   bpmRef: React.MutableRefObject<number>
   playClick: (accent: boolean, scheduledTime: number) => void
+  // Creates the metronome's own AudioContext if it doesn't exist yet (and
+  // resumes it if suspended) — playClick silently no-ops without this
+  // having been called at least once. Exposed so callers that need to
+  // schedule clicks before playback (recording pre-roll, playback
+  // count-in) can guarantee a context exists first; the in-song scheduler
+  // (below) already calls it itself once metronomeOn && masterPlaying.
+  ensureAudioCtx: () => AudioContext | null
 } {
   const [metronomeOn, setMetronomeOn] = useState(false)
   const [bpm, setBpm] = useState(120)
@@ -82,7 +89,7 @@ export function useMetronome(
     if (panNodeRef.current) panNodeRef.current.pan.value = metroPan
   })
 
-  const getAudioCtx = useCallback((): AudioContext | null => {
+  const ensureAudioCtx = useCallback((): AudioContext | null => {
     if (!audioCtxRef.current) {
       try {
         audioCtxRef.current = new AudioContext()
@@ -200,13 +207,13 @@ export function useMetronome(
 
   useEffect(() => {
     if (metronomeOn && masterPlaying) {
-      getAudioCtx()
+      ensureAudioCtx()
       lastScheduledBeatRef.current = -1
       const id = window.setInterval(schedulerTick, 25)
       return () => clearInterval(id)
     }
     return
-  }, [metronomeOn, masterPlaying, getAudioCtx, schedulerTick])
+  }, [metronomeOn, masterPlaying, ensureAudioCtx, schedulerTick])
 
   return {
     bpm,
@@ -221,6 +228,7 @@ export function useMetronome(
     setMetroPan,
     lastScheduledBeatRef,
     bpmRef,
-    playClick
+    playClick,
+    ensureAudioCtx
   }
 }

@@ -14,12 +14,14 @@ describe('useCountIn', () => {
 
   function setup(): {
     playClick: ReturnType<typeof vi.fn>
+    ensureAudioCtx: ReturnType<typeof vi.fn>
     result: ReturnType<typeof renderHook<ReturnType<typeof useCountIn>, unknown>>['result']
   } {
-    const audioCtxRef = { current: { currentTime: 0 } as unknown as AudioContext }
+    const ctx = { currentTime: 0 } as unknown as AudioContext
+    const ensureAudioCtx = vi.fn(() => ctx)
     const playClick = vi.fn()
-    const { result } = renderHook(() => useCountIn(audioCtxRef, playClick))
-    return { playClick, result }
+    const { result } = renderHook(() => useCountIn(ensureAudioCtx, playClick))
+    return { playClick, ensureAudioCtx, result }
   }
 
   it('schedules bars * 4 clicks, accenting every 4th (downbeat)', () => {
@@ -52,6 +54,44 @@ describe('useCountIn', () => {
     expect(onTick).not.toHaveBeenCalled()
     vi.advanceTimersByTime(5000)
     expect(onComplete).not.toHaveBeenCalled()
+  })
+
+  // Regression test for fix-count-in-silent-click: start() must call
+  // ensureAudioCtx() itself (not just check an already-populated ref) so
+  // the count-in produces sound even the very first time it's used, before
+  // anything else has created the AudioContext.
+  it('calls ensureAudioCtx() to obtain the context, and does nothing if it returns null', () => {
+    const ensureAudioCtx = vi.fn(() => null)
+    const playClick = vi.fn()
+    const { result } = renderHook(() => useCountIn(ensureAudioCtx, playClick))
+    const onTick = vi.fn()
+    const onComplete = vi.fn()
+
+    act(() => {
+      result.current.start(1, 120, onTick, onComplete)
+    })
+
+    expect(ensureAudioCtx).toHaveBeenCalled()
+    expect(playClick).not.toHaveBeenCalled()
+    expect(onTick).not.toHaveBeenCalled()
+    vi.advanceTimersByTime(5000)
+    expect(onComplete).not.toHaveBeenCalled()
+  })
+
+  it('uses ensureAudioCtx() rather than requiring the context to already exist', () => {
+    const { playClick, ensureAudioCtx, result } = setup()
+
+    act(() => {
+      result.current.start(
+        1,
+        120,
+        () => {},
+        () => {}
+      )
+    })
+
+    expect(ensureAudioCtx).toHaveBeenCalled()
+    expect(playClick).toHaveBeenCalledTimes(4)
   })
 
   it('ticks the countdown from totalBeats down to 1, then calls onComplete once', () => {

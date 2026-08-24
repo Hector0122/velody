@@ -26,8 +26,18 @@ interface UseCountInReturn {
 // opinion on what "counting" state a caller shows in its UI — onTick/
 // onComplete let each caller drive its own state (useRecording's
 // recording/recordingCount, or a separate playback-count-in state).
+//
+// Takes `ensureAudioCtx` (useMetronome's own, e.g. its `ensureAudioCtx`)
+// rather than a raw AudioContext ref — playClick internally reads
+// useMetronome's *own* private AudioContext (created lazily only once the
+// in-song scheduler runs), which is a different AudioContext than the
+// stem-playback engine's. Passing a ref to some other context here (as an
+// earlier version of this code did, reusing useAudioContextEngine's ref)
+// checks/creates the wrong context: playClick's own ctx stays null and it
+// silently no-ops, producing no click sound at all — see
+// fix-count-in-silent-click.
 export default function useCountIn(
-  audioCtxRef: React.MutableRefObject<AudioContext | null>,
+  ensureAudioCtx: () => AudioContext | null,
   playClick: (accent: boolean, scheduledTime: number) => void
 ): UseCountInReturn {
   const timeoutIdsRef = useRef<ReturnType<typeof setTimeout>[]>([])
@@ -44,8 +54,9 @@ export default function useCountIn(
       onTick: (remaining: number) => void,
       onComplete: () => void
     ): void => {
-      const ctx = audioCtxRef.current
-      if (!ctx || bars <= 0) return
+      if (bars <= 0) return
+      const ctx = ensureAudioCtx()
+      if (!ctx) return
       cancel()
 
       const totalBeats = bars * 4
@@ -67,7 +78,7 @@ export default function useCountIn(
       ids.push(setTimeout(onComplete, totalMs))
       timeoutIdsRef.current = ids
     },
-    [audioCtxRef, playClick, cancel]
+    [ensureAudioCtx, playClick, cancel]
   )
 
   useEffect(() => cancel, [cancel])

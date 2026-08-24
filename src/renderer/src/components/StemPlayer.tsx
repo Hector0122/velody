@@ -109,7 +109,8 @@ function StemPlayer({
     setClickPreset,
     metroPan,
     setMetroPan,
-    playClick
+    playClick,
+    ensureAudioCtx: ensureMetronomeAudioCtx
   } = useMetronome(
     masterPlaying,
     masterPlayingRef,
@@ -232,7 +233,6 @@ function StemPlayer({
     handleStemVolume,
     handleStemPanning,
     seek,
-    audioCtxRef,
     getDecodedBuffer,
     masterPan,
     setMasterPan
@@ -287,7 +287,10 @@ function StemPlayer({
   // cancels or interferes with the other. See openspec/changes/
   // add-song-count-in.
   const { playbackCountInBars, setPlaybackCountInBars } = useSongCountIn(stems)
-  const playbackCountIn = useCountIn(audioCtxRef, playClick)
+  // Must use the metronome's own ensureAudioCtx, not the stem-playback
+  // engine's audioCtxRef — playClick only ever plays through the
+  // metronome's own (separate) AudioContext. See useCountIn.ts.
+  const playbackCountIn = useCountIn(ensureMetronomeAudioCtx, playClick)
   const [playbackCounting, setPlaybackCounting] = useState(false)
   const [playbackCountRemaining, setPlaybackCountRemaining] = useState(0)
 
@@ -298,21 +301,6 @@ function StemPlayer({
       return
     }
     if (!masterPlaying && playbackCountInBars > 0) {
-      // toggleMasterPlay normally creates the AudioContext lazily on first
-      // play; the count-in needs it to already exist to schedule clicks,
-      // so ensure it here first (mirrors useRecording's own fallback
-      // creation for the same reason).
-      if (!audioCtxRef.current) {
-        try {
-          audioCtxRef.current = new AudioContext()
-        } catch {
-          console.error('[StemPlayer] Failed to create AudioContext for count-in')
-          toggleMasterPlay()
-          return
-        }
-      }
-      if (audioCtxRef.current.state === 'suspended') audioCtxRef.current.resume()
-
       setPlaybackCounting(true)
       playbackCountIn.start(
         playbackCountInBars,
@@ -326,15 +314,7 @@ function StemPlayer({
       return
     }
     toggleMasterPlay()
-  }, [
-    playbackCounting,
-    masterPlaying,
-    playbackCountInBars,
-    bpm,
-    audioCtxRef,
-    playbackCountIn,
-    toggleMasterPlay
-  ])
+  }, [playbackCounting, masterPlaying, playbackCountInBars, bpm, playbackCountIn, toggleMasterPlay])
 
   const onAudioTime = useCallback(
     (time: number): void => {
@@ -371,7 +351,7 @@ function StemPlayer({
     handleDiscardRecording,
     handleSaveRecording
   } = useRecording({
-    audioCtxRef,
+    ensureAudioCtx: ensureMetronomeAudioCtx,
     seek,
     stemWaves,
     waveUrlsRef,
