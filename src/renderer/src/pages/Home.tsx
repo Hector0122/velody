@@ -266,7 +266,7 @@ function Home(): React.JSX.Element {
   )
 
   return (
-    <div className="min-h-screen bg-neutral-950 flex">
+    <div className="h-screen bg-neutral-950 flex overflow-hidden">
       {/* Sidebar */}
       <aside className="w-52 shrink-0 border-r border-neutral-800 flex flex-col">
         <div className="p-4 border-b border-neutral-800">
@@ -394,7 +394,7 @@ function Home(): React.JSX.Element {
       </aside>
 
       {/* Main */}
-      <main className="flex-1 flex flex-col p-8 min-w-0">
+      <main className="flex-1 flex flex-col p-8 min-w-0 overflow-y-auto">
         {error && (
           <div className="mb-6 p-4 bg-red-900/30 border border-red-600 rounded-xl text-red-400 text-sm">
             {error}
