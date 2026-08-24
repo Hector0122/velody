@@ -1,5 +1,6 @@
 import { memo } from 'react'
 import { formatTime, BPM_MIN, BPM_MAX } from '../utils'
+import { CLICK_PRESET_LABELS, type ClickPreset } from '../hooks/clickPresets'
 
 interface MasterPanelProps {
   masterPlaying: boolean
@@ -8,6 +9,7 @@ interface MasterPanelProps {
   bpm: number
   metronomeOn: boolean
   metroVolume: number
+  clickPreset: ClickPreset
   monitorVolume: number
   recordingFormat: 'wav' | 'mp3'
   countInBars: number
@@ -21,6 +23,7 @@ interface MasterPanelProps {
   onBpmIncrement: () => void
   onMetronomeToggle: () => void
   onMetroVolumeChange: (v: number) => void
+  onClickPresetChange: (preset: ClickPreset) => void
   onMonitorVolumeChange: (v: number) => void
   onRecordingFormatChange: (fmt: 'wav' | 'mp3') => void
   onCountInBarsChange: (bars: number) => void
@@ -34,6 +37,7 @@ function MasterPanel({
   bpm,
   metronomeOn,
   metroVolume,
+  clickPreset,
   monitorVolume,
   recordingFormat,
   countInBars,
@@ -47,6 +51,7 @@ function MasterPanel({
   onBpmIncrement,
   onMetronomeToggle,
   onMetroVolumeChange,
+  onClickPresetChange,
   onMonitorVolumeChange,
   onRecordingFormatChange,
   onCountInBarsChange,
@@ -211,6 +216,24 @@ function MasterPanel({
               className="accent-orange-500 cursor-pointer h-[60px] w-5 [writing-mode:vertical-lr] [direction:rtl]"
             />
             <span className="text-xs text-neutral-500">{Math.round(metroVolume * 100)}%</span>
+          </div>
+        </div>
+        <div className="flex flex-col items-center gap-1.5 w-full">
+          <span className="text-[10px] text-neutral-500">Click sound</span>
+          <div className="grid grid-cols-2 gap-1 w-full">
+            {(Object.keys(CLICK_PRESET_LABELS) as ClickPreset[]).map((preset) => (
+              <button
+                key={preset}
+                onClick={() => onClickPresetChange(preset)}
+                className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors ${
+                  clickPreset === preset
+                    ? 'bg-orange-600 text-white'
+                    : 'bg-neutral-800 text-neutral-400 hover:text-white'
+                }`}
+              >
+                {CLICK_PRESET_LABELS[preset]}
+              </button>
+            ))}
           </div>
         </div>
         <div className="flex items-center justify-center gap-1.5">

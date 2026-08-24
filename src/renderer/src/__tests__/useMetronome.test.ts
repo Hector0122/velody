@@ -66,10 +66,20 @@ describe('useMetronome - beat-grid scheduling', () => {
     vi.useFakeTimers()
     oscillators = []
     stubAudioContext(oscillators)
+    // These tests exercise the scheduler (beat-grid timing, accent
+    // alternation, constant-tempo fallback), not click synthesis — force
+    // the 'beep' preset, which is byte-for-byte the pre-add-metronome-
+    // click-sounds implementation (osc.frequency.value=, single
+    // oscillator/gain, no noise burst), so the existing assertions below
+    // stay meaningful without needing to also stub createBufferSource/
+    // createBiquadFilter for presets these tests aren't about. Click
+    // synthesis itself is covered by clickPresets.test.ts.
+    window.localStorage.setItem('velody:clickPreset', JSON.stringify('beep'))
   })
 
   afterEach(() => {
     vi.useRealTimers()
+    window.localStorage.clear()
   })
 
   it('schedules clicks at the exact detected beat times, including across a seek', () => {

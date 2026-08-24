@@ -1,5 +1,6 @@
 import { useState, useCallback } from 'react'
 import { stemNameFromPath, extForFormat, formatFilter } from '../utils'
+import type { ClickPreset } from './clickPresets'
 
 interface UseExportStateParams {
   allStems: string[]
@@ -11,6 +12,10 @@ interface UseExportStateParams {
   // file matches the trimmed range the user hears live.
   trimStart: number
   trimEnd: number | null
+  // Currently selected metronome click preset (see openspec/changes/
+  // add-metronome-click-sounds) — applied to the exported click track by
+  // default, so it matches what the user hears live.
+  clickPreset: ClickPreset
 }
 
 interface UseExportStateReturn {
@@ -33,7 +38,8 @@ export function useExportState({
   bpm,
   stemMeta,
   trimStart,
-  trimEnd
+  trimEnd,
+  clickPreset
 }: UseExportStateParams): UseExportStateReturn {
   const [showExportModal, setShowExportModal] = useState(false)
   const [exportSelection, setExportSelection] = useState<Record<string, boolean>>({})
@@ -81,8 +87,16 @@ export function useExportState({
     )
     if (!outPath) return
     setExporting(true)
-    const options: { bpm?: number; trimStart?: number; trimEnd?: number } = {}
-    if (exportWithMetronome) options.bpm = bpm
+    const options: {
+      bpm?: number
+      trimStart?: number
+      trimEnd?: number
+      clickPreset?: ClickPreset
+    } = {}
+    if (exportWithMetronome) {
+      options.bpm = bpm
+      options.clickPreset = clickPreset
+    }
     if (trimStart > 0) options.trimStart = trimStart
     if (trimEnd !== null) options.trimEnd = trimEnd
     await window.api.exportMix(
@@ -99,7 +113,8 @@ export function useExportState({
     exportWithMetronome,
     bpm,
     trimStart,
-    trimEnd
+    trimEnd,
+    clickPreset
   ])
 
   const toggleExportSelection = useCallback((key: string): void => {

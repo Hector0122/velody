@@ -83,7 +83,12 @@ export interface VelodyAPI {
   exportMix: (
     filePaths: string[],
     outputPath: string,
-    options?: { bpm?: number; trimStart?: number; trimEnd?: number }
+    options?: {
+      bpm?: number
+      trimStart?: number
+      trimEnd?: number
+      clickPreset?: 'pingpong' | 'woodblock' | 'rimclick' | 'beep'
+    }
   ) => Promise<ExportResult>
   exportSingle: (
     filePath: string,

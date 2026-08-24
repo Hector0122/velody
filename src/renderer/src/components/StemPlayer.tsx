@@ -87,15 +87,24 @@ function StemPlayer({ stems, songName, onToast }: StemPlayerProps): React.JSX.El
   const audioStartRef = useRef<number | null>(null)
   const mediaStreamRef = useRef<MediaStream | null>(null)
 
-  const { bpm, setBpm, metronomeOn, setMetronomeOn, metroVolume, setMetroVolume, playClick } =
-    useMetronome(
-      masterPlaying,
-      masterPlayingRef,
-      positionRef,
-      firstBeatOffsetRef,
-      originalBpmRef,
-      beatTimesRef
-    )
+  const {
+    bpm,
+    setBpm,
+    metronomeOn,
+    setMetronomeOn,
+    metroVolume,
+    setMetroVolume,
+    clickPreset,
+    setClickPreset,
+    playClick
+  } = useMetronome(
+    masterPlaying,
+    masterPlayingRef,
+    positionRef,
+    firstBeatOffsetRef,
+    originalBpmRef,
+    beatTimesRef
+  )
 
   useSongAnalysis(urls, stems, setBpm, firstBeatOffsetRef, originalBpmRef, beatTimesRef)
 
@@ -140,7 +149,15 @@ function StemPlayer({ stems, songName, onToast }: StemPlayerProps): React.JSX.El
     handleExportSingle,
     handleExportMix,
     toggleExportSelection
-  } = useExportState({ allStems, songName, bpm, stemMeta: STEM_META, trimStart, trimEnd })
+  } = useExportState({
+    allStems,
+    songName,
+    bpm,
+    stemMeta: STEM_META,
+    trimStart,
+    trimEnd,
+    clickPreset
+  })
 
   const stemItems = useMemo(() => {
     let recIdx = 0
@@ -514,6 +531,7 @@ function StemPlayer({ stems, songName, onToast }: StemPlayerProps): React.JSX.El
           bpm={bpm}
           metronomeOn={metronomeOn}
           metroVolume={metroVolume}
+          clickPreset={clickPreset}
           monitorVolume={monitorVolume}
           recordingFormat={recordingFormat}
           countInBars={countInBars}
@@ -527,6 +545,7 @@ function StemPlayer({ stems, songName, onToast }: StemPlayerProps): React.JSX.El
           onBpmIncrement={handleBpmIncrement}
           onMetronomeToggle={handleMetronomeToggle}
           onMetroVolumeChange={handleMetroVolumeChange}
+          onClickPresetChange={setClickPreset}
           onMonitorVolumeChange={handleMonitorVolumeChange}
           onRecordingFormatChange={handleRecordingFormatChange}
           onCountInBarsChange={handleCountInBarsChange}

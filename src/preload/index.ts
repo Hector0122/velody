@@ -111,7 +111,12 @@ const api = {
   exportMix: (
     filePaths: string[],
     outputPath: string,
-    options?: { bpm?: number; trimStart?: number; trimEnd?: number }
+    options?: {
+      bpm?: number
+      trimStart?: number
+      trimEnd?: number
+      clickPreset?: 'pingpong' | 'woodblock' | 'rimclick' | 'beep'
+    }
   ) => ipcRenderer.invoke('export:mix', filePaths, outputPath, options),
   exportSingle: (
     filePath: string,

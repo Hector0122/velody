@@ -1,4 +1,6 @@
 import { useState, useRef, useEffect, useCallback, useLayoutEffect } from 'react'
+import useClickPreset from './useClickPreset'
+import { type ClickPreset, CLICK_PRESETS } from './clickPresets'
 
 const LOOKAHEAD = 0.3
 
@@ -31,6 +33,8 @@ export function useMetronome(
   setMetronomeOn: (v: boolean | ((prev: boolean) => boolean)) => void
   metroVolume: number
   setMetroVolume: (v: number) => void
+  clickPreset: ClickPreset
+  setClickPreset: (v: ClickPreset) => void
   lastScheduledBeatRef: React.MutableRefObject<number>
   bpmRef: React.MutableRefObject<number>
   playClick: (accent: boolean, scheduledTime: number) => void
@@ -38,10 +42,12 @@ export function useMetronome(
   const [metronomeOn, setMetronomeOn] = useState(false)
   const [bpm, setBpm] = useState(120)
   const [metroVolume, setMetroVolume] = useState(0.5)
+  const [clickPreset, setClickPreset] = useClickPreset()
 
   const metronomeOnRef = useRef(metronomeOn)
   const bpmRef = useRef(bpm)
   const metroVolumeRef = useRef(metroVolume)
+  const clickPresetRef = useRef(clickPreset)
   // Dual-purpose dedup counter: "last scheduled beat number" in constant-tempo
   // mode, "last scheduled beat-grid index" in grid mode. The two modes are
   // mutually exclusive per tick, and every transition between them (song
@@ -56,6 +62,7 @@ export function useMetronome(
     metronomeOnRef.current = metronomeOn
     bpmRef.current = bpm
     metroVolumeRef.current = metroVolume
+    clickPresetRef.current = clickPreset
   })
 
   const getAudioCtx = useCallback((): AudioContext | null => {
@@ -73,17 +80,7 @@ export function useMetronome(
   const playClick = useCallback((accent: boolean, scheduledTime: number): void => {
     const ctx = audioCtxRef.current
     if (!ctx) return
-    const vol = metroVolumeRef.current
-    const osc = ctx.createOscillator()
-    const gain = ctx.createGain()
-    osc.type = 'triangle'
-    osc.frequency.value = accent ? 1600 : 900
-    gain.gain.setValueAtTime(vol * (accent ? 0.5 : 0.35), scheduledTime)
-    gain.gain.exponentialRampToValueAtTime(0.001, scheduledTime + 0.06)
-    osc.connect(gain)
-    gain.connect(ctx.destination)
-    osc.start(scheduledTime)
-    osc.stop(scheduledTime + 0.06)
+    CLICK_PRESETS[clickPresetRef.current](ctx, accent, scheduledTime, metroVolumeRef.current)
   }, [])
 
   // Constant-tempo extrapolation from `offset`/beat 0 — today's algorithm,
@@ -190,6 +187,8 @@ export function useMetronome(
     setMetronomeOn,
     metroVolume,
     setMetroVolume,
+    clickPreset,
+    setClickPreset,
     lastScheduledBeatRef,
     bpmRef,
     playClick
