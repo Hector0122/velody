@@ -33,6 +33,9 @@ function stubAudioContext(oscillators: TrackedOsc[]): void {
         gain: { setValueAtTime: vi.fn(), exponentialRampToValueAtTime: vi.fn() }
       }
     }
+    createStereoPanner(): unknown {
+      return { connect: vi.fn(), pan: { value: 0 } }
+    }
     resume(): void {
       /* no-op */
     }
@@ -150,5 +153,95 @@ describe('useMetronome - beat-grid scheduling', () => {
     // was bypassed rather than used.
     expect(oscillators).toHaveLength(1)
     expect(oscillators[0].start).toHaveBeenCalledWith(expect.closeTo(0.242857, 4))
+  })
+})
+
+describe('useMetronome - metronome pan', () => {
+  let panNodes: { pan: { value: number }; connect: ReturnType<typeof vi.fn> }[]
+
+  beforeEach(() => {
+    panNodes = []
+    window.localStorage.clear()
+    // These tests exercise pan routing, not click synthesis — force 'beep'
+    // (simple oscillator, no frequency sweep) since this stub's
+    // createOscillator only supports the plain `frequency.value =` API.
+    window.localStorage.setItem('velody:clickPreset', JSON.stringify('beep'))
+    class FakeAudioContext {
+      state = 'running'
+      currentTime = 0
+      destination = {}
+      createOscillator(): TrackedOsc {
+        return {
+          type: '',
+          frequency: { value: 0 },
+          connect: vi.fn(),
+          start: vi.fn(),
+          stop: vi.fn()
+        }
+      }
+      createGain(): unknown {
+        return {
+          connect: vi.fn(),
+          gain: { setValueAtTime: vi.fn(), exponentialRampToValueAtTime: vi.fn() }
+        }
+      }
+      createStereoPanner(): unknown {
+        const node = { pan: { value: 0 }, connect: vi.fn() }
+        panNodes.push(node)
+        return node
+      }
+      resume(): void {
+        /* no-op */
+      }
+    }
+    vi.stubGlobal('AudioContext', FakeAudioContext)
+  })
+
+  afterEach(() => {
+    window.localStorage.clear()
+  })
+
+  it('defaults metroPan to 0 and creates the pan node at that value on first use', () => {
+    const positionRef = { current: 0 }
+    const beatTimesRef = { current: [] as number[] }
+    const originalBpmRef = { current: 120 }
+    const { result } = renderMetronome(positionRef, beatTimesRef, originalBpmRef)
+
+    expect(result.current.metroPan).toBe(0)
+
+    // playClick only reads the already-created AudioContext/pan node; the
+    // scheduler (driven by metronomeOn + masterPlaying) is what actually
+    // creates them via getAudioCtx.
+    act(() => {
+      result.current.setMetronomeOn(true)
+    })
+    act(() => {
+      result.current.playClick(true, 0)
+    })
+    expect(panNodes).toHaveLength(1)
+    expect(panNodes[0].pan.value).toBe(0)
+    expect(panNodes[0].connect).toHaveBeenCalled()
+  })
+
+  it('setMetroPan updates the persistent pan node value and persists to localStorage', () => {
+    const positionRef = { current: 0 }
+    const beatTimesRef = { current: [] as number[] }
+    const originalBpmRef = { current: 120 }
+    const { result } = renderMetronome(positionRef, beatTimesRef, originalBpmRef)
+
+    act(() => {
+      result.current.setMetronomeOn(true)
+    })
+    act(() => {
+      result.current.playClick(true, 0) // forces the AudioContext/pan node to exist
+    })
+
+    act(() => {
+      result.current.setMetroPan(-1)
+    })
+
+    expect(result.current.metroPan).toBe(-1)
+    expect(panNodes[0].pan.value).toBe(-1)
+    expect(window.localStorage.getItem('velody:metroPan')).toBe('-1')
   })
 })

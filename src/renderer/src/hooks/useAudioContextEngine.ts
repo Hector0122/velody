@@ -1,6 +1,9 @@
 import { useEffect, useLayoutEffect, useCallback, useRef } from 'react'
 import type WaveSurfer from 'wavesurfer.js'
 import { stemNameFromPath } from '../utils'
+import useLocalStoragePreference from './useLocalStoragePreference'
+
+const isFiniteNumber = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v)
 
 export type TickAction =
   | { type: 'loop'; to: number }
@@ -96,6 +99,8 @@ export function useAudioContextEngine(params: UseAudioContextEngineParams): {
   seek: (time: number) => void
   audioCtxRef: React.MutableRefObject<AudioContext | null>
   getDecodedBuffer: (key: string) => AudioBuffer | undefined
+  masterPan: number
+  setMasterPan: (v: number) => void
 } {
   const {
     allStems,
@@ -134,11 +139,19 @@ export function useAudioContextEngine(params: UseAudioContextEngineParams): {
     notifyStemDecodedRef
   } = params
 
+  // Global (not per-song) preference, like the metronome's own metroPan —
+  // see openspec/changes/add-metronome-and-mix-panning: lets the whole mix
+  // be panned independent of the metronome click (and independent of
+  // per-stem panning, which is applied *before* this stage — see ensureCtx).
+  const [masterPan, setMasterPan] = useLocalStoragePreference('velody:masterPan', 0, isFiniteNumber)
+  const masterPanRef = useRef(masterPan)
+
   const audioCtxRef = useRef<AudioContext | null>(null)
   const buffersRef = useRef<Record<string, AudioBuffer>>({})
   const gainNodesRef = useRef<Record<string, GainNode>>({})
   const panNodesRef = useRef<Record<string, StereoPannerNode>>({})
   const masterGainRef = useRef<GainNode | null>(null)
+  const masterPanNodeRef = useRef<StereoPannerNode | null>(null)
   const sourcesRef = useRef<Record<string, AudioBufferSourceNode>>({})
   const isPlayingRef = useRef(false)
   const startRef = useRef(0)
@@ -163,13 +176,22 @@ export function useAudioContextEngine(params: UseAudioContextEngineParams): {
     trimRef.current = { start: trimStart, end: trimEnd }
     masterPlayingRef.current = masterPlaying
     durationRef.current = masterWaveDuration || duration
+    masterPanRef.current = masterPan
+    if (masterPanNodeRef.current) masterPanNodeRef.current.pan.value = masterPan
   })
 
   const ensureCtx = useCallback((): AudioContext => {
     if (!audioCtxRef.current) {
       audioCtxRef.current = new AudioContext()
       masterGainRef.current = audioCtxRef.current.createGain()
-      masterGainRef.current.connect(audioCtxRef.current.destination)
+      masterPanNodeRef.current = audioCtxRef.current.createStereoPanner()
+      masterPanNodeRef.current.pan.value = masterPanRef.current
+      // masterGain -> masterPan -> destination: per-stem gain/pan (ensureNodes
+      // below) already feeds into masterGain, so this is an additional stage
+      // after them, not a replacement — per-stem panning still positions each
+      // stem relative to wherever masterPan places the overall mix.
+      masterGainRef.current.connect(masterPanNodeRef.current)
+      masterPanNodeRef.current.connect(audioCtxRef.current.destination)
     }
     if (audioCtxRef.current.state === 'suspended') audioCtxRef.current.resume()
     return audioCtxRef.current
@@ -626,6 +648,8 @@ export function useAudioContextEngine(params: UseAudioContextEngineParams): {
     handleStemPanning,
     seek,
     audioCtxRef,
-    getDecodedBuffer
+    getDecodedBuffer,
+    masterPan,
+    setMasterPan
   }
 }

@@ -1,8 +1,11 @@
 import { useState, useRef, useEffect, useCallback, useLayoutEffect } from 'react'
 import useClickPreset from './useClickPreset'
+import useLocalStoragePreference from './useLocalStoragePreference'
 import { type ClickPreset, CLICK_PRESETS } from './clickPresets'
 
 const LOOKAHEAD = 0.3
+
+const isFiniteNumber = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v)
 
 // First index in `sortedTimes` whose value is >= target (binary search).
 // `beatTimes` is sorted ascending and typically a few hundred entries for a
@@ -35,6 +38,8 @@ export function useMetronome(
   setMetroVolume: (v: number) => void
   clickPreset: ClickPreset
   setClickPreset: (v: ClickPreset) => void
+  metroPan: number
+  setMetroPan: (v: number) => void
   lastScheduledBeatRef: React.MutableRefObject<number>
   bpmRef: React.MutableRefObject<number>
   playClick: (accent: boolean, scheduledTime: number) => void
@@ -43,6 +48,11 @@ export function useMetronome(
   const [bpm, setBpm] = useState(120)
   const [metroVolume, setMetroVolume] = useState(0.5)
   const [clickPreset, setClickPreset] = useClickPreset()
+  // Global (not per-song) preference, like clickPreset — see
+  // openspec/changes/add-metronome-and-mix-panning: lets the click be
+  // panned hard to one channel (e.g. to a drummer's monitor via a
+  // stereo-splitter cable) independent of the overall mix's pan.
+  const [metroPan, setMetroPan] = useLocalStoragePreference('velody:metroPan', 0, isFiniteNumber)
 
   const metronomeOnRef = useRef(metronomeOn)
   const bpmRef = useRef(bpm)
@@ -57,30 +67,48 @@ export function useMetronome(
   // metronome" change.
   const lastScheduledBeatRef = useRef(-1)
   const audioCtxRef = useRef<AudioContext | null>(null)
+  // Persistent — created once alongside audioCtxRef, not per click like the
+  // short-lived oscillator/gain/noise nodes each preset creates. Every
+  // click connects through it instead of straight to ctx.destination, so
+  // metroPan applies uniformly without needing to thread it into each
+  // preset's own node graph.
+  const panNodeRef = useRef<StereoPannerNode | null>(null)
 
   useLayoutEffect(() => {
     metronomeOnRef.current = metronomeOn
     bpmRef.current = bpm
     metroVolumeRef.current = metroVolume
     clickPresetRef.current = clickPreset
+    if (panNodeRef.current) panNodeRef.current.pan.value = metroPan
   })
 
   const getAudioCtx = useCallback((): AudioContext | null => {
     if (!audioCtxRef.current) {
       try {
         audioCtxRef.current = new AudioContext()
+        panNodeRef.current = audioCtxRef.current.createStereoPanner()
+        panNodeRef.current.pan.value = metroPan
+        panNodeRef.current.connect(audioCtxRef.current.destination)
       } catch {
         return null
       }
     }
     if (audioCtxRef.current.state === 'suspended') audioCtxRef.current.resume()
     return audioCtxRef.current
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const playClick = useCallback((accent: boolean, scheduledTime: number): void => {
     const ctx = audioCtxRef.current
     if (!ctx) return
-    CLICK_PRESETS[clickPresetRef.current](ctx, accent, scheduledTime, metroVolumeRef.current)
+    const destination = panNodeRef.current ?? ctx.destination
+    CLICK_PRESETS[clickPresetRef.current](
+      ctx,
+      accent,
+      scheduledTime,
+      metroVolumeRef.current,
+      destination
+    )
   }, [])
 
   // Constant-tempo extrapolation from `offset`/beat 0 — today's algorithm,
@@ -189,6 +217,8 @@ export function useMetronome(
     setMetroVolume,
     clickPreset,
     setClickPreset,
+    metroPan,
+    setMetroPan,
     lastScheduledBeatRef,
     bpmRef,
     playClick

@@ -397,6 +397,70 @@ describe('useAudioContextEngine - handleRestart respects trimStart', () => {
   })
 })
 
+describe('useAudioContextEngine - master mix pan', () => {
+  beforeEach(() => {
+    window.localStorage.clear()
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ arrayBuffer: async () => new ArrayBuffer(16) }))
+    )
+  })
+
+  afterEach(() => {
+    window.localStorage.clear()
+  })
+
+  it('defaults masterPan to 0', () => {
+    vi.stubGlobal('AudioContext', FakeAudioContext)
+    const { result } = renderHook(() => useAudioContextEngine(buildParams()))
+    expect(result.current.masterPan).toBe(0)
+  })
+
+  it('creates the master pan node between masterGain and destination, and updates its value on setMasterPan', () => {
+    // ensureCtx creates the master pan node first (before any per-stem
+    // ensureNodes calls), so the first StereoPannerNode created after
+    // starting playback is reliably the master one.
+    const panNodes: { pan: { value: number }; connect: ReturnType<typeof vi.fn> }[] = []
+    const gainNodes: { connect: ReturnType<typeof vi.fn> }[] = []
+    class TrackingAudioContext extends FakeAudioContext {
+      createStereoPanner(): { pan: { value: number }; connect: ReturnType<typeof vi.fn> } {
+        const node = { pan: { value: 0 }, connect: vi.fn() }
+        panNodes.push(node)
+        return node
+      }
+      createGain(): { connect: ReturnType<typeof vi.fn>; gain: unknown } {
+        const node = {
+          connect: vi.fn(),
+          gain: { setValueAtTime: vi.fn(), setTargetAtTime: vi.fn() }
+        }
+        gainNodes.push(node)
+        return node
+      }
+    }
+    vi.stubGlobal('AudioContext', TrackingAudioContext)
+
+    const { result } = renderHook(() => useAudioContextEngine(buildParams()))
+
+    act(() => {
+      result.current.toggleMasterPlay()
+    })
+
+    expect(panNodes.length).toBeGreaterThan(0)
+    const masterPanNode = panNodes[0]
+    const masterGainNode = gainNodes[0]
+    expect(masterGainNode.connect).toHaveBeenCalledWith(masterPanNode)
+    expect(masterPanNode.connect).toHaveBeenCalledWith(expect.anything())
+
+    act(() => {
+      result.current.setMasterPan(0.5)
+    })
+
+    expect(result.current.masterPan).toBe(0.5)
+    expect(masterPanNode.pan.value).toBe(0.5)
+    expect(window.localStorage.getItem('velody:masterPan')).toBe('0.5')
+  })
+})
+
 describe('useAudioContextEngine - stem url resolution', () => {
   afterEach(() => {
     delete (window as { api?: VelodyAPI }).api

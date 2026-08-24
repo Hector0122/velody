@@ -17,7 +17,17 @@ export function isClickPreset(value: unknown): value is ClickPreset {
   return value === 'pingpong' || value === 'woodblock' || value === 'rimclick' || value === 'beep'
 }
 
-type ClickFn = (ctx: AudioContext, accent: boolean, scheduledTime: number, volume: number) => void
+// `destination` (rather than always `ctx.destination`) lets the caller
+// route every click through its own persistent nodes — e.g. the metronome
+// pan node from add-metronome-and-mix-panning — instead of hardcoding the
+// AudioContext's raw output.
+type ClickFn = (
+  ctx: AudioContext,
+  accent: boolean,
+  scheduledTime: number,
+  volume: number,
+  destination: AudioNode
+) => void
 
 // A short burst of white noise is what gives pingpong/rimclick their
 // percussive "impact" transient — a pure oscillator can't produce that on
@@ -43,7 +53,8 @@ function playNoiseBurst(
   scheduledTime: number,
   durationSec: number,
   filterFreq: number,
-  gainValue: number
+  gainValue: number,
+  destination: AudioNode
 ): void {
   const source = ctx.createBufferSource()
   source.buffer = getNoiseBuffer(ctx)
@@ -55,7 +66,7 @@ function playNoiseBurst(
   gain.gain.exponentialRampToValueAtTime(0.001, scheduledTime + durationSec)
   source.connect(filter)
   filter.connect(gain)
-  gain.connect(ctx.destination)
+  gain.connect(destination)
   source.start(scheduledTime)
   source.stop(scheduledTime + durationSec)
 }
@@ -68,7 +79,8 @@ function playToneSweep(
   sweepDurationSec: number,
   decaySec: number,
   scheduledTime: number,
-  gainValue: number
+  gainValue: number,
+  destination: AudioNode
 ): void {
   const osc = ctx.createOscillator()
   const gain = ctx.createGain()
@@ -78,14 +90,20 @@ function playToneSweep(
   gain.gain.setValueAtTime(gainValue, scheduledTime)
   gain.gain.exponentialRampToValueAtTime(0.001, scheduledTime + decaySec)
   osc.connect(gain)
-  gain.connect(ctx.destination)
+  gain.connect(destination)
   osc.start(scheduledTime)
   osc.stop(scheduledTime + decaySec)
 }
 
 // Short, percussive "knock" — a fast downward pitch sweep plus a brief
 // filtered-noise transient. The new default (was "beep").
-function pingpong(ctx: AudioContext, accent: boolean, scheduledTime: number, volume: number): void {
+function pingpong(
+  ctx: AudioContext,
+  accent: boolean,
+  scheduledTime: number,
+  volume: number,
+  destination: AudioNode
+): void {
   const [start, end] = accent ? [2000, 1200] : [1400, 900]
   playToneSweep(
     ctx,
@@ -95,9 +113,10 @@ function pingpong(ctx: AudioContext, accent: boolean, scheduledTime: number, vol
     0.012,
     0.018,
     scheduledTime,
-    volume * (accent ? 0.5 : 0.35)
+    volume * (accent ? 0.5 : 0.35),
+    destination
   )
-  playNoiseBurst(ctx, scheduledTime, 0.004, 2500, volume * (accent ? 0.18 : 0.12))
+  playNoiseBurst(ctx, scheduledTime, 0.004, 2500, volume * (accent ? 0.18 : 0.12), destination)
 }
 
 // Rounder, lower-pitched knock — same sweep-and-decay shape as pingpong but
@@ -106,7 +125,8 @@ function woodblock(
   ctx: AudioContext,
   accent: boolean,
   scheduledTime: number,
-  volume: number
+  volume: number,
+  destination: AudioNode
 ): void {
   const [start, end] = accent ? [900, 500] : [650, 400]
   playToneSweep(
@@ -117,19 +137,32 @@ function woodblock(
     0.03,
     0.03,
     scheduledTime,
-    volume * (accent ? 0.5 : 0.35)
+    volume * (accent ? 0.5 : 0.35),
+    destination
   )
 }
 
 // Dry, high, noise-only stick click — no tonal/pitch content, sits above a
 // full band mix without adding a note.
-function rimclick(ctx: AudioContext, accent: boolean, scheduledTime: number, volume: number): void {
-  playNoiseBurst(ctx, scheduledTime, 0.006, 3500, volume * (accent ? 0.6 : 0.4))
+function rimclick(
+  ctx: AudioContext,
+  accent: boolean,
+  scheduledTime: number,
+  volume: number,
+  destination: AudioNode
+): void {
+  playNoiseBurst(ctx, scheduledTime, 0.006, 3500, volume * (accent ? 0.6 : 0.4), destination)
 }
 
 // Today's original click, kept as an option: triangle oscillator, fixed
 // frequency, 60ms decay — a softer, longer tone than the other three.
-function beep(ctx: AudioContext, accent: boolean, scheduledTime: number, volume: number): void {
+function beep(
+  ctx: AudioContext,
+  accent: boolean,
+  scheduledTime: number,
+  volume: number,
+  destination: AudioNode
+): void {
   const osc = ctx.createOscillator()
   const gain = ctx.createGain()
   osc.type = 'triangle'
@@ -137,7 +170,7 @@ function beep(ctx: AudioContext, accent: boolean, scheduledTime: number, volume:
   gain.gain.setValueAtTime(volume * (accent ? 0.5 : 0.35), scheduledTime)
   gain.gain.exponentialRampToValueAtTime(0.001, scheduledTime + 0.06)
   osc.connect(gain)
-  gain.connect(ctx.destination)
+  gain.connect(destination)
   osc.start(scheduledTime)
   osc.stop(scheduledTime + 0.06)
 }

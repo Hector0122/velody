@@ -5,10 +5,12 @@ import { CLICK_PRESET_LABELS, type ClickPreset } from '../hooks/clickPresets'
 interface MasterPanelProps {
   masterPlaying: boolean
   masterVolume: number
+  masterPan: number
   duration: number
   bpm: number
   metronomeOn: boolean
   metroVolume: number
+  metroPan: number
   clickPreset: ClickPreset
   monitorVolume: number
   recordingFormat: 'wav' | 'mp3'
@@ -18,11 +20,13 @@ interface MasterPanelProps {
   onPlaybackCountInBarsChange: (bars: number) => void
   onRestart: () => void
   onMasterVolumeChange: (e: React.ChangeEvent<HTMLInputElement>) => void
+  onMasterPanChange: (v: number) => void
   onBpmDecrement: () => void
   onBpmChange: (v: number) => void
   onBpmIncrement: () => void
   onMetronomeToggle: () => void
   onMetroVolumeChange: (v: number) => void
+  onMetroPanChange: (v: number) => void
   onClickPresetChange: (preset: ClickPreset) => void
   onMonitorVolumeChange: (v: number) => void
   onRecordingFormatChange: (fmt: 'wav' | 'mp3') => void
@@ -33,10 +37,12 @@ interface MasterPanelProps {
 function MasterPanel({
   masterPlaying,
   masterVolume,
+  masterPan,
   duration,
   bpm,
   metronomeOn,
   metroVolume,
+  metroPan,
   clickPreset,
   monitorVolume,
   recordingFormat,
@@ -46,11 +52,13 @@ function MasterPanel({
   onPlaybackCountInBarsChange,
   onRestart,
   onMasterVolumeChange,
+  onMasterPanChange,
   onBpmDecrement,
   onBpmChange,
   onBpmIncrement,
   onMetronomeToggle,
   onMetroVolumeChange,
+  onMetroPanChange,
   onClickPresetChange,
   onMonitorVolumeChange,
   onRecordingFormatChange,
@@ -95,6 +103,26 @@ function MasterPanel({
           className="accent-brand-primary cursor-pointer h-[120px] w-6 [writing-mode:vertical-lr] [direction:rtl]"
         />
         <span className="text-xs text-neutral-500">{Math.round(masterVolume * 100)}%</span>
+      </div>
+      <div className="flex flex-col items-center gap-1 w-full">
+        <span className="text-[10px] text-neutral-500">Mix Pan</span>
+        <input
+          type="range"
+          aria-label="Mix pan"
+          min="-1"
+          max="1"
+          step="0.05"
+          value={masterPan}
+          onChange={(e) => onMasterPanChange(parseFloat(e.target.value))}
+          className="accent-brand-primary cursor-pointer w-full"
+        />
+        <span className="text-[10px] text-neutral-600">
+          {masterPan === 0
+            ? 'C'
+            : masterPan < 0
+              ? `${Math.round(-masterPan * 100)}% L`
+              : `${Math.round(masterPan * 100)}% R`}
+        </span>
       </div>
 
       <div className="border-t border-neutral-800 pt-4 w-full flex flex-col gap-3">
@@ -218,6 +246,30 @@ function MasterPanel({
             <span className="text-xs text-neutral-500">{Math.round(metroVolume * 100)}%</span>
           </div>
         </div>
+        <div className="flex flex-col items-center gap-1 w-full">
+          <span className="text-[10px] text-neutral-500">Click Pan</span>
+          <input
+            type="range"
+            aria-label="Metronome pan"
+            min="-1"
+            max="1"
+            step="0.05"
+            value={metroPan}
+            onChange={(e) => onMetroPanChange(parseFloat(e.target.value))}
+            className="accent-orange-500 cursor-pointer w-full"
+          />
+          <span className="text-[10px] text-neutral-600">
+            {metroPan === 0
+              ? 'C'
+              : metroPan < 0
+                ? `${Math.round(-metroPan * 100)}% L`
+                : `${Math.round(metroPan * 100)}% R`}
+          </span>
+        </div>
+        <p className="text-[9px] text-neutral-600 text-center leading-tight px-1">
+          Click on L, mix on R — plug a separate speaker/monitor into each of your interface&apos;s
+          L/R jacks.
+        </p>
         <div className="flex flex-col items-center gap-1.5 w-full">
           <span className="text-[10px] text-neutral-500">Click sound</span>
           <div className="grid grid-cols-2 gap-1 w-full">

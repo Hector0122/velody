@@ -96,6 +96,8 @@ function StemPlayer({ stems, songName, onToast }: StemPlayerProps): React.JSX.El
     setMetroVolume,
     clickPreset,
     setClickPreset,
+    metroPan,
+    setMetroPan,
     playClick
   } = useMetronome(
     masterPlaying,
@@ -220,7 +222,9 @@ function StemPlayer({ stems, songName, onToast }: StemPlayerProps): React.JSX.El
     handleStemPanning,
     seek,
     audioCtxRef,
-    getDecodedBuffer
+    getDecodedBuffer,
+    masterPan,
+    setMasterPan
   } = useAudioContextEngine({
     allStems,
     urls,
@@ -527,10 +531,12 @@ function StemPlayer({ stems, songName, onToast }: StemPlayerProps): React.JSX.El
         <MasterPanel
           masterPlaying={masterPlaying}
           masterVolume={masterVolume}
+          masterPan={masterPan}
           duration={duration}
           bpm={bpm}
           metronomeOn={metronomeOn}
           metroVolume={metroVolume}
+          metroPan={metroPan}
           clickPreset={clickPreset}
           monitorVolume={monitorVolume}
           recordingFormat={recordingFormat}
@@ -540,11 +546,13 @@ function StemPlayer({ stems, songName, onToast }: StemPlayerProps): React.JSX.El
           onPlaybackCountInBarsChange={setPlaybackCountInBars}
           onRestart={handleRestart}
           onMasterVolumeChange={handleMasterVolume}
+          onMasterPanChange={setMasterPan}
           onBpmDecrement={handleBpmDecrement}
           onBpmChange={handleBpmChange}
           onBpmIncrement={handleBpmIncrement}
           onMetronomeToggle={handleMetronomeToggle}
           onMetroVolumeChange={handleMetroVolumeChange}
+          onMetroPanChange={setMetroPan}
           onClickPresetChange={setClickPreset}
           onMonitorVolumeChange={handleMonitorVolumeChange}
           onRecordingFormatChange={handleRecordingFormatChange}
