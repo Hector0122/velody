@@ -17,7 +17,15 @@ describe('useCountIn', () => {
     ensureAudioCtx: ReturnType<typeof vi.fn>
     result: ReturnType<typeof renderHook<ReturnType<typeof useCountIn>, unknown>>['result']
   } {
-    const ctx = { currentTime: 0 } as unknown as AudioContext
+    // currentTime tracks vitest's faked Date.now() (advanced by
+    // vi.advanceTimersByTime) so onComplete's ctx.currentTime poll behaves
+    // like a real, steadily-advancing audio clock in these tests, the same
+    // way it does with a real AudioContext.
+    const ctx = {
+      get currentTime(): number {
+        return Date.now() / 1000
+      }
+    } as unknown as AudioContext
     const ensureAudioCtx = vi.fn(() => ctx)
     const playClick = vi.fn()
     const { result } = renderHook(() => useCountIn(ensureAudioCtx, playClick))
@@ -154,5 +162,45 @@ describe('useCountIn', () => {
 
     expect(firstOnComplete).not.toHaveBeenCalled()
     expect(secondOnComplete).toHaveBeenCalledTimes(1)
+  })
+
+  // Regression test for fix-count-in-onbeat-handoff-jitter: onComplete used
+  // to fire off a plain setTimeout, on the JS wall clock — a clock that can
+  // drift from the AudioContext's own hardware clock (which is what the
+  // count-in clicks are actually scheduled against via ctx.currentTime).
+  // onComplete must instead wait for the *audio* clock to reach the target
+  // time, not just for enough wall-clock milliseconds to have elapsed.
+  it('waits for the audio clock (ctx.currentTime), not just elapsed wall-clock time, before calling onComplete', () => {
+    // A ctx whose currentTime is set manually, decoupled from vitest's
+    // faked Date.now()/wall clock — simulates the audio clock lagging
+    // behind real time. Kept as its own mutable-field type (rather than
+    // typed/cast as AudioContext, whose currentTime is readonly) so the
+    // test can reassign it directly below.
+    const ctx: { currentTime: number } = { currentTime: 0 }
+    const ensureAudioCtx = vi.fn(() => ctx as unknown as AudioContext)
+    const playClick = vi.fn()
+    const { result } = renderHook(() => useCountIn(ensureAudioCtx, playClick))
+    const onComplete = vi.fn()
+    const bpm = 120 // interval 0.5s; 1 bar -> target = 0.05 + 4*0.5 = 2.05s
+
+    act(() => {
+      result.current.start(1, bpm, () => {}, onComplete)
+    })
+
+    // Plenty of wall-clock time passes (well past the old 2050ms
+    // setTimeout duration), but the audio clock hasn't caught up yet.
+    act(() => {
+      ctx.currentTime = 1.0
+      vi.advanceTimersByTime(3000)
+    })
+    expect(onComplete).not.toHaveBeenCalled()
+
+    // Now the audio clock reaches the target — onComplete should fire on
+    // the next animation-frame poll.
+    act(() => {
+      ctx.currentTime = 2.05
+      vi.advanceTimersByTime(20)
+    })
+    expect(onComplete).toHaveBeenCalledTimes(1)
   })
 })
