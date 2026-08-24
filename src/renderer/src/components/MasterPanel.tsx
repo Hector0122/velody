@@ -24,6 +24,7 @@ interface MasterPanelProps {
   onBpmChange: (v: number) => void
   onBpmIncrement: () => void
   onCorrectTempoOctave: (direction: TempoOctaveDirection) => void
+  correctingTempoOctave: boolean
   onMetronomeToggle: () => void
   onMetroVolumeChange: (v: number) => void
   onMetroPanChange: (v: number) => void
@@ -55,6 +56,7 @@ function MasterPanel({
   onBpmChange,
   onBpmIncrement,
   onCorrectTempoOctave,
+  correctingTempoOctave,
   onMetronomeToggle,
   onMetroVolumeChange,
   onMetroPanChange,
@@ -245,19 +247,21 @@ function MasterPanel({
             className="text-[10px] text-neutral-500"
             title="Detected tempo sounds wrong (off by exactly half or double)? Correct it while keeping the metronome locked to the real beat grid."
           >
-            Tempo wrong?
+            {correctingTempoOctave ? 'Correcting…' : 'Tempo wrong?'}
           </span>
           <button
             onClick={() => onCorrectTempoOctave('halve')}
+            disabled={correctingTempoOctave}
             title="Halve tempo (detector doubled the real tempo)"
-            className="px-2 py-0.5 rounded text-[10px] font-medium bg-neutral-800 text-neutral-400 hover:text-white transition-colors"
+            className="px-2 py-0.5 rounded text-[10px] font-medium bg-neutral-800 text-neutral-400 hover:text-white transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
           >
             ½
           </button>
           <button
             onClick={() => onCorrectTempoOctave('double')}
+            disabled={correctingTempoOctave}
             title="Double tempo (detector halved the real tempo)"
-            className="px-2 py-0.5 rounded text-[10px] font-medium bg-neutral-800 text-neutral-400 hover:text-white transition-colors"
+            className="px-2 py-0.5 rounded text-[10px] font-medium bg-neutral-800 text-neutral-400 hover:text-white transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
           >
             ×2
           </button>

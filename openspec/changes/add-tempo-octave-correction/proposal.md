@@ -27,17 +27,27 @@ around.
 - Two small buttons next to the BPM control — "½" (halve) and "×2"
   (double) — let the user correct a detected tempo that's off by exactly
   one octave.
-- Unlike manually retyping the BPM, this **rebuilds the detected beat-time
-  grid itself** (`beatTimesRef`) instead of discarding it:
-  - Doubling inserts a beat at the midpoint of every consecutive detected
-    pair — the original detected beats become every other beat of the
-    corrected grid.
-  - Halving drops every other detected beat.
+- **Revised after initial testing** (see design.md — the first version's
+  approach produced an audible "se adelanta y se atrasa" drift): the
+  correction now **re-runs beat detection** (`detect_bpm.py --bpm-hint`)
+  with the corrected tempo as an explicit prior, instead of arithmetically
+  rebuilding the existing grid client-side. librosa's beat tracker
+  re-derives genuinely onset-aligned beat positions directly from the
+  audio at the corrected tempo, rather than assuming the original grid was
+  perfectly uniformly spaced (real recordings rarely are). The original
+  arithmetic approach (`tempoOctaveCorrection.ts`'s `correctTempoOctave` —
+  doubling interpolates a midpoint between every consecutive detected
+  pair, halving drops every other beat) is kept as a fallback for if
+  redetection itself fails (Python worker error, etc.) — an imperfect grid
+  is still better than none.
 - `originalBpmRef` is updated to the corrected value alongside the
   displayed BPM, so the scheduler's grid-mode check
   (`bpm === originalBpmRef.current`) stays satisfied — the metronome keeps
   following the real (now-corrected) beat grid instead of falling back to
   constant-tempo.
+- Since redetection spawns a real Python process (though a lighter one —
+  see design.md), applying a correction now has a brief loading state
+  ("Correcting…", buttons disabled) instead of being instant.
 - The correction is persisted to the song's `.velody` metadata cache
   (same file/shape `useSongAnalysis` already writes), so it survives
   closing and reopening the song — the user shouldn't have to re-correct
@@ -59,19 +69,34 @@ around.
 
 ## Impact
 
+- `python-worker/detect_bpm.py`: `detect_bpm()` accepts an optional
+  `bpm_hint` — when given, skips TempoCNN entirely and calls
+  `librosa.beat.beat_track(y=y, sr=sr, bpm=bpm_hint)` directly; new
+  `--bpm-hint <bpm>` CLI flag.
+- `src/main/ipc/handlers.ts`: `song:detectBpm` accepts an optional
+  `bpmHint`; shared `runDetectBpm` helper threads it through as
+  `--bpm-hint`; a second, independent singleflight guard
+  (`bpmRedetectionRunning`) so a correction redetect can't collide with a
+  normal (hint-less) detection's in-flight promise.
+- `src/preload/index.ts`, `src/shared/types.ts`: `detectBpm`'s signature
+  gains the optional `bpmHint` parameter.
 - `src/renderer/src/hooks/tempoOctaveCorrection.ts` (new): pure
-  `correctTempoOctave(beatTimes, bpm, firstBeatOffset, direction)` function.
+  `correctTempoOctave(beatTimes, bpm, firstBeatOffset, direction)` —
+  kept as the fallback path (see above), not the primary mechanism.
 - `src/renderer/src/utils.ts`: new `songDirFromStemPath` helper, extracted
   from `useSongAnalysis.ts`'s existing inline derivation (now shared by
   both) for the `.velody` cache write.
 - `src/renderer/src/hooks/useSongAnalysis.ts`: uses the extracted
   `songDirFromStemPath` helper (no behavior change).
-- `src/renderer/src/components/StemPlayer.tsx`: new
-  `handleCorrectTempoOctave` handler — rebuilds `beatTimesRef`, updates
-  `originalBpmRef`/`firstBeatOffsetRef`/`bpm`, resets
+- `src/renderer/src/components/StemPlayer.tsx`: `handleCorrectTempoOctave`
+  is now async — calls `window.api.detectBpm` with a hint, applies the
+  redetected grid (or falls back to `correctTempoOctave` on failure),
+  updates `originalBpmRef`/`firstBeatOffsetRef`/`bpm`, resets
   `lastScheduledBeatRef` (grid shape changed), persists to the `.velody`
-  cache.
+  cache; new `correctingTempoOctave` loading-state flag.
 - `src/renderer/src/components/MasterPanel.tsx`: two small buttons ("½",
-  "×2") next to the BPM control.
-- No IPC/main-process changes — this only reshapes data already held in
-  the renderer and already-existing `loadMeta`/`saveMeta` calls.
+  "×2") next to the BPM control, disabled with a "Correcting…" label while
+  in flight.
+- `python-worker/tests/test_detect_bpm.py`: new `--bpm-hint` coverage,
+  gated on `HAS_LIBROSA` only (not `HAS_TEMPOCNN` — the hint path doesn't
+  use TempoCNN).

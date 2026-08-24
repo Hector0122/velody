@@ -119,7 +119,12 @@ export interface VelodyAPI {
   saveMeta: (songDir: string, meta: Record<string, unknown>) => Promise<{ success: boolean }>
   loadMeta: (songDir: string) => Promise<Record<string, unknown> | null>
   detectBpm: (
-    stemPath: string
+    stemPath: string,
+    // Re-runs beat tracking at a caller-supplied tempo instead of
+    // TempoCNN's own estimate — used to correct a tempo-octave detection
+    // error while keeping the beat grid onset-aligned to the real audio.
+    // See add-tempo-octave-correction.
+    bpmHint?: number
   ) => Promise<{ bpm: number; firstBeatOffset: number; beatTimes: number[] } | null>
   openExternal: (url: string) => Promise<void>
   deleteFile: (filePath: string) => Promise<{ success: boolean; error?: string }>

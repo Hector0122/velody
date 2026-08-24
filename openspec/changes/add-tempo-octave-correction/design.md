@@ -41,20 +41,61 @@ See proposal.md — Why. Confirmed by direct code reading:
 
 ## Decisions
 
-- **Doubling interpolates a midpoint beat between every consecutive pair,
-  rather than re-running beat detection at 2x.** The existing detected
-  beats are real transients — halving the tempo doesn't make them wrong,
-  it just means the detector found every *other* real beat. Inserting the
-  arithmetic midpoint between each pair is a cheap, purely-arithmetic
-  operation that produces a plausible corrected grid without any new
-  audio analysis, and keeps the correction instant (no re-running Python/
-  TempoCNN).
+- **Revised after initial testing: re-run beat detection with the
+  corrected tempo as a hint, rather than arithmetically rebuilding the
+  grid.** The first version of this feature did exactly what the
+  paragraph below describes (arithmetic midpoint interpolation/decimation)
+  — cheap, instant, no new audio analysis. Tested live against "Just Like
+  Heaven" after the ×2 correction: the BPM display updated correctly
+  (76.9 → 153.8), but the click itself sounded "raro... se adelanta y se
+  atrasa" (drifts ahead, then behind, alternating). Diagnosis: arithmetic
+  midpoint interpolation assumes the original detected beats are
+  *perfectly* evenly spaced and that the true intermediate beat is exactly
+  their arithmetic midpoint — true only for a perfectly quantized/
+  mechanical tempo. A real recording (human performance, not a click
+  track) has natural timing variance even in a studio take, so the
+  original detected beats (every other real beat) were themselves not
+  perfectly uniform — and the interpolated midpoints inherited that error
+  while the originally-detected beats stayed accurate, producing exactly
+  the alternating "correct, off, correct, off..." pattern reported.
+  Confirmed via a synthetic test: a perfectly periodic click track shows
+  no difference between the two approaches (midpoint interpolation and
+  redetection agree almost exactly), but only redetection can be trusted
+  on real, non-quantized audio. `librosa.beat.beat_track(y, sr,
+  bpm=hint)` — already the exact mechanism the *first, non-hinted*
+  detection uses (with TempoCNN's estimate as the `bpm` prior instead of
+  a corrected one) — re-derives beat positions from the audio's real
+  onset-strength envelope at the given tempo, adapting to natural timing
+  variance via its `tightness` parameter instead of assuming uniformity.
+  Reusing the same, already-proven-reliable mechanism (just with a
+  corrected prior) is more consistent than inventing a separate
+  arithmetic approximation.
+- **The original arithmetic approach is kept as a fallback**, not deleted
+  — if redetection itself fails (Python worker error, missing librosa,
+  etc.), an approximate corrected grid is still better than silently doing
+  nothing or reverting to no grid at all.
+- **Doubling interpolates a midpoint beat between every consecutive pair
+  (fallback path only)**: inserting the arithmetic midpoint between each
+  detected pair is a cheap, purely-arithmetic approximation — acceptable
+  as a degraded fallback, not as the primary mechanism (see above).
 - **Halving drops every other beat (even indices) rather than trying to
-  detect which beats are "real."** Assumes the existing grid's index 0 is
-  a genuine detected transient (the normal case — the detector generally
-  isn't hallucinating extra beats, just too many correctly-detected ones
-  relative to the true tempo). Simple, predictable, matches the doubling
-  operation's inverse exactly (round-trip tested).
+  detect which beats are "real" (fallback path only).** Assumes the
+  existing grid's index 0 is a genuine detected transient (the normal
+  case — the detector generally isn't hallucinating extra beats, just too
+  many correctly-detected ones relative to the true tempo). Simple,
+  predictable, matches the doubling operation's inverse exactly
+  (round-trip tested).
+- **A separate singleflight guard (`bpmRedetectionRunning`) for the hint
+  path**, independent from the existing `bpmDetectionRunning` used by
+  normal (hint-less) detection. The existing guard is a single global
+  in-flight-promise slot (by design — CLAUDE.md notes concurrent TempoCNN/
+  TensorFlow processes can OOM low-RAM machines), so if a correction
+  redetect for one song happened to overlap with a normal detection for
+  another, sharing one slot could return the *wrong* song's result to one
+  of the two callers. The hint path also doesn't load TempoCNN at all
+  (skips straight to librosa), so it doesn't carry the same OOM risk the
+  original guard exists for — a separate, independent guard is both safer
+  and doesn't need to serialize behind unrelated normal detections.
 - **Operates on `originalBpmRef`/`beatTimesRef` (the detected values), not
   whatever the user may have manually drifted `bpm` to.** If the user had
   already manually overridden BPM before applying a correction, the

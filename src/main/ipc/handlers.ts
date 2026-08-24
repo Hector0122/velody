@@ -16,6 +16,15 @@ interface BpmDetectionResult {
 }
 
 let bpmDetectionRunning: Promise<BpmDetectionResult | null> | null = null
+// Separate singleflight guard for hint-based redetection (see
+// add-tempo-octave-correction) — kept independent from bpmDetectionRunning
+// above so a correction redetect for one song can't return the wrong
+// song's normal-detection result (or vice versa) if both happen to be
+// in flight at once. Also lower-risk to run concurrently with a normal
+// detection than two normal detections are with each other: the hint path
+// skips TempoCNN/TensorFlow entirely (the actual OOM risk on low-RAM
+// machines — see CLAUDE.md), it's just librosa's beat tracker.
+let bpmRedetectionRunning: Promise<BpmDetectionResult | null> | null = null
 
 const STEM_NAMES = ['vocals', 'drums', 'bass', 'other', 'piano', 'guitar']
 
@@ -284,46 +293,57 @@ export function registerIpcHandlers(): void {
     }
   })
 
+  // `bpmHint`, when given, is threaded through as --bpm-hint — used by
+  // add-tempo-octave-correction to re-run librosa's beat tracker with a
+  // known-correct tempo as an explicit prior (finding real onset-aligned
+  // beat positions at that tempo) instead of TempoCNN's own estimate. See
+  // detect_bpm.py.
+  async function runDetectBpm(
+    stemPath: string,
+    bpmHint?: number
+  ): Promise<BpmDetectionResult | null> {
+    const pythonPath = setupManager?.getPythonPath() ?? 'python3'
+    const scriptPath = join(getPythonWorkerDir(), 'detect_bpm.py')
+    const ffmpegPath = setupManager?.getFfmpegPath() ?? 'ffmpeg'
+    const args = [scriptPath, stemPath, '--ffmpeg-path', ffmpegPath]
+    if (typeof bpmHint === 'number') args.push('--bpm-hint', String(bpmHint))
+    try {
+      const out = await new Promise<string>((resolve, reject) => {
+        execFile(pythonPath, args, { timeout: 600_000, maxBuffer: 65536 }, (err, stdout) =>
+          err ? reject(err) : resolve(stdout)
+        )
+      })
+      const lines = out.trim().split('\n')
+      const last = lines[lines.length - 1]
+      const parsed = last ? JSON.parse(last.trim()) : null
+      if (parsed && typeof parsed.bpm === 'number' && typeof parsed.firstBeatOffset === 'number') {
+        // beatTimes is new; default to [] so an older script build (or any
+        // unexpected shape) degrades to "no grid" rather than breaking.
+        const beatTimes = Array.isArray(parsed.beatTimes) ? parsed.beatTimes : []
+        return { bpm: parsed.bpm, firstBeatOffset: parsed.firstBeatOffset, beatTimes }
+      }
+      return null
+    } catch (err) {
+      console.error('[detectBpm]', err)
+      return null
+    }
+  }
+
   ipcMain.handle(
     'song:detectBpm',
-    async (_event, stemPath: string): Promise<BpmDetectionResult | null> => {
+    async (_event, stemPath: string, bpmHint?: number): Promise<BpmDetectionResult | null> => {
+      if (typeof bpmHint === 'number') {
+        if (bpmRedetectionRunning) return bpmRedetectionRunning
+        bpmRedetectionRunning = runDetectBpm(stemPath, bpmHint).finally(() => {
+          bpmRedetectionRunning = null
+        })
+        return bpmRedetectionRunning
+      }
+
       if (bpmDetectionRunning) return bpmDetectionRunning
-
-      bpmDetectionRunning = (async (): Promise<BpmDetectionResult | null> => {
-        const pythonPath = setupManager?.getPythonPath() ?? 'python3'
-        const scriptPath = join(getPythonWorkerDir(), 'detect_bpm.py')
-        const ffmpegPath = setupManager?.getFfmpegPath() ?? 'ffmpeg'
-        try {
-          const out = await new Promise<string>((resolve, reject) => {
-            execFile(
-              pythonPath,
-              [scriptPath, stemPath, '--ffmpeg-path', ffmpegPath],
-              { timeout: 600_000, maxBuffer: 65536 },
-              (err, stdout) => (err ? reject(err) : resolve(stdout))
-            )
-          })
-          const lines = out.trim().split('\n')
-          const last = lines[lines.length - 1]
-          const parsed = last ? JSON.parse(last.trim()) : null
-          if (
-            parsed &&
-            typeof parsed.bpm === 'number' &&
-            typeof parsed.firstBeatOffset === 'number'
-          ) {
-            // beatTimes is new; default to [] so an older script build (or any
-            // unexpected shape) degrades to "no grid" rather than breaking.
-            const beatTimes = Array.isArray(parsed.beatTimes) ? parsed.beatTimes : []
-            return { bpm: parsed.bpm, firstBeatOffset: parsed.firstBeatOffset, beatTimes }
-          }
-          return null
-        } catch (err) {
-          console.error('[detectBpm]', err)
-          return null
-        } finally {
-          bpmDetectionRunning = null
-        }
-      })()
-
+      bpmDetectionRunning = runDetectBpm(stemPath).finally(() => {
+        bpmDetectionRunning = null
+      })
       return bpmDetectionRunning
     }
   )

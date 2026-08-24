@@ -136,5 +136,64 @@ class TestDetectBpm:
         assert data['firstBeatOffset'] >= 0
 
 
+@pytest.mark.skipif(not HAS_LIBROSA, reason='librosa not installed')
+class TestBpmHint:
+    # --bpm-hint (used by add-tempo-octave-correction to re-run detection at
+    # a user-corrected tempo) skips TempoCNN entirely — must work even when
+    # tempocnn isn't installed, so these are gated on HAS_LIBROSA only, not
+    # HAS_TEMPOCNN.
+    def _click_track_wav(self, path: str, bpm: float, duration: int = 10, sr: int = 44100):
+        interval = 60.0 / bpm
+        signal = np.zeros(sr * duration, dtype=np.float32)
+        t = 0.0
+        while t < duration:
+            idx = int(t * sr)
+            click_len = int(0.02 * sr)
+            end = min(idx + click_len, len(signal))
+            n = end - idx
+            envelope = np.exp(-np.linspace(0, 20, n)).astype(np.float32)
+            signal[idx:end] += envelope * 0.8
+            t += interval
+        _write_wav(path, signal, sr)
+
+    def test_bpm_hint_finds_beats_at_the_given_tempo(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, 'click151.wav')
+            self._click_track_wav(path, bpm=151.0)
+            result = subprocess.run(
+                [sys.executable, DETECT_BPM_SCRIPT, path, '--bpm-hint', '151'],
+                capture_output=True,
+                text=True
+            )
+        assert result.returncode == 0
+        import json
+        data = json.loads(result.stdout.strip())
+        assert 'bpm' in data
+        assert 'beatTimes' in data
+        # Should find (roughly) every click, not every other one — the
+        # hint's tempo, not half or double of it.
+        assert 130 <= data['bpm'] <= 170
+        assert len(data['beatTimes']) > 15  # ~10s at ~151bpm ≈ 25 beats
+
+    def test_wrong_bpm_hint_still_returns_a_valid_grid(self):
+        # A hint that's itself off by an octave (half the real tempo) still
+        # produces a usable result (beat_track locks to roughly that
+        # tempo) — confirms the mechanism is just "detect at this tempo",
+        # not something that silently fails on a bad hint.
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, 'click151.wav')
+            self._click_track_wav(path, bpm=151.0)
+            result = subprocess.run(
+                [sys.executable, DETECT_BPM_SCRIPT, path, '--bpm-hint', '75.5'],
+                capture_output=True,
+                text=True
+            )
+        assert result.returncode == 0
+        import json
+        data = json.loads(result.stdout.strip())
+        assert 60 <= data['bpm'] <= 90
+        assert len(data['beatTimes']) > 5
+
+
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])

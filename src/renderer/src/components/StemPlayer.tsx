@@ -449,24 +449,13 @@ function StemPlayer({
     [setBpm, lastScheduledBeatRef]
   )
 
-  // Corrects a tempo-octave detection error (detector locked onto half or
-  // double the real tempo — see tempoOctaveCorrection.ts) while keeping the
-  // metronome locked to the real detected beat grid, unlike just re-typing
-  // a doubled/halved BPM (handleBpmChange above), which would fall out of
-  // grid mode into plain constant-tempo scheduling. Rebuilds beatTimesRef
-  // itself, so it also updates originalBpmRef (not just the displayed bpm)
-  // to keep grid mode's `bpm === originalBpmRef.current` check satisfied,
-  // and persists the correction to the .velody cache so it isn't lost on
-  // next open. See openspec/changes/add-tempo-octave-correction.
-  const handleCorrectTempoOctave = useCallback(
-    (direction: TempoOctaveDirection): void => {
-      if (stems.length === 0) return
-      const correction = correctTempoOctave(
-        beatTimesRef.current,
-        originalBpmRef.current,
-        firstBeatOffsetRef.current,
-        direction
-      )
+  const [correctingTempoOctave, setCorrectingTempoOctave] = useState(false)
+
+  // Applies a tempo-octave correction's result (however it was obtained)
+  // and persists it — shared by both the redetected and the arithmetic-
+  // fallback paths in handleCorrectTempoOctave below.
+  const applyTempoOctaveCorrection = useCallback(
+    (correction: { bpm: number; firstBeatOffset: number; beatTimes: number[] }): void => {
       beatTimesRef.current = correction.beatTimes
       firstBeatOffsetRef.current = correction.firstBeatOffset
       originalBpmRef.current = correction.bpm
@@ -482,6 +471,64 @@ function StemPlayer({
       })
     },
     [stems, beatTimesRef, originalBpmRef, firstBeatOffsetRef, lastScheduledBeatRef, setBpm]
+  )
+
+  // Corrects a tempo-octave detection error (detector locked onto half or
+  // double the real tempo) while keeping the metronome locked to a real,
+  // onset-aligned beat grid — unlike just re-typing a doubled/halved BPM
+  // (handleBpmChange above), which would fall out of grid mode into plain
+  // constant-tempo scheduling.
+  //
+  // Re-runs beat detection with the corrected tempo as an explicit prior
+  // (detect_bpm.py's --bpm-hint) rather than arithmetically interpolating/
+  // decimating the already-detected grid client-side: the original
+  // arithmetic-only approach (tempoOctaveCorrection.ts) assumes perfectly
+  // uniform spacing between detected beats, which real recordings (natural
+  // human timing, non-quantized performances) don't actually have —
+  // reported as an audible "se adelanta y se atrasa" (drifts ahead/behind)
+  // alternating pattern on doubling, since every other click (the
+  // arithmetic midpoint) landed slightly off the real transient while the
+  // originally-detected clicks stayed correct. Re-detecting via librosa's
+  // beat tracker at the corrected tempo instead finds genuinely
+  // onset-aligned positions directly from the audio. Falls back to the
+  // arithmetic approach only if redetection itself fails (e.g. the Python
+  // worker errors) — an imperfect grid is still better than none.
+  // See openspec/changes/add-tempo-octave-correction.
+  const handleCorrectTempoOctave = useCallback(
+    (direction: TempoOctaveDirection): void => {
+      if (stems.length === 0 || correctingTempoOctave) return
+      const hintBpm =
+        direction === 'double' ? originalBpmRef.current * 2 : originalBpmRef.current / 2
+
+      setCorrectingTempoOctave(true)
+      ;(async (): Promise<void> => {
+        try {
+          const redetected = await window.api?.detectBpm(stems[0], hintBpm)
+          if (redetected && redetected.beatTimes.length > 0) {
+            applyTempoOctaveCorrection(redetected)
+            return
+          }
+        } catch {
+          /* fall through to the arithmetic fallback below */
+        }
+        applyTempoOctaveCorrection(
+          correctTempoOctave(
+            beatTimesRef.current,
+            originalBpmRef.current,
+            firstBeatOffsetRef.current,
+            direction
+          )
+        )
+      })().finally(() => setCorrectingTempoOctave(false))
+    },
+    [
+      stems,
+      correctingTempoOctave,
+      originalBpmRef,
+      beatTimesRef,
+      firstBeatOffsetRef,
+      applyTempoOctaveCorrection
+    ]
   )
 
   const handleMetronomeToggle = useCallback((): void => {
@@ -594,6 +641,7 @@ function StemPlayer({
           onBpmChange={handleBpmChange}
           onBpmIncrement={handleBpmIncrement}
           onCorrectTempoOctave={handleCorrectTempoOctave}
+          correctingTempoOctave={correctingTempoOctave}
           onMetronomeToggle={handleMetronomeToggle}
           onMetroVolumeChange={handleMetroVolumeChange}
           onMetroPanChange={setMetroPan}
