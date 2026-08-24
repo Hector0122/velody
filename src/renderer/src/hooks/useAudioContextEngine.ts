@@ -420,18 +420,24 @@ export function useAudioContextEngine(params: UseAudioContextEngineParams): {
     } else {
       lastScheduledBeatRef.current = -1
       ensureCtx()
-      const all: Record<string, boolean> = {}
+      // Preserve any mute/solo choice the user already made — only default a
+      // stem to active if it has no entry yet (first-ever play for this
+      // song, or a stem that was just added, e.g. a new recording). Without
+      // this, every Stop -> Play cycle silently re-activated every stem,
+      // undoing mutes the user had just set (see fix-stem-mutes-reset-on-
+      // replay).
+      const merged: Record<string, boolean> = { ...activeRef.current }
       for (const path of allStems) {
         const key = stemNameFromPath(path)
-        all[key] = true
+        if (!(key in merged)) merged[key] = true
         ensureWaveSurfer(key)
       }
       isPlayingRef.current = true
-      activeRef.current = all
+      activeRef.current = merged
       masterPlayingRef.current = true
       startSources(positionRef.current)
       rafRef.current = requestAnimationFrame(tick)
-      setActive(all)
+      setActive(merged)
       setMasterPlaying(true)
     }
   }, [

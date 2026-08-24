@@ -254,6 +254,69 @@ describe('useAudioContextEngine - source lifecycle (mute-at-start / late decode)
   })
 })
 
+// Regression coverage for "every Stop -> Play cycle re-activated every stem,
+// undoing mutes the user just set" (see fix-stem-mutes-reset-on-replay).
+describe('useAudioContextEngine - toggleMasterPlay preserves mute state', () => {
+  beforeEach(() => {
+    vi.stubGlobal('AudioContext', FakeAudioContext)
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ arrayBuffer: async () => new ArrayBuffer(16) }))
+    )
+  })
+
+  it('activates every stem on the very first play (empty active map)', () => {
+    const setActive = vi.fn()
+    const params = buildParams({ active: {}, masterPlaying: false, setActive })
+    const { result } = renderHook(() => useAudioContextEngine(params))
+
+    act(() => {
+      result.current.toggleMasterPlay()
+    })
+
+    expect(setActive).toHaveBeenCalledWith({ vocals: true, drums: true })
+  })
+
+  it('preserves an explicitly muted stem across a stopped -> playing transition', () => {
+    const setActive = vi.fn()
+    const params = buildParams({
+      active: { vocals: true, drums: false },
+      masterPlaying: false,
+      setActive
+    })
+    const { result } = renderHook(() => useAudioContextEngine(params))
+
+    act(() => {
+      result.current.toggleMasterPlay()
+    })
+
+    expect(setActive).toHaveBeenCalledWith({ vocals: true, drums: false })
+  })
+
+  it('defaults only the stems with no prior entry, leaving existing entries untouched', () => {
+    const setActive = vi.fn()
+    const params = buildParams({
+      allStems: ['/song/vocals.wav', '/song/drums.wav', '/song/bass.wav'],
+      urls: {
+        vocals: 'http://127.0.0.1:1234/vocals.wav',
+        drums: 'http://127.0.0.1:1234/drums.wav',
+        bass: 'http://127.0.0.1:1234/bass.wav'
+      },
+      // 'bass' has never been touched (e.g. just added); vocals/drums have explicit state.
+      active: { vocals: false, drums: true },
+      masterPlaying: false,
+      setActive
+    })
+    const { result } = renderHook(() => useAudioContextEngine(params))
+
+    act(() => {
+      result.current.toggleMasterPlay()
+    })
+
+    expect(setActive).toHaveBeenCalledWith({ vocals: false, drums: true, bass: true })
+  })
+})
+
 describe('useAudioContextEngine - stem url resolution', () => {
   afterEach(() => {
     delete (window as { api?: VelodyAPI }).api
