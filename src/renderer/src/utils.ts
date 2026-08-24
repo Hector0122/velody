@@ -13,6 +13,15 @@ export function formatTime(seconds: number): string {
   return `${m}:${s.toString().padStart(2, '0')}`
 }
 
+// Case-insensitive substring filter for the sidebar song list. An empty
+// (or whitespace-only) query returns `songs` unchanged, preserving whatever
+// order the caller already had.
+export function filterSongsByQuery<T extends { name: string }>(songs: T[], query: string): T[] {
+  const q = query.trim().toLowerCase()
+  if (!q) return songs
+  return songs.filter((song) => song.name.toLowerCase().includes(q))
+}
+
 export const extForFormat = (fmt: string): string => (fmt === 'mp3' ? '.mp3' : '.wav')
 
 export const formatFilter = (fmt: string): { name: string; extensions: string[] } =>

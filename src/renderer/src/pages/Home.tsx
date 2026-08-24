@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef, useLayoutEffect, useMemo } fr
 import AudioUploader from '../components/AudioUploader'
 import UrlImporter from '../components/UrlImporter'
 import StemPlayer from '../components/StemPlayer'
+import { filterSongsByQuery } from '../utils'
 
 interface RecentSong {
   name: string
@@ -34,6 +35,7 @@ function Home(): React.JSX.Element {
   const [error, setError] = useState<string | null>(null)
   const [importMode, setImportMode] = useState<'local' | 'url'>('local')
   const [showNewSongMenu, setShowNewSongMenu] = useState(false)
+  const [songSearch, setSongSearch] = useState('')
   const newSongMenuRef = useRef<HTMLDivElement>(null)
   const jobQueueRef = useRef<SeparationJob[]>([])
 
@@ -265,6 +267,11 @@ function Home(): React.JSX.Element {
     [jobQueue]
   )
 
+  const filteredSongs = useMemo(
+    () => filterSongsByQuery(recentSongs, songSearch),
+    [recentSongs, songSearch]
+  )
+
   return (
     <div className="h-screen bg-neutral-950 flex overflow-hidden">
       {/* Sidebar */}
@@ -365,31 +372,58 @@ function Home(): React.JSX.Element {
           </div>
         )}
 
-        <div className="flex-1 overflow-y-auto px-3 mt-3 space-y-1">
+        <div className="mt-3 mx-3 shrink-0">
           <h3 className="text-[10px] font-semibold text-neutral-500 uppercase tracking-wide mb-1.5">
             Recent Songs
           </h3>
-          {recentSongs.map((song) => (
-            <div key={song.name} className="relative group">
+          <div className="relative">
+            <input
+              type="text"
+              value={songSearch}
+              onChange={(e) => setSongSearch(e.target.value)}
+              placeholder="Search songs..."
+              className="w-full px-2.5 py-1.5 pr-7 rounded-md bg-neutral-800 border border-neutral-700 text-neutral-200 text-xs placeholder-neutral-500 focus:outline-none focus:border-brand-primary transition-colors"
+            />
+            {songSearch && (
               <button
-                onClick={() => handleSelectRecent(song)}
-                className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
-                  currentSong?.songName === song.name
-                    ? 'bg-brand-primary/20 text-brand-primary border border-brand-primary/30'
-                    : 'text-neutral-400 hover:text-white hover:bg-neutral-800'
-                }`}
-              >
-                <span className="truncate block">{song.name}</span>
-              </button>
-              <button
-                onClick={(e) => handleDeleteSong(song, e)}
-                className="absolute right-1 top-1/2 -translate-y-1/2 w-6 h-6 rounded flex items-center justify-center text-neutral-600 hover:text-red-400 hover:bg-red-900/30 transition-colors opacity-0 group-hover:opacity-100 text-xs"
-                title="Delete song"
+                onClick={() => setSongSearch('')}
+                className="absolute right-1.5 top-1/2 -translate-y-1/2 w-4 h-4 rounded flex items-center justify-center text-neutral-500 hover:text-white transition-colors text-xs"
+                title="Clear search"
               >
                 ✕
               </button>
-            </div>
-          ))}
+            )}
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-y-auto px-3 mt-2 space-y-1">
+          {filteredSongs.length === 0 ? (
+            <p className="text-xs text-neutral-600 px-1 py-2">
+              {songSearch ? 'No songs found' : 'No songs yet'}
+            </p>
+          ) : (
+            filteredSongs.map((song) => (
+              <div key={song.name} className="relative group">
+                <button
+                  onClick={() => handleSelectRecent(song)}
+                  className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
+                    currentSong?.songName === song.name
+                      ? 'bg-brand-primary/20 text-brand-primary border border-brand-primary/30'
+                      : 'text-neutral-400 hover:text-white hover:bg-neutral-800'
+                  }`}
+                >
+                  <span className="truncate block">{song.name}</span>
+                </button>
+                <button
+                  onClick={(e) => handleDeleteSong(song, e)}
+                  className="absolute right-1 top-1/2 -translate-y-1/2 w-6 h-6 rounded flex items-center justify-center text-neutral-600 hover:text-red-400 hover:bg-red-900/30 transition-colors opacity-0 group-hover:opacity-100 text-xs"
+                  title="Delete song"
+                >
+                  ✕
+                </button>
+              </div>
+            ))
+          )}
         </div>
       </aside>
 

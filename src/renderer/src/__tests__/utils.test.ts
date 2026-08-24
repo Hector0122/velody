@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   stemNameFromPath,
   formatTime,
+  filterSongsByQuery,
   extForFormat,
   formatFilter,
   BPM_MIN,
@@ -65,6 +66,37 @@ describe('formatTime', () => {
 
   it('handles fractional seconds (floors)', () => {
     expect(formatTime(90.9)).toBe('1:30')
+  })
+})
+
+describe('filterSongsByQuery', () => {
+  const songs = [{ name: 'La Flaca' }, { name: 'Flaca (Calamaro)' }, { name: 'Zombie' }]
+
+  it('returns every song unchanged for an empty query', () => {
+    expect(filterSongsByQuery(songs, '')).toEqual(songs)
+  })
+
+  it('returns every song unchanged for a whitespace-only query', () => {
+    expect(filterSongsByQuery(songs, '   ')).toEqual(songs)
+  })
+
+  it('filters by case-insensitive substring match', () => {
+    expect(filterSongsByQuery(songs, 'flaca')).toEqual([
+      { name: 'La Flaca' },
+      { name: 'Flaca (Calamaro)' }
+    ])
+    expect(filterSongsByQuery(songs, 'ZOMBIE')).toEqual([{ name: 'Zombie' }])
+  })
+
+  it('returns an empty array when nothing matches', () => {
+    expect(filterSongsByQuery(songs, 'nonexistent')).toEqual([])
+  })
+
+  it('preserves the input order among matches', () => {
+    expect(filterSongsByQuery(songs, 'a')).toEqual([
+      { name: 'La Flaca' },
+      { name: 'Flaca (Calamaro)' }
+    ])
   })
 })
 
