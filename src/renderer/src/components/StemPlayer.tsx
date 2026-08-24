@@ -104,8 +104,6 @@ function StemPlayer({
     setMetronomeOn,
     metroVolume,
     setMetroVolume,
-    clickPreset,
-    setClickPreset,
     metroPan,
     setMetroPan,
     playClick,
@@ -179,7 +177,7 @@ function StemPlayer({
     stemMeta: STEM_META,
     trimStart,
     trimEnd,
-    clickPreset
+    clickPreset: 'woodblock'
   })
 
   const stemItems = useMemo(() => {
@@ -546,7 +544,6 @@ function StemPlayer({
           metronomeOn={metronomeOn}
           metroVolume={metroVolume}
           metroPan={metroPan}
-          clickPreset={clickPreset}
           monitorVolume={monitorVolume}
           recordingFormat={recordingFormat}
           countInBars={countInBars}
@@ -562,7 +559,6 @@ function StemPlayer({
           onMetronomeToggle={handleMetronomeToggle}
           onMetroVolumeChange={handleMetroVolumeChange}
           onMetroPanChange={setMetroPan}
-          onClickPresetChange={setClickPreset}
           onMonitorVolumeChange={handleMonitorVolumeChange}
           onRecordingFormatChange={handleRecordingFormatChange}
           onCountInBarsChange={handleCountInBarsChange}

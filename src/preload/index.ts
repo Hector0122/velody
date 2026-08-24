@@ -125,7 +125,7 @@ const api = {
       bpm?: number
       trimStart?: number
       trimEnd?: number
-      clickPreset?: 'pingpong' | 'woodblock' | 'rimclick' | 'beep'
+      clickPreset?: 'woodblock'
     }
   ) => ipcRenderer.invoke('export:mix', filePaths, outputPath, options),
   exportSingle: (

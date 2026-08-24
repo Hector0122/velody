@@ -1,7 +1,6 @@
 import { useState, useRef, useEffect, useCallback, useLayoutEffect } from 'react'
-import useClickPreset from './useClickPreset'
 import useLocalStoragePreference from './useLocalStoragePreference'
-import { type ClickPreset, CLICK_PRESETS } from './clickPresets'
+import { CLICK_PRESETS } from './clickPresets'
 
 const LOOKAHEAD = 0.3
 
@@ -49,8 +48,6 @@ export function useMetronome(
   setMetronomeOn: (v: boolean | ((prev: boolean) => boolean)) => void
   metroVolume: number
   setMetroVolume: (v: number) => void
-  clickPreset: ClickPreset
-  setClickPreset: (v: ClickPreset) => void
   metroPan: number
   setMetroPan: (v: number) => void
   lastScheduledBeatRef: React.MutableRefObject<number>
@@ -66,9 +63,19 @@ export function useMetronome(
 } {
   const [metronomeOn, setMetronomeOn] = useState(false)
   const [bpm, setBpm] = useState(120)
-  const [metroVolume, setMetroVolume] = useState(0.5)
-  const [clickPreset, setClickPreset] = useClickPreset()
-  // Global (not per-song) preference, like clickPreset — see
+  // Global (not per-song) preference, persisted like metroPan below —
+  // previously a plain useState defaulting to 0.5 and reset every launch,
+  // which meant "turn it up louder" never stuck; reported as feeling
+  // perpetually quiet even after raising it. Default raised to 0.85 (was
+  // 0.5) so a fresh install/cleared storage also starts loud enough to
+  // actually hear over a full band — see
+  // simplify-metronome-to-woodblock-only.
+  const [metroVolume, setMetroVolume] = useLocalStoragePreference(
+    'velody:metroVolume',
+    0.85,
+    isFiniteNumber
+  )
+  // Global (not per-song) preference — see
   // openspec/changes/add-metronome-and-mix-panning: lets the click be
   // panned hard to one channel (e.g. to a drummer's monitor via a
   // stereo-splitter cable) independent of the overall mix's pan.
@@ -77,7 +84,6 @@ export function useMetronome(
   const metronomeOnRef = useRef(metronomeOn)
   const bpmRef = useRef(bpm)
   const metroVolumeRef = useRef(metroVolume)
-  const clickPresetRef = useRef(clickPreset)
   // Dual-purpose dedup counter: "last scheduled beat number" in constant-tempo
   // mode, "last scheduled beat-grid index" in grid mode. The two modes are
   // mutually exclusive per tick, and every transition between them (song
@@ -98,7 +104,6 @@ export function useMetronome(
     metronomeOnRef.current = metronomeOn
     bpmRef.current = bpm
     metroVolumeRef.current = metroVolume
-    clickPresetRef.current = clickPreset
     if (panNodeRef.current) panNodeRef.current.pan.value = metroPan
   })
 
@@ -122,13 +127,7 @@ export function useMetronome(
     const ctx = audioCtxRef.current
     if (!ctx) return
     const destination = panNodeRef.current ?? ctx.destination
-    CLICK_PRESETS[clickPresetRef.current](
-      ctx,
-      accent,
-      scheduledTime,
-      metroVolumeRef.current,
-      destination
-    )
+    CLICK_PRESETS.woodblock(ctx, accent, scheduledTime, metroVolumeRef.current, destination)
   }, [])
 
   // Constant-tempo extrapolation from `offset`/beat 0 — today's algorithm,
@@ -259,8 +258,6 @@ export function useMetronome(
     setMetronomeOn,
     metroVolume,
     setMetroVolume,
-    clickPreset,
-    setClickPreset,
     metroPan,
     setMetroPan,
     lastScheduledBeatRef,

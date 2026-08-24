@@ -5,10 +5,26 @@ import { useMetronome } from '../hooks/useMetronome'
 
 interface TrackedOsc {
   type: string
-  frequency: { value: number }
+  // woodblock (the only click preset now — see
+  // simplify-metronome-to-woodblock-only) sweeps frequency via
+  // setValueAtTime/exponentialRampToValueAtTime rather than assigning
+  // .value directly, so the stub tracks calls to those instead of a plain
+  // value.
+  frequency: {
+    value: number
+    setValueAtTime: ReturnType<typeof vi.fn>
+    exponentialRampToValueAtTime: ReturnType<typeof vi.fn>
+  }
   connect: ReturnType<typeof vi.fn>
   start: ReturnType<typeof vi.fn>
   stop: ReturnType<typeof vi.fn>
+}
+
+// The frequency setValueAtTime call's first argument is the sweep's start
+// frequency — 900 (accent) or 650 (non-accent) for woodblock — used below
+// in place of the old fixed-value .frequency.value checks.
+function startFreq(osc: TrackedOsc): number | undefined {
+  return osc.frequency.setValueAtTime.mock.calls[0]?.[0]
 }
 
 function stubAudioContext(oscillators: TrackedOsc[]): void {
@@ -19,7 +35,7 @@ function stubAudioContext(oscillators: TrackedOsc[]): void {
     createOscillator(): TrackedOsc {
       const osc: TrackedOsc = {
         type: '',
-        frequency: { value: 0 },
+        frequency: { value: 0, setValueAtTime: vi.fn(), exponentialRampToValueAtTime: vi.fn() },
         connect: vi.fn(),
         start: vi.fn(),
         stop: vi.fn()
@@ -69,15 +85,6 @@ describe('useMetronome - beat-grid scheduling', () => {
     vi.useFakeTimers()
     oscillators = []
     stubAudioContext(oscillators)
-    // These tests exercise the scheduler (beat-grid timing, accent
-    // alternation, constant-tempo fallback), not click synthesis — force
-    // the 'beep' preset, which is byte-for-byte the pre-add-metronome-
-    // click-sounds implementation (osc.frequency.value=, single
-    // oscillator/gain, no noise burst), so the existing assertions below
-    // stay meaningful without needing to also stub createBufferSource/
-    // createBiquadFilter for presets these tests aren't about. Click
-    // synthesis itself is covered by clickPresets.test.ts.
-    window.localStorage.setItem('velody:clickPreset', JSON.stringify('beep'))
   })
 
   afterEach(() => {
@@ -100,7 +107,7 @@ describe('useMetronome - beat-grid scheduling', () => {
 
     expect(oscillators).toHaveLength(1)
     expect(oscillators[0].start).toHaveBeenCalledWith(expect.closeTo(0.2, 5))
-    expect(oscillators[0].frequency.value).toBe(1600) // idx 0 % 4 === 0 -> accent
+    expect(startFreq(oscillators[0])).toBe(900) // idx 0 % 4 === 0 -> accent
 
     // Simulate a seek to just before beatTimes[3] (2.5), skipping over
     // beatTimes[1]/[2] entirely.
@@ -111,7 +118,7 @@ describe('useMetronome - beat-grid scheduling', () => {
 
     expect(oscillators).toHaveLength(2)
     expect(oscillators[1].start).toHaveBeenCalledWith(expect.closeTo(0.15, 5))
-    expect(oscillators[1].frequency.value).toBe(900) // idx 3 % 4 !== 0 -> not accent
+    expect(startFreq(oscillators[1])).toBe(650) // idx 3 % 4 !== 0 -> not accent
   })
 
   it('extrapolates at a constant interval anchored to the last detected beat once the grid runs out', () => {
@@ -177,7 +184,7 @@ describe('useMetronome - beat-grid scheduling', () => {
     // 0.5s (idx -16), a 0.25s delay from t=0.25 — not silence.
     expect(oscillators).toHaveLength(1)
     expect(oscillators[0].start).toHaveBeenCalledWith(expect.closeTo(0.25, 5))
-    expect(oscillators[0].frequency.value).toBe(1600) // idx -16 % 4 === 0 -> accent
+    expect(startFreq(oscillators[0])).toBe(900) // idx -16 % 4 === 0 -> accent
   })
 
   it('keeps the correct accent pattern on a non-accented extrapolated beat', () => {
@@ -195,7 +202,7 @@ describe('useMetronome - beat-grid scheduling', () => {
 
     expect(oscillators).toHaveLength(1)
     expect(oscillators[0].start).toHaveBeenCalledWith(expect.closeTo(0.25, 5))
-    expect(oscillators[0].frequency.value).toBe(900) // idx -15 % 4 !== 0 -> not accent
+    expect(startFreq(oscillators[0])).toBe(650) // idx -15 % 4 !== 0 -> not accent
   })
 
   it('hands off seamlessly from extrapolated beats to the real grid with no gap or double click', () => {
@@ -223,7 +230,7 @@ describe('useMetronome - beat-grid scheduling', () => {
     // two (a duplicate at the extrapolated/real boundary).
     expect(oscillators).toHaveLength(2)
     expect(oscillators[1].start).toHaveBeenCalledWith(expect.closeTo(0.25, 5))
-    expect(oscillators[1].frequency.value).toBe(1600) // real idx 0 -> accent
+    expect(startFreq(oscillators[1])).toBe(900) // real idx 0 -> accent
   })
 
   it('schedules the real first beat directly when the intro is shorter than one beat interval (nothing to extrapolate)', () => {
@@ -245,7 +252,7 @@ describe('useMetronome - beat-grid scheduling', () => {
 
     expect(oscillators).toHaveLength(1)
     expect(oscillators[0].start).toHaveBeenCalledWith(expect.closeTo(0.25, 5))
-    expect(oscillators[0].frequency.value).toBe(1600) // real idx 0 -> accent
+    expect(startFreq(oscillators[0])).toBe(900) // real idx 0 -> accent
   })
 })
 
@@ -255,10 +262,6 @@ describe('useMetronome - metronome pan', () => {
   beforeEach(() => {
     panNodes = []
     window.localStorage.clear()
-    // These tests exercise pan routing, not click synthesis — force 'beep'
-    // (simple oscillator, no frequency sweep) since this stub's
-    // createOscillator only supports the plain `frequency.value =` API.
-    window.localStorage.setItem('velody:clickPreset', JSON.stringify('beep'))
     class FakeAudioContext {
       state = 'running'
       currentTime = 0
@@ -266,7 +269,7 @@ describe('useMetronome - metronome pan', () => {
       createOscillator(): TrackedOsc {
         return {
           type: '',
-          frequency: { value: 0 },
+          frequency: { value: 0, setValueAtTime: vi.fn(), exponentialRampToValueAtTime: vi.fn() },
           connect: vi.fn(),
           start: vi.fn(),
           stop: vi.fn()

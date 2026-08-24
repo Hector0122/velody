@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { CLICK_PRESETS, isClickPreset, DEFAULT_CLICK_PRESET } from '../hooks/clickPresets'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { CLICK_PRESETS } from '../hooks/clickPresets'
 
 interface TrackedOsc {
   type: string
@@ -8,13 +8,6 @@ interface TrackedOsc {
     setValueAtTime: ReturnType<typeof vi.fn>
     exponentialRampToValueAtTime: ReturnType<typeof vi.fn>
   }
-  connect: ReturnType<typeof vi.fn>
-  start: ReturnType<typeof vi.fn>
-  stop: ReturnType<typeof vi.fn>
-}
-
-interface TrackedNoiseSource {
-  buffer: AudioBuffer | null
   connect: ReturnType<typeof vi.fn>
   start: ReturnType<typeof vi.fn>
   stop: ReturnType<typeof vi.fn>
@@ -32,14 +25,10 @@ function makeFakeAudioContext(): {
   ctx: AudioContext
   destination: AudioNode
   oscillators: TrackedOsc[]
-  noiseSources: TrackedNoiseSource[]
   gains: TrackedGain[]
-  filters: { type: string; frequency: { value: number } }[]
 } {
   const oscillators: TrackedOsc[] = []
-  const noiseSources: TrackedNoiseSource[] = []
   const gains: TrackedGain[] = []
-  const filters: { type: string; frequency: { value: number } }[] = []
   // A distinct object (not ctx.destination) — proves the preset connects to
   // whatever `destination` node it's given, not a hardcoded ctx.destination
   // (see add-metronome-and-mix-panning, which routes clicks through its own
@@ -47,7 +36,6 @@ function makeFakeAudioContext(): {
   const destination = {} as AudioNode
 
   const ctx = {
-    sampleRate: 44100,
     createOscillator: (): TrackedOsc => {
       const osc: TrackedOsc = {
         type: '',
@@ -67,132 +55,61 @@ function makeFakeAudioContext(): {
       gains.push(gain)
       return gain
     },
-    createBuffer: (_channels: number, length: number) => ({
-      getChannelData: () => new Float32Array(length)
-    }),
-    createBufferSource: (): TrackedNoiseSource => {
-      const src: TrackedNoiseSource = {
-        buffer: null,
-        connect: vi.fn(),
-        start: vi.fn(),
-        stop: vi.fn()
-      }
-      noiseSources.push(src)
-      return src
-    },
-    createBiquadFilter: () => {
-      const filter = { type: '', frequency: { value: 0 }, connect: vi.fn() }
-      filters.push(filter)
-      return filter
-    },
     destination: {}
   } as unknown as AudioContext
 
-  return { ctx, destination, oscillators, noiseSources, gains, filters }
+  return { ctx, destination, oscillators, gains }
 }
 
-describe('isClickPreset', () => {
-  it('accepts every known preset id', () => {
-    expect(isClickPreset('pingpong')).toBe(true)
-    expect(isClickPreset('woodblock')).toBe(true)
-    expect(isClickPreset('rimclick')).toBe(true)
-    expect(isClickPreset('beep')).toBe(true)
-  })
-
-  it('rejects anything else', () => {
-    expect(isClickPreset('kick')).toBe(false)
-    expect(isClickPreset(42)).toBe(false)
-    expect(isClickPreset(null)).toBe(false)
-    expect(isClickPreset(undefined)).toBe(false)
-  })
-})
-
-describe('CLICK_PRESETS', () => {
+describe('CLICK_PRESETS.woodblock', () => {
   let env: ReturnType<typeof makeFakeAudioContext>
 
   beforeEach(() => {
     env = makeFakeAudioContext()
   })
 
-  it('DEFAULT_CLICK_PRESET is a valid preset id', () => {
-    expect(isClickPreset(DEFAULT_CLICK_PRESET)).toBe(true)
-  })
-
-  it('pingpong: sine oscillator sweep plus a bandpass noise burst, both routed to the given destination', () => {
-    CLICK_PRESETS.pingpong(env.ctx, true, 0, 1, env.destination)
-
-    expect(env.oscillators).toHaveLength(1)
-    expect(env.oscillators[0].type).toBe('sine')
-    expect(env.oscillators[0].frequency.setValueAtTime).toHaveBeenCalledWith(2000, 0)
-    expect(env.oscillators[0].frequency.exponentialRampToValueAtTime).toHaveBeenCalledWith(
-      1200,
-      expect.closeTo(0.012, 5)
-    )
-    expect(env.noiseSources).toHaveLength(1)
-    expect(env.filters).toHaveLength(1)
-    expect(env.filters[0].type).toBe('bandpass')
-    expect(env.filters[0].frequency.value).toBe(2500)
-    // Both the tone gain and the noise gain connect to `destination`, not
-    // ctx.destination directly.
-    expect(env.gains).toHaveLength(2)
-    for (const gain of env.gains) {
-      expect(gain.connect).toHaveBeenCalledWith(env.destination)
-    }
-  })
-
-  it('pingpong: regular (non-accent) beat uses lower sweep frequencies', () => {
-    CLICK_PRESETS.pingpong(env.ctx, false, 0, 1, env.destination)
-
-    expect(env.oscillators[0].frequency.setValueAtTime).toHaveBeenCalledWith(1400, 0)
-    expect(env.oscillators[0].frequency.exponentialRampToValueAtTime).toHaveBeenCalledWith(
-      900,
-      expect.closeTo(0.012, 5)
-    )
-  })
-
-  it('woodblock: triangle oscillator sweep, no noise burst, routed to the given destination', () => {
+  it('triangle oscillator sweep, routed to the given destination', () => {
     CLICK_PRESETS.woodblock(env.ctx, true, 0, 1, env.destination)
 
     expect(env.oscillators).toHaveLength(1)
     expect(env.oscillators[0].type).toBe('triangle')
     expect(env.oscillators[0].frequency.setValueAtTime).toHaveBeenCalledWith(900, 0)
-    expect(env.noiseSources).toHaveLength(0)
+    expect(env.oscillators[0].frequency.exponentialRampToValueAtTime).toHaveBeenCalledWith(
+      500,
+      expect.closeTo(0.03, 5)
+    )
     expect(env.gains[0].connect).toHaveBeenCalledWith(env.destination)
   })
 
-  it('rimclick: noise burst only, no oscillator, routed to the given destination', () => {
-    CLICK_PRESETS.rimclick(env.ctx, true, 0, 1, env.destination)
+  it('regular (non-accent) beat uses lower sweep frequencies', () => {
+    CLICK_PRESETS.woodblock(env.ctx, false, 0, 1, env.destination)
 
-    expect(env.oscillators).toHaveLength(0)
-    expect(env.noiseSources).toHaveLength(1)
-    expect(env.filters[0].frequency.value).toBe(3500)
-    expect(env.gains[0].connect).toHaveBeenCalledWith(env.destination)
+    expect(env.oscillators[0].frequency.setValueAtTime).toHaveBeenCalledWith(650, 0)
+    expect(env.oscillators[0].frequency.exponentialRampToValueAtTime).toHaveBeenCalledWith(
+      400,
+      expect.closeTo(0.03, 5)
+    )
   })
 
-  it('beep: triangle oscillator at a fixed frequency, matching the original implementation', () => {
-    CLICK_PRESETS.beep(env.ctx, true, 0, 1, env.destination)
+  // Regression coverage for simplify-metronome-to-woodblock-only: reported
+  // too quiet even at the volume slider's max — gain multipliers boosted
+  // from the original 0.5/0.35 to 0.95/0.75.
+  it('uses the boosted gain multipliers (accent louder than non-accent, both well above the old 0.5/0.35)', () => {
+    CLICK_PRESETS.woodblock(env.ctx, true, 0, 1, env.destination)
+    expect(env.gains[0].gain.setValueAtTime).toHaveBeenCalledWith(0.95, 0)
 
-    expect(env.oscillators).toHaveLength(1)
-    expect(env.oscillators[0].type).toBe('triangle')
-    expect(env.oscillators[0].frequency.value).toBe(1600)
-    expect(env.noiseSources).toHaveLength(0)
-    expect(env.gains[0].connect).toHaveBeenCalledWith(env.destination)
+    const nonAccentEnv = makeFakeAudioContext()
+    CLICK_PRESETS.woodblock(nonAccentEnv.ctx, false, 0, 1, nonAccentEnv.destination)
+    expect(nonAccentEnv.gains[0].gain.setValueAtTime).toHaveBeenCalledWith(0.75, 0)
   })
 
-  it('beep: non-accent beat uses the lower fixed frequency', () => {
-    CLICK_PRESETS.beep(env.ctx, false, 0, 1, env.destination)
-    expect(env.oscillators[0].frequency.value).toBe(900)
+  it('scales gain by the given volume', () => {
+    CLICK_PRESETS.woodblock(env.ctx, true, 0, 0.5, env.destination)
+    expect(env.gains[0].gain.setValueAtTime).toHaveBeenCalledWith(0.475, 0)
   })
 
-  it('every preset schedules its nodes to start at the given scheduledTime', () => {
-    for (const preset of Object.values(CLICK_PRESETS)) {
-      const e = makeFakeAudioContext()
-      preset(e.ctx, true, 1.5, 1, e.destination)
-      const started = [...e.oscillators, ...e.noiseSources]
-      expect(started.length).toBeGreaterThan(0)
-      for (const node of started) {
-        expect(node.start).toHaveBeenCalledWith(1.5)
-      }
-    }
+  it('schedules the oscillator to start at the given scheduledTime', () => {
+    CLICK_PRESETS.woodblock(env.ctx, true, 1.5, 1, env.destination)
+    expect(env.oscillators[0].start).toHaveBeenCalledWith(1.5)
   })
 })

@@ -99,7 +99,7 @@ export interface VelodyAPI {
       bpm?: number
       trimStart?: number
       trimEnd?: number
-      clickPreset?: 'pingpong' | 'woodblock' | 'rimclick' | 'beep'
+      clickPreset?: 'woodblock'
     }
   ) => Promise<ExportResult>
   exportSingle: (
