@@ -5,6 +5,7 @@ import RecordingConfirmationModal from './RecordingConfirmationModal'
 import StemGrid from './StemGrid'
 import MasterPanel from './MasterPanel'
 import TimelinePanel from './TimelinePanel'
+import LivePresetBar from './LivePresetBar'
 import { useMetronome, RESET_SCHEDULED_BEAT } from '../hooks/useMetronome'
 import { useRecording } from '../hooks/useRecording'
 import useSongAnalysis, { CACHE_VERSION } from '../hooks/useSongAnalysis'
@@ -12,6 +13,7 @@ import { correctTempoOctave, type TempoOctaveDirection } from '../hooks/tempoOct
 import useMarkers from '../hooks/useMarkers'
 import useTrim from '../hooks/useTrim'
 import useSongCountIn from '../hooks/useSongCountIn'
+import useLivePresets from '../hooks/useLivePresets'
 import useCountIn, { COUNT_IN_LEAD_IN } from '../hooks/useCountIn'
 import { useExportState } from '../hooks/useExportState'
 import { useWaveSurfers } from '../hooks/useWaveSurfers'
@@ -139,6 +141,29 @@ function StemPlayer({
   )
 
   useSongAnalysis(urls, stems, setBpm, firstBeatOffsetRef, originalBpmRef, beatTimesRef)
+
+  // Named "ready to play" mix snapshots (mute/volume/pan/metronome-on/
+  // master-volume) — see openspec/changes/add-live-presets. Applies the
+  // last-used preset automatically on song open.
+  const {
+    presets: livePresets,
+    activePresetId,
+    handleSavePreset,
+    handleApplyPreset,
+    handleDeletePreset
+  } = useLivePresets({
+    stems,
+    active,
+    stemVolumes,
+    stemPannings,
+    metronomeOn,
+    masterVolume,
+    setActive,
+    setStemVolumes,
+    setStemPannings,
+    setMetronomeOn,
+    setMasterVolume
+  })
 
   const {
     markers,
@@ -632,7 +657,7 @@ function StemPlayer({
     <>
       <div className="flex gap-5 w-full">
         <div className="flex-1 space-y-6 min-w-0 order-0">
-          <div className="bg-neutral-900/80 rounded-md border border-neutral-800 p-5">
+          <div className="bg-neutral-900/80 rounded-md border border-neutral-800 p-5 space-y-3">
             <div className="flex items-center justify-between">
               <h2 className="text-xl font-bold text-white">{songName}</h2>
               {onNextSong && (
@@ -646,6 +671,13 @@ function StemPlayer({
                 </button>
               )}
             </div>
+            <LivePresetBar
+              presets={livePresets}
+              activePresetId={activePresetId}
+              onApply={handleApplyPreset}
+              onSave={handleSavePreset}
+              onDelete={handleDeletePreset}
+            />
           </div>
 
           <TimelinePanel
