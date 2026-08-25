@@ -21,14 +21,25 @@ interface TrackedGain {
   }
 }
 
+interface TrackedNoiseSource {
+  buffer: AudioBuffer | null
+  connect: ReturnType<typeof vi.fn>
+  start: ReturnType<typeof vi.fn>
+  stop: ReturnType<typeof vi.fn>
+}
+
 function makeFakeAudioContext(): {
   ctx: AudioContext
   destination: AudioNode
   oscillators: TrackedOsc[]
   gains: TrackedGain[]
+  noiseSources: TrackedNoiseSource[]
+  filters: { type: string; frequency: { value: number } }[]
 } {
   const oscillators: TrackedOsc[] = []
   const gains: TrackedGain[] = []
+  const noiseSources: TrackedNoiseSource[] = []
+  const filters: { type: string; frequency: { value: number } }[] = []
   // A distinct object (not ctx.destination) — proves the preset connects to
   // whatever `destination` node it's given, not a hardcoded ctx.destination
   // (see add-metronome-and-mix-panning, which routes clicks through its own
@@ -36,6 +47,7 @@ function makeFakeAudioContext(): {
   const destination = {} as AudioNode
 
   const ctx = {
+    sampleRate: 44100,
     createOscillator: (): TrackedOsc => {
       const osc: TrackedOsc = {
         type: '',
@@ -55,10 +67,28 @@ function makeFakeAudioContext(): {
       gains.push(gain)
       return gain
     },
+    createBuffer: (_channels: number, length: number) => ({
+      getChannelData: () => new Float32Array(length)
+    }),
+    createBufferSource: (): TrackedNoiseSource => {
+      const src: TrackedNoiseSource = {
+        buffer: null,
+        connect: vi.fn(),
+        start: vi.fn(),
+        stop: vi.fn()
+      }
+      noiseSources.push(src)
+      return src
+    },
+    createBiquadFilter: () => {
+      const filter = { type: '', frequency: { value: 0 }, connect: vi.fn() }
+      filters.push(filter)
+      return filter
+    },
     destination: {}
   } as unknown as AudioContext
 
-  return { ctx, destination, oscillators, gains }
+  return { ctx, destination, oscillators, gains, noiseSources, filters }
 }
 
 describe('CLICK_PRESETS.woodblock', () => {
@@ -78,7 +108,6 @@ describe('CLICK_PRESETS.woodblock', () => {
       500,
       expect.closeTo(0.03, 5)
     )
-    expect(env.gains[0].connect).toHaveBeenCalledWith(env.destination)
   })
 
   it('regular (non-accent) beat uses lower sweep frequencies', () => {
@@ -91,25 +120,59 @@ describe('CLICK_PRESETS.woodblock', () => {
     )
   })
 
-  // Regression coverage for simplify-metronome-to-woodblock-only: reported
-  // too quiet even at the volume slider's max — gain multipliers boosted
-  // from the original 0.5/0.35 to 0.95/0.75.
-  it('uses the boosted gain multipliers (accent louder than non-accent, both well above the old 0.5/0.35)', () => {
+  // Regression coverage for simplify-metronome-to-woodblock-only (raised
+  // 0.5/0.35 to 0.95/0.75 — still reported too quiet/dull) and its
+  // follow-up (this one): a tone-only click can't cut through a live mix
+  // no matter how loud, so the budget was rebalanced between the tone and
+  // a new noise-burst transient (below) rather than just raised further.
+  it('uses the rebalanced tone gain (accent louder than non-accent)', () => {
     CLICK_PRESETS.woodblock(env.ctx, true, 0, 1, env.destination)
-    expect(env.gains[0].gain.setValueAtTime).toHaveBeenCalledWith(0.95, 0)
+    expect(env.gains[0].gain.setValueAtTime).toHaveBeenCalledWith(0.7, 0)
 
     const nonAccentEnv = makeFakeAudioContext()
     CLICK_PRESETS.woodblock(nonAccentEnv.ctx, false, 0, 1, nonAccentEnv.destination)
-    expect(nonAccentEnv.gains[0].gain.setValueAtTime).toHaveBeenCalledWith(0.75, 0)
+    expect(nonAccentEnv.gains[0].gain.setValueAtTime).toHaveBeenCalledWith(0.55, 0)
   })
 
-  it('scales gain by the given volume', () => {
+  it('layers a short filtered-noise burst on top of the tone, for perceptual "punch"', () => {
+    CLICK_PRESETS.woodblock(env.ctx, true, 0, 1, env.destination)
+
+    expect(env.noiseSources).toHaveLength(1)
+    expect(env.noiseSources[0].start).toHaveBeenCalledWith(0)
+    expect(env.filters).toHaveLength(1)
+    expect(env.filters[0].type).toBe('bandpass')
+    expect(env.filters[0].frequency.value).toBe(2000)
+    // Tone gain + noise gain: 2 gain nodes total.
+    expect(env.gains).toHaveLength(2)
+    expect(env.gains[1].gain.setValueAtTime).toHaveBeenCalledWith(0.3, 0)
+    for (const gain of env.gains) {
+      expect(gain.connect).toHaveBeenCalledWith(env.destination)
+    }
+  })
+
+  it('noise burst is quieter on a non-accent beat, matching the tone', () => {
+    CLICK_PRESETS.woodblock(env.ctx, false, 0, 1, env.destination)
+    expect(env.gains[1].gain.setValueAtTime).toHaveBeenCalledWith(0.2, 0)
+  })
+
+  // Tone (0.7) + noise (0.3) at full volume = 1.0 combined peak for the
+  // accent — right at, not past, full scale.
+  it('tone + noise combined peak stays at or under full scale (1.0) even at full volume', () => {
+    CLICK_PRESETS.woodblock(env.ctx, true, 0, 1, env.destination)
+    const tonePeak = env.gains[0].gain.setValueAtTime.mock.calls[0][0]
+    const noisePeak = env.gains[1].gain.setValueAtTime.mock.calls[0][0]
+    expect(tonePeak + noisePeak).toBeLessThanOrEqual(1.0)
+  })
+
+  it('scales both tone and noise gain by the given volume', () => {
     CLICK_PRESETS.woodblock(env.ctx, true, 0, 0.5, env.destination)
-    expect(env.gains[0].gain.setValueAtTime).toHaveBeenCalledWith(0.475, 0)
+    expect(env.gains[0].gain.setValueAtTime).toHaveBeenCalledWith(0.35, 0)
+    expect(env.gains[1].gain.setValueAtTime).toHaveBeenCalledWith(0.15, 0)
   })
 
-  it('schedules the oscillator to start at the given scheduledTime', () => {
+  it('schedules the oscillator and the noise burst to start at the given scheduledTime', () => {
     CLICK_PRESETS.woodblock(env.ctx, true, 1.5, 1, env.destination)
     expect(env.oscillators[0].start).toHaveBeenCalledWith(1.5)
+    expect(env.noiseSources[0].start).toHaveBeenCalledWith(1.5)
   })
 })

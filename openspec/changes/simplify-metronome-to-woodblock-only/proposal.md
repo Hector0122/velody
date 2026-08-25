@@ -81,3 +81,13 @@ add or change a user-facing capability contract. `skip_specs: true` set in
   start-frequency instead of a fixed `.value`), `clickPresets.test.ts` and
   `clickSampleValue.test.ts` (trimmed to Wood Block only, plus new gain
   regression coverage), `useClickPreset.test.ts` deleted.
+
+## Follow-up (see tasks.md — section 6)
+
+Live-tested and still reported too quiet/dull even with the volume fix in
+place and the slider maxed — raw gain (0.95/0.75) was already near the
+safe headroom ceiling, so the real fix was giving the click a percussive
+attack transient (a brief noise burst, matching the removed presets'
+technique) rather than more raw tone volume, which a sustained tone can't
+buy no matter how loud. Tone/noise gain rebalanced (0.7/0.55 tone,
+0.3/0.2 noise) so the combined peak still stays at/under full scale.

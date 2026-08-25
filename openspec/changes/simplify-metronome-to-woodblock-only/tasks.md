@@ -60,3 +60,38 @@
       format, count-in bars) still functional once open.
 - [ ] 5.5 Export a mix with "include metronome click" enabled and confirm
       the baked-in click is also audibly louder than before.
+
+## 6. Follow-up: still reported too quiet after raising raw gain (5.1)
+
+Live-tested after task 5.1: the volume default/persistence fix confirmed
+working, but the click still didn't feel loud/present enough even with the
+volume slider maxed — 0.95/0.75 was already close to the safe headroom
+ceiling (destination clips above ~1.0), so more raw gain wasn't a viable
+lever. Root cause: a sustained triangle-wave tone doesn't cut through a
+live band mix the way a sharp transient does, regardless of peak
+amplitude — human hearing weighs a transient's perceived loudness well
+above a sustained tone's at the same level.
+
+- [x] 6.1 Re-added a short (5ms) filtered-noise burst (`playNoiseBurst`,
+      matching the removed `pingpong`/`rimclick` presets' technique) layered
+      on top of woodblock's tone in `clickPresets.ts`, giving it a
+      percussive attack transient.
+- [x] 6.2 Rebalanced the gain budget between tone and noise rather than
+      just adding the noise on top of the existing 0.95/0.75 (which would
+      have risked clipping): tone dropped to 0.7/0.55, noise burst added at
+      0.3/0.2 — combined accent peak lands at exactly 1.0 (full scale, not
+      past it) even at full volume.
+- [x] 6.3 Mirrored the same tone/noise rebalance in the main process's
+      `clickSampleValue` (export click-track rendering) so an exported
+      mix's baked-in click still matches what's heard live.
+- [x] 6.4 Updated `clickPresets.test.ts`/`clickSampleValue.test.ts` for the
+      new gain values and the noise burst (new tests for its presence,
+      randomness, and the window it's confined to); extended
+      `useMetronome.test.ts`'s `FakeAudioContext` stubs with
+      `createBuffer`/`createBufferSource`/`createBiquadFilter` (woodblock
+      now calls these, which the scheduling-focused stubs didn't
+      previously need).
+
+- [ ] 6.5 Manual verification: confirm the click now has an audible
+      "punch"/attack that cuts through a full band mix, not just a louder
+      tone.

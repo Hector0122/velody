@@ -75,16 +75,25 @@ export type ClickTrackPreset = 'woodblock'
 // original pre-add-metronome-click-sounds math, fixed here rather than
 // preserved) would otherwise trigger the click branch across that entire
 // negative half with an unbounded, clipping `(1 - phase)` envelope for very
-// negative `beatPos`. Gain multipliers match the renderer's boosted
-// woodblock (0.95/0.75, was 0.5/0.35 — reported as too quiet even at max
-// volume; see simplify-metronome-to-woodblock-only) so an exported mix's
-// baked-in click matches what's heard live.
+// negative `beatPos`. Tone + noise-burst gain balance matches the
+// renderer's woodblock (see clickPresets.ts's `woodblock`/`playNoiseBurst`
+// — a boosted-gain-only tone still read as too soft/dull to cut through a
+// live mix, so a brief noise transient was added and the budget rebalanced
+// between the two rather than just raising raw gain further) so an
+// exported mix's baked-in click matches what's heard live.
 export function clickSampleValue(beatPos: number, accent: boolean): number {
   const decay = 0.03
-  if (beatPos < 0 || beatPos >= decay) return 0
-  const [start, end] = accent ? [900, 500] : [650, 400]
-  const freq = start + (end - start) * (beatPos / decay)
-  return Math.sin(2 * Math.PI * freq * beatPos) * (1 - beatPos / decay) * (accent ? 0.95 : 0.75)
+  let sample = 0
+  if (beatPos >= 0 && beatPos < decay) {
+    const [start, end] = accent ? [900, 500] : [650, 400]
+    const freq = start + (end - start) * (beatPos / decay)
+    sample = Math.sin(2 * Math.PI * freq * beatPos) * (1 - beatPos / decay) * (accent ? 0.7 : 0.55)
+  }
+  const noiseDur = 0.005
+  if (beatPos >= 0 && beatPos < noiseDur) {
+    sample += (Math.random() * 2 - 1) * (1 - beatPos / noiseDur) * (accent ? 0.3 : 0.2)
+  }
+  return sample
 }
 
 function getStemsRootDir(): string {

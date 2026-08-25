@@ -31,6 +31,7 @@ function stubAudioContext(oscillators: TrackedOsc[]): void {
   class FakeAudioContext {
     state = 'running'
     currentTime = 0
+    sampleRate = 44100
     destination = {}
     createOscillator(): TrackedOsc {
       const osc: TrackedOsc = {
@@ -51,6 +52,18 @@ function stubAudioContext(oscillators: TrackedOsc[]): void {
     }
     createStereoPanner(): unknown {
       return { connect: vi.fn(), pan: { value: 0 } }
+    }
+    // woodblock's noise-burst "punch" transient (see clickPresets.ts) —
+    // these tests are about scheduling, not click synthesis, so just
+    // enough of a stub to not throw.
+    createBuffer(_channels: number, length: number): unknown {
+      return { getChannelData: () => new Float32Array(length) }
+    }
+    createBufferSource(): unknown {
+      return { buffer: null, connect: vi.fn(), start: vi.fn(), stop: vi.fn() }
+    }
+    createBiquadFilter(): unknown {
+      return { type: '', frequency: { value: 0 }, connect: vi.fn() }
     }
     resume(): void {
       /* no-op */
@@ -315,6 +328,7 @@ describe('useMetronome - metronome pan', () => {
     class FakeAudioContext {
       state = 'running'
       currentTime = 0
+      sampleRate = 44100
       destination = {}
       createOscillator(): TrackedOsc {
         return {
@@ -335,6 +349,18 @@ describe('useMetronome - metronome pan', () => {
         const node = { pan: { value: 0 }, connect: vi.fn() }
         panNodes.push(node)
         return node
+      }
+      // woodblock's noise-burst "punch" transient (see clickPresets.ts) —
+      // these tests are about pan routing, not click synthesis, so just
+      // enough of a stub to not throw.
+      createBuffer(_channels: number, length: number): unknown {
+        return { getChannelData: () => new Float32Array(length) }
+      }
+      createBufferSource(): unknown {
+        return { buffer: null, connect: vi.fn(), start: vi.fn(), stop: vi.fn() }
+      }
+      createBiquadFilter(): unknown {
+        return { type: '', frequency: { value: 0 }, connect: vi.fn() }
       }
       resume(): void {
         /* no-op */
