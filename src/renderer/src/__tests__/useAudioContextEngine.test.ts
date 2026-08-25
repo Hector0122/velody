@@ -231,7 +231,7 @@ describe('useAudioContextEngine - source lifecycle (mute-at-start / late decode)
     )
   })
 
-  it('starts a live source even for a stem that begins inactive (muted)', async () => {
+  it('starts a live source even for a stem that begins inactive (muted), once playback actually starts', async () => {
     const createdSources: TrackedSource[] = []
     stubTrackingAudioContext(createdSources)
 
@@ -244,8 +244,11 @@ describe('useAudioContextEngine - source lifecycle (mute-at-start / late decode)
     })
 
     act(() => {
-      // Starts playback with only 'vocals' active; 'drums' stays inactive (muted).
+      // Pre-configure the mix while stopped: 'vocals' active, 'drums' left
+      // muted — matches the "set up mutes before pressing Play" workflow
+      // (see fix-stem-mute-while-paused).
       result.current.toggleStem('vocals')
+      result.current.toggleMasterPlay()
     })
 
     // Both stems get a live source — the inactive one just starts at gain 0,
@@ -254,6 +257,90 @@ describe('useAudioContextEngine - source lifecycle (mute-at-start / late decode)
     for (const src of createdSources) {
       expect(src.start).toHaveBeenCalledTimes(1)
     }
+  })
+
+  // Regression coverage for fix-stem-mute-while-paused: toggleStem used to
+  // special-case "master not playing" into auto-starting full playback
+  // (clobbering every *other* stem's mute state) when toggling a muted
+  // stem, and into a silent no-op when toggling an already-active one —
+  // reported as "no puedo poner pausa a stems cuando la canción o el
+  // master está en pausa."
+  describe('toggleStem while paused', () => {
+    it('toggles mute state without starting playback', async () => {
+      const createdSources: TrackedSource[] = []
+      stubTrackingAudioContext(createdSources)
+      const notifyStemDecodedRef = { current: vi.fn() }
+      const setMasterPlaying = vi.fn()
+      const params = buildParams({
+        notifyStemDecodedRef,
+        active: { vocals: true, drums: true },
+        masterPlaying: false,
+        setMasterPlaying
+      })
+      const { result } = renderHook(() => useAudioContextEngine(params))
+      await waitFor(() => expect(notifyStemDecodedRef.current).toHaveBeenCalledTimes(2))
+
+      act(() => {
+        result.current.toggleStem('vocals')
+      })
+
+      expect(createdSources).toHaveLength(0) // no playback started
+      expect(setMasterPlaying).not.toHaveBeenCalled()
+    })
+
+    it('un-muting one stem does not disturb any other stem’s mute state', async () => {
+      stubTrackingAudioContext([])
+      const notifyStemDecodedRef = { current: vi.fn() }
+      const setActive = vi.fn()
+      const params = buildParams({
+        notifyStemDecodedRef,
+        active: { vocals: false, drums: true, bass: false },
+        masterPlaying: false,
+        setActive
+      })
+      const { result } = renderHook(() => useAudioContextEngine(params))
+      await waitFor(() => expect(notifyStemDecodedRef.current).toHaveBeenCalledTimes(2))
+
+      act(() => {
+        result.current.toggleStem('vocals')
+      })
+
+      // setActive is called with an updater function here (the real hook,
+      // not a plain object) — apply it to the prior state to confirm only
+      // 'vocals' changed.
+      const updater = setActive.mock.calls[0][0] as (
+        prev: Record<string, boolean>
+      ) => Record<string, boolean>
+      expect(updater({ vocals: false, drums: true, bass: false })).toEqual({
+        vocals: true,
+        drums: true,
+        bass: false
+      })
+    })
+
+    it('toggling an already-active stem off actually works (previously a silent no-op)', async () => {
+      stubTrackingAudioContext([])
+      const notifyStemDecodedRef = { current: vi.fn() }
+      const setActive = vi.fn()
+      const params = buildParams({
+        notifyStemDecodedRef,
+        active: { vocals: true },
+        masterPlaying: false,
+        setActive
+      })
+      const { result } = renderHook(() => useAudioContextEngine(params))
+      await waitFor(() => expect(notifyStemDecodedRef.current).toHaveBeenCalledTimes(2))
+
+      act(() => {
+        result.current.toggleStem('vocals')
+      })
+
+      expect(setActive).toHaveBeenCalledTimes(1)
+      const updater = setActive.mock.calls[0][0] as (
+        prev: Record<string, boolean>
+      ) => Record<string, boolean>
+      expect(updater({ vocals: true })).toEqual({ vocals: false })
+    })
   })
 
   it('joins a stem into the live mix once it finishes decoding after playback already started', async () => {

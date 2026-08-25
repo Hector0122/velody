@@ -510,35 +510,29 @@ export function useAudioContextEngine(params: UseAudioContextEngineParams): {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  // Just flips this stem's mute state — regardless of whether playback is
+  // currently running or stopped/paused. No live source needs to exist for
+  // this: while paused, stopSources() has already torn every source down
+  // (see the masterPlaying watcher effect below), so there's nothing to
+  // apply the new state to yet — startSources/toggleMasterPlay picks up
+  // whatever `active` says next time playback actually starts, the same
+  // way a DAW's mixer lets you set mutes before pressing play.
+  //
+  // Previously, while paused, this instead special-cased into "auto-start
+  // full playback, keeping only this one stem active" when toggling a
+  // muted stem — clobbering every *other* stem's mute state in the
+  // process — and silently did nothing at all when toggling an already-
+  // active stem (an early `return`). Reported: "no puedo poner pausa a
+  // stems cuando la canción o el master está en pausa" — the user simply
+  // wants mute to work like a normal toggle regardless of transport state,
+  // which is also what the "set up the mix, then press Play" workflow
+  // add-live-presets is built around actually needs. See
+  // fix-stem-mute-while-paused.
   const toggleStem = useCallback(
     (key: string): void => {
-      if (!masterPlayingRef.current) {
-        if (activeRef.current[key]) return
-        lastScheduledBeatRef.current = RESET_SCHEDULED_BEAT
-        ensureCtx()
-        ensureWaveSurfer(key)
-        isPlayingRef.current = true
-        activeRef.current = { ...activeRef.current, [key]: true }
-        masterPlayingRef.current = true
-        startSources(positionRef.current)
-        rafRef.current = requestAnimationFrame(tick)
-        setActive({ [key]: true })
-        setMasterPlaying(true)
-      } else {
-        setActive((prev) => ({ ...prev, [key]: !prev[key] }))
-      }
+      setActive((prev) => ({ ...prev, [key]: !prev[key] }))
     },
-    [
-      ensureCtx,
-      ensureWaveSurfer,
-      startSources,
-      tick,
-      setActive,
-      setMasterPlaying,
-      lastScheduledBeatRef,
-      positionRef,
-      masterPlayingRef
-    ]
+    [setActive]
   )
 
   // `when` (this AudioContext's own currentTime scale), if given, defers
