@@ -1,34 +1,33 @@
-# velody
+# Velody 🎧
 
-An Electron application with React and TypeScript
+App de escritorio para separar canciones en pistas (voz, batería, bajo, otros) y practicar sobre ellas — 100% local, sin nube.
 
-## Recommended IDE Setup
+![Reproductor de Velody con stems separados (bajo, batería, guitarra, otros, piano, voz), BPM detectado y controles de mezcla](docs/screenshots/stem-player.png)
 
-- [VSCode](https://code.visualstudio.com/) + [ESLint](https://marketplace.visualstudio.com/items?itemName=dbaeumer.vscode-eslint) + [Prettier](https://marketplace.visualstudio.com/items?itemName=esbenp.prettier-vscode)
+## Por qué existe
 
-## Project Setup
+Las herramientas de separación de stems suelen ser un servicio online: subes tu canción, esperas en una cola, y confías en que alguien más no se quede con tu archivo. Velody hace lo mismo pero corriendo enteramente en tu máquina — nada se sube a ningún lado, no hay cuentas, no hay telemetría.
 
-### Install
+## Features
 
-```bash
-$ pnpm install
-```
+- 🎚️ Separación de stems (voz, batería, bajo, otros) con Demucs
+- 🎧 Reproductor con volumen, pan y mute independiente por stem, sincronizado sample a sample
+- 📊 Detección automática de BPM y tonalidad
+- 🥁 Metrónomo sincronizado a la canción
+- 🎙️ Grabar sobre un stem (por ejemplo, reemplazar la voz con la tuya)
+- 🔄 Transposición de tono
+- 💾 Exportar stems o la mezcla final
 
-### Development
+## Cómo está resuelto
 
-```bash
-$ pnpm dev
-```
+- **Todo corre local** — Python (Demucs, FFmpeg) se invoca como subproceso desde Electron, comunicándose por líneas JSON en stdout. No hay backend ni nube involucrados.
+- **Mutear un stem baja su ganancia a 0** en vez de detener la fuente de audio — así los stems nunca pierden sincronía entre sí.
+- La **detección de BPM combina un modelo de deep learning** (TempoCNN) **con refinamiento por beat-tracking clásico** (librosa) para mayor precisión.
 
-### Build
+## Stack
 
-```bash
-# For windows
-$ pnpm build:win
+Electron · React · TypeScript · Python (Demucs, FFmpeg, librosa, TensorFlow)
 
-# For macOS
-$ pnpm build:mac
+## Licencia
 
-# For Linux
-$ pnpm build:linux
-```
+MIT — ver [LICENSE](LICENSE)
