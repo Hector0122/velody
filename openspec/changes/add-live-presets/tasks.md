@@ -56,3 +56,26 @@
       confirm it updates in place (no duplicate appears in the dropdown).
 - [ ] 5.4 Delete the currently active preset, reopen the song, confirm it
       no longer auto-applies anything.
+
+## 6. Follow-up: UX gaps found on first live use
+
+Three issues surfaced immediately after shipping, all in `LivePresetBar.tsx`
+only — no data/hook changes needed for any of them.
+
+- [x] 6.1 **"No los puedo actualizar" (can't update a saved preset).**
+      `upsertLivePreset` already updated in place when saved under an
+      existing name, but the only way to trigger that was re-typing the
+      exact name into an always-blank text field — nobody found it. Added
+      a dedicated "Update" button, shown whenever a preset is selected,
+      that calls `onSave(activePreset.name)` directly — no typing needed.
+      The name field + button are now explicitly "Save current mix as
+      new..." / "Save New".
+- [x] 6.2 **"Le di en la x y perdi mi preset" (accidental delete).** A
+      single click on "×" deleted immediately. First click now only arms a
+      "Confirm?" state (button turns red, reverts on its own after 4s if
+      not clicked again); an actual delete needs a second, deliberate
+      click on the same button.
+- [x] 6.3 **"Quiero que el botón haga algo... para que el usuario se dé
+      cuenta que le dio clic" (Update/Save New gave no feedback).** Both
+      buttons now flash "✓ Saved" (green) for ~1.2s after a click, so a
+      click that seemingly "did nothing" visibly confirms it registered.

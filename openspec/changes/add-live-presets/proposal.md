@@ -62,3 +62,13 @@ single auto-saved snapshot.
   `song:saveMeta` handlers, which already shallow-merge new top-level keys
   into a song's `.velody` file without needing to know about them ahead of
   time.
+
+## Follow-up (see tasks.md — section 6)
+
+Three UX gaps surfaced immediately on first live use, all fixed in
+`LivePresetBar.tsx` alone (no data/hook changes): saving under an existing
+name already updated it in place, but nothing in the UI made that
+discoverable — added an explicit "Update" button. A single click on "×"
+deleted a preset immediately with no way back — now requires a second,
+deliberate click on a "Confirm?" state. Update/Save New gave no visible
+feedback on click — both now flash "✓ Saved" briefly.
