@@ -2,7 +2,14 @@
 
 App de escritorio para separar canciones en pistas (voz, batería, bajo, otros) y practicar sobre ellas — 100% local, sin nube.
 
-![Reproductor de Velody con stems separados (bajo, batería, guitarra, otros, piano, voz), BPM detectado y controles de mezcla](docs/screenshots/stem-player.png)
+<table align="center">
+  <tr>
+    <td align="center">
+      <img src=".github/screenshots/reproductor.png" width="220" alt="Reproductor con stems separados, BPM detectado y controles de mezcla" /><br/>
+      <sub><b>Reproductor</b></sub>
+    </td>
+  </tr>
+</table>
 
 ## Por qué existe
 
