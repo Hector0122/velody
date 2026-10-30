@@ -77,8 +77,10 @@ function getFfmpegPath() {
   return 'ffmpeg'
 }
 
-const DEFAULT_OUTPUT_DIR = join(REPO_ROOT, 'output', 'stems')
+const DEFAULT_STEMS_OUTPUT_DIR = join(REPO_ROOT, 'output', 'stems')
+const DEFAULT_VIDEO_OUTPUT_DIR = join(REPO_ROOT, 'output', 'videos')
 const STEM_NAMES = ['vocals', 'drums', 'bass', 'other', 'piano', 'guitar']
+const VIDEO_EXTENSIONS = ['.mp4', '.mkv', '.webm']
 const DOWNLOAD_TIMEOUT_MS = 600_000 // matches url:import's timeout in src/main/ipc/handlers.ts
 const SEPARATE_TIMEOUT_MS = 600_000 // matches JobManager.runDemucs's timeout
 const INTER_SONG_DELAY_MS = 5_000 // brief pause between downloads to avoid YouTube rate limiting
@@ -91,7 +93,7 @@ function sleep(ms) {
 // Links file parsing
 // ---------------------------------------------------------------------------
 
-const URL_PATTERN = /https?:\/\/(?:music\.)?(?:youtube\.com\/watch\?v=[\w-]+|youtu\.be\/[\w-]+)\S*/i
+const URL_PATTERN = /https?:\/\/(?:www\.|music\.)?(?:youtube\.com\/watch\?v=[\w-]+|youtu\.be\/[\w-]+)\S*/i
 
 /**
  * Parse the links file into raw lines (for later rewriting) plus structured rows.
@@ -206,6 +208,21 @@ function hasStemsAlready(outputDir, folderName) {
   }
 }
 
+/** Video mode writes one flat file per song (no stems subfolder), e.g. "Artist - Title.mp4". */
+function hasVideoAlready(outputDir, folderName) {
+  if (!existsSync(outputDir)) return false
+  try {
+    const files = readdirSync(outputDir)
+    return files.some((f) => VIDEO_EXTENSIONS.some((ext) => f === `${folderName}${ext}`))
+  } catch {
+    return false
+  }
+}
+
+function alreadyOnDisk(outputDir, folderName, mode) {
+  return mode === 'video' ? hasVideoAlready(outputDir, folderName) : hasStemsAlready(outputDir, folderName)
+}
+
 // ---------------------------------------------------------------------------
 // Download + separate pipeline
 // ---------------------------------------------------------------------------
@@ -283,11 +300,11 @@ function runPythonJsonLines(pythonPath, scriptPath, args, { cwd, timeoutMs }) {
   })
 }
 
-async function downloadSong(url, pythonPath, ffmpegPath) {
+async function downloadSong(url, pythonPath, ffmpegPath, mode) {
   const result = await runPythonJsonLines(
     pythonPath,
     join(PYTHON_WORKER_DIR, 'download.py'),
-    [url, '--ffmpeg-path', ffmpegPath],
+    [url, '--ffmpeg-path', ffmpegPath, '--mode', mode],
     { cwd: PYTHON_WORKER_DIR, timeoutMs: DOWNLOAD_TIMEOUT_MS }
   )
   return { path: result.path, title: result.title }
@@ -303,13 +320,13 @@ async function separateSong(audioPath, pythonPath, outputDir) {
   return { stems: result.stems }
 }
 
-/** Download + separate a single row. Throws on failure; caller decides how to record it. */
-async function processRow(row, { pythonPath, ffmpegPath, outputDir }) {
+/** Download (+ separate, in audio mode) a single row. Throws on failure; caller decides how to record it. */
+async function processRow(row, { pythonPath, ffmpegPath, outputDir, mode }) {
   // Pre-flight disk check when the folder name is already knowable (Title+Artist
   // present) -- skips the download entirely for songs already on disk.
   if (row.title && row.artist) {
     const folderName = outputFolderNameFor(row)
-    if (hasStemsAlready(outputDir, folderName)) {
+    if (alreadyOnDisk(outputDir, folderName, mode)) {
       return { note: 'already on disk' }
     }
   }
@@ -317,20 +334,28 @@ async function processRow(row, { pythonPath, ffmpegPath, outputDir }) {
   const { path: downloadedPath, title: downloadedTitle } = await downloadSong(
     row.url,
     pythonPath,
-    ffmpegPath
+    ffmpegPath,
+    mode
   )
 
   const folderName = outputFolderNameFor(row, downloadedTitle)
 
   // Second check, now that we know the folder name even for plain-URL rows.
-  if (hasStemsAlready(outputDir, folderName)) {
+  if (alreadyOnDisk(outputDir, folderName, mode)) {
     return { note: 'already on disk' }
+  }
+
+  const ext = extname(downloadedPath) || (mode === 'video' ? '.mp4' : '.mp3')
+
+  if (mode === 'video') {
+    // Video mode has no separation step -- just land the file in outputDir directly.
+    renameSync(downloadedPath, join(outputDir, `${folderName}${ext}`))
+    return {}
   }
 
   // Rename the downloaded temp file to the sanitized name so separate.py's own
   // (unsanitized) Path.stem derivation produces a filesystem-safe folder name --
   // this avoids needing to touch separate.py itself.
-  const ext = extname(downloadedPath) || '.mp3'
   const renamedPath = join(dirname(downloadedPath), `${folderName}${ext}`)
   renameSync(downloadedPath, renamedPath)
 
@@ -346,21 +371,26 @@ async function processRow(row, { pythonPath, ffmpegPath, outputDir }) {
 const HELP_TEXT = `Velody batch importer
 
 Usage:
-  node scripts/batch-import.mjs [links-file] [--output-dir <dir>]
+  node scripts/batch-import.mjs [links-file] [--output-dir <dir>] [--video]
 
 Arguments:
   links-file      Path to the links file (default: links.txt)
-  --output-dir    Stems output root (default: <repo>/output/stems)
+  --output-dir    Output root (default: <repo>/output/stems, or
+                   <repo>/output/videos with --video)
+  --video         Download full video (.mp4) instead of audio -- skips
+                   stem separation entirely
 
 Re-run the same command to resume an interrupted batch or retry failed rows.
 `
 
 function parseArgs(argv) {
-  const args = { linksFile: 'links.txt', outputDir: DEFAULT_OUTPUT_DIR, help: false }
+  const args = { linksFile: 'links.txt', outputDir: null, video: false, help: false }
   const rest = []
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--output-dir' && argv[i + 1]) {
       args.outputDir = resolve(argv[++i])
+    } else if (argv[i] === '--video') {
+      args.video = true
     } else if (argv[i] === '--help' || argv[i] === '-h') {
       args.help = true
     } else {
@@ -387,7 +417,9 @@ async function main() {
 
   const pythonPath = getPythonPath()
   const ffmpegPath = getFfmpegPath()
-  mkdirSync(args.outputDir, { recursive: true })
+  const mode = args.video ? 'video' : 'audio'
+  const outputDir = args.outputDir ?? (args.video ? DEFAULT_VIDEO_OUTPUT_DIR : DEFAULT_STEMS_OUTPUT_DIR)
+  mkdirSync(outputDir, { recursive: true })
 
   const text = readFileSync(linksPath, 'utf-8')
   const { lines, rows } = parseLinksFile(text)
@@ -396,7 +428,8 @@ async function main() {
 
   console.log('Velody batch import')
   console.log(`  Links file : ${linksPath}`)
-  console.log(`  Output dir : ${args.outputDir}`)
+  console.log(`  Mode       : ${mode}`)
+  console.log(`  Output dir : ${outputDir}`)
   console.log(`  Python     : ${pythonPath}`)
   console.log(`  FFmpeg     : ${ffmpegPath}`)
   console.log(
@@ -415,7 +448,7 @@ async function main() {
     let skippedNetwork = false
     try {
       // Intentionally sequential (not Promise.all) -- see design.md Non-Goals.
-      const result = await processRow(row, { pythonPath, ffmpegPath, outputDir: args.outputDir })
+      const result = await processRow(row, { pythonPath, ffmpegPath, outputDir, mode })
       okCount++
       skippedNetwork = Boolean(result.note)
       console.log(`OK${result.note ? ` (${result.note})` : ''}`)
