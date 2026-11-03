@@ -26,6 +26,8 @@ class FakeAudioContext {
       ({
         numberOfChannels: 2,
         duration: 1,
+        sampleRate: 1000,
+        getChannelData: () => new Float32Array(1000),
         _bytes: buf.byteLength
       }) as unknown as AudioBuffer
   )
@@ -789,5 +791,31 @@ describe('useAudioContextEngine - practice speed + transpose', () => {
     await Promise.resolve()
     expect(shifterNode.schedule).not.toHaveBeenCalled()
     expect(result.current.getOutputDelay()).toBe(0)
+  })
+})
+
+describe('useAudioContextEngine - start where the music starts', () => {
+  it('parks the cursor at the first sound after decoding (no trim, not playing)', async () => {
+    class LateStartContext extends FakeAudioContext {
+      decodeAudioData = vi.fn(async () => {
+        const data = new Float32Array(2000)
+        data[500] = 0.5 // first sound at 0.5s
+        return {
+          numberOfChannels: 1,
+          duration: 2,
+          sampleRate: 1000,
+          getChannelData: () => data
+        } as unknown as AudioBuffer
+      })
+    }
+    vi.stubGlobal('AudioContext', LateStartContext)
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ arrayBuffer: async () => new ArrayBuffer(16) }))
+    )
+    const notifyStemDecodedRef = { current: vi.fn() }
+    const positionRef = { current: 0 }
+    renderHook(() => useAudioContextEngine(buildParams({ notifyStemDecodedRef, positionRef })))
+    await waitFor(() => expect(positionRef.current).toBeCloseTo(0.5 - 0.03, 5))
   })
 })

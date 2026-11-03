@@ -452,7 +452,13 @@ export function useAudioContextEngine(params: UseAudioContextEngineParams): {
     )
     const buffers = Object.values(buffersRef.current).filter(Boolean)
     if (buffers.length > 0) {
-      musicStartRef.current = findMusicStart(buffers)
+      // Best-effort convenience — never let it break loading.
+      try {
+        musicStartRef.current = findMusicStart(buffers)
+      } catch (err) {
+        console.error('[audioEngine] music start detection failed', err)
+        musicStartRef.current = 0
+      }
       // Start where the playing starts (like Moises), unless the user already
       // moved the cursor, is playing, or has a trim start of their own.
       if (
