@@ -66,3 +66,76 @@ export function downbeatShiftAt(
   const beat = Math.round((t - opts.firstBeatOffset) / interval)
   return mod(beat - 1, BEATS_PER_BAR)
 }
+
+export interface CountInClick {
+  /** Position of the click on the song's timeline (seconds; may precede 0). */
+  songTime: number
+  accent: boolean
+}
+
+/**
+ * Count-in clicks laid on the song's own beat grid, ending right before the
+ * first beat at/after `position`, so the count flows straight into the song's
+ * beats (and the in-song metronome) with no gap or phase jump. The count
+ * always starts on a "1": `bars` full bars plus whatever beats of the entry
+ * bar come before the entry beat (a song entering on beat 3 is counted
+ * "1 2 3 4 | 1 2" → song).
+ */
+export function planCountIn(opts: {
+  position: number
+  bars: number
+  beatTimes: number[]
+  usingGrid: boolean
+  bpm: number
+  firstBeatOffset: number
+  downbeatShift: number
+}): CountInClick[] {
+  const { position, bars, beatTimes, bpm, downbeatShift } = opts
+  if (bars <= 0 || !(bpm > 0)) return []
+  const interval = 60 / bpm
+
+  let beatAt: (i: number) => number
+  let isAccent: (i: number) => boolean
+  let entry: number
+
+  if (opts.usingGrid && beatTimes.length > 0) {
+    const first = beatTimes[0]
+    const lastIdx = beatTimes.length - 1
+    const last = beatTimes[lastIdx]
+    beatAt = (i) =>
+      i < 0 ? first + i * interval : i > lastIdx ? last + (i - lastIdx) * interval : beatTimes[i]
+    isAccent = (i) => isGridAccent(i, downbeatShift)
+    if (position <= first) {
+      entry = Math.ceil((position - first) / interval - 1e-9)
+    } else if (position > last) {
+      entry = lastIdx + Math.ceil((position - last) / interval - 1e-9)
+    } else {
+      let lo = 0
+      let hi = lastIdx
+      while (lo < hi) {
+        const mid = (lo + hi) >>> 1
+        if (beatTimes[mid] < position) lo = mid + 1
+        else hi = mid
+      }
+      entry = lo
+    }
+  } else {
+    // Constant tempo: beat n sits at firstBeatOffset + n·interval (the
+    // scheduler's own numbering — see useMetronome's scheduleConstantTempo).
+    beatAt = (n) => opts.firstBeatOffset + n * interval
+    isAccent = (n) => isConstantAccent(n, downbeatShift)
+    entry = Math.ceil((position - opts.firstBeatOffset) / interval - 1e-9)
+  }
+
+  // Beats of the entry bar that precede the entry beat.
+  let lead = 0
+  while (lead < BEATS_PER_BAR - 1 && !isAccent(entry - lead)) lead++
+  const total = bars * BEATS_PER_BAR + lead
+
+  const clicks: CountInClick[] = []
+  for (let k = total; k >= 1; k--) {
+    const i = entry - k
+    clicks.push({ songTime: beatAt(i), accent: isAccent(i) })
+  }
+  return clicks
+}

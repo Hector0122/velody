@@ -21,6 +21,13 @@ interface UseCountInReturn {
     onTick: (remaining: number) => void,
     onComplete: () => void
   ) => void
+  // Plays clicks at exact, caller-computed AudioContext times (the playback
+  // count-in laid on the song's beat grid — see planCountIn in downbeat.ts).
+  // `onTick(remaining)` fires immediately and as each click plays.
+  startAt: (
+    clicks: { when: number; accent: boolean }[],
+    onTick: (remaining: number) => void
+  ) => void
   // Clears every pending scheduled tick/completion for the current count-in
   // without calling onComplete — used to cancel mid-countdown (e.g. Stop
   // pressed before the count-in finishes).
@@ -123,7 +130,26 @@ export default function useCountIn(
     [ensureAudioCtx, playClick, cancel]
   )
 
+  const startAt = useCallback(
+    (clicks: { when: number; accent: boolean }[], onTick: (remaining: number) => void): void => {
+      if (clicks.length === 0) return
+      const ctx = ensureAudioCtx()
+      if (!ctx) return
+      cancel()
+      for (const click of clicks) playClick(click.accent, click.when)
+      onTick(clicks.length)
+      // Display-only countdown; wall-clock precision is fine here.
+      timeoutIdsRef.current = clicks.map((click, i) =>
+        setTimeout(
+          () => onTick(clicks.length - i),
+          Math.max(0, (click.when - ctx.currentTime) * 1000)
+        )
+      )
+    },
+    [ensureAudioCtx, playClick, cancel]
+  )
+
   useEffect(() => cancel, [cancel])
 
-  return { start, cancel }
+  return { start, startAt, cancel }
 }

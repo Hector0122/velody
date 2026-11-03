@@ -1,10 +1,11 @@
 import { useEffect, useRef } from 'react'
 import { songDirFromStemPath, pickBeatTrackingStem } from '../utils'
 
+// 20: also caches the detected downbeat (`detectedDownbeatShift`).
 // 19: detection now runs on the drums stem (pickBeatTrackingStem) instead of
 // whatever stems[0] happened to be — older results are re-detected.
 // 18: caches started storing the detected beat-time grid.
-const CACHE_VERSION = 19
+const CACHE_VERSION = 20
 export { CACHE_VERSION }
 
 // originalBpmRef/beatTimesRef, like firstBeatOffsetRef, are refs owned by
@@ -18,7 +19,9 @@ export default function useSongAnalysis(
   setBpm: (bpm: number) => void,
   firstBeatOffsetRef: React.MutableRefObject<number>,
   originalBpmRef: React.MutableRefObject<number>,
-  beatTimesRef: React.MutableRefObject<number[]>
+  beatTimesRef: React.MutableRefObject<number[]>,
+  // Receives the auto-detected bar phase (see useDownbeatShift).
+  onDetectedDownbeat?: (shift: number) => void
 ): void {
   const detectedRef = useRef(false)
 
@@ -36,6 +39,7 @@ export default function useSongAnalysis(
         bpm?: number
         firstBeatOffset?: number
         beatTimes?: number[]
+        detectedDownbeatShift?: number
         _version?: number
       } | null
       if (
@@ -48,6 +52,9 @@ export default function useSongAnalysis(
         firstBeatOffsetRef.current = cached.firstBeatOffset
         beatTimesRef.current = Array.isArray(cached.beatTimes) ? cached.beatTimes : []
         setBpm(cached.bpm)
+        if (typeof cached.detectedDownbeatShift === 'number') {
+          onDetectedDownbeat?.(cached.detectedDownbeatShift)
+        }
         return
       }
 
@@ -63,10 +70,12 @@ export default function useSongAnalysis(
           firstBeatOffsetRef.current = result.firstBeatOffset
           beatTimesRef.current = beatTimes
           setBpm(result.bpm)
+          if (typeof result.downbeatShift === 'number') onDetectedDownbeat?.(result.downbeatShift)
           window.api.saveMeta(songDir, {
             bpm: result.bpm,
             firstBeatOffset: result.firstBeatOffset,
             beatTimes,
+            detectedDownbeatShift: result.downbeatShift,
             _version: CACHE_VERSION
           })
         }
@@ -74,5 +83,5 @@ export default function useSongAnalysis(
         /* detection failed — do NOT cache fallback */
       }
     })()
-  }, [urls, stems, setBpm, firstBeatOffsetRef, originalBpmRef, beatTimesRef])
+  }, [urls, stems, setBpm, firstBeatOffsetRef, originalBpmRef, beatTimesRef, onDetectedDownbeat])
 }

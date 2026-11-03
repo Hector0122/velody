@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useCallback, useRef, useState } from 'react
 import type { StretchNode } from 'signalsmith-stretch'
 import { compensatingSemitones, createPitchShifter, needsPitchShifter } from './pitchShifter'
 import type WaveSurfer from 'wavesurfer.js'
-import { stemNameFromPath } from '../utils'
+import { findMusicStart, stemNameFromPath } from '../utils'
 import useLocalStoragePreference from './useLocalStoragePreference'
 import { RESET_SCHEDULED_BEAT } from './useMetronome'
 
@@ -192,6 +192,9 @@ export function useAudioContextEngine(params: UseAudioContextEngineParams): {
   const sourcesRef = useRef<Record<string, AudioBufferSourceNode>>({})
   const isPlayingRef = useRef(false)
   const startRef = useRef(0)
+  // Where the music actually starts (leading silence skipped) — the default
+  // start/restart point when the song has no trim start. 0 until decoded.
+  const musicStartRef = useRef(0)
   // Updated only by the speed effect below (which needs the previous value to
   // re-anchor the clock), never by the generic ref-sync layout effect.
   const speedRef = useRef(speed)
@@ -406,6 +409,21 @@ export function useAudioContextEngine(params: UseAudioContextEngineParams): {
     [startSourceForKey]
   )
 
+  // Moves the visible cursor (time display, progress, waveforms) to `time`
+  // without touching playback.
+  const moveCursor = useCallback(
+    (time: number): void => {
+      if (!isPlayingRef.current) positionRef.current = time
+      progressRef.current = time
+      onAudioTimeRef.current(time)
+      const fraction = durationRef.current > 0 ? time / durationRef.current : 0
+      for (const sw of Object.values(stemWaves.current)) {
+        sw.seekTo(fraction)
+      }
+    },
+    [positionRef, progressRef, onAudioTimeRef, durationRef, stemWaves]
+  )
+
   const decodeStems = useCallback(async (): Promise<void> => {
     const ctx = ensureCtx()
     await Promise.all(
@@ -432,7 +450,30 @@ export function useAudioContextEngine(params: UseAudioContextEngineParams): {
         }
       })
     )
-  }, [allStems, urls, ensureCtx, ensureNodes, joinLateDecodedStem, notifyStemDecodedRef])
+    const buffers = Object.values(buffersRef.current).filter(Boolean)
+    if (buffers.length > 0) {
+      musicStartRef.current = findMusicStart(buffers)
+      // Start where the playing starts (like Moises), unless the user already
+      // moved the cursor, is playing, or has a trim start of their own.
+      if (
+        musicStartRef.current > 0 &&
+        !isPlayingRef.current &&
+        positionRef.current === 0 &&
+        trimRef.current.start === 0
+      ) {
+        moveCursor(musicStartRef.current)
+      }
+    }
+  }, [
+    allStems,
+    urls,
+    ensureCtx,
+    ensureNodes,
+    joinLateDecodedStem,
+    notifyStemDecodedRef,
+    positionRef,
+    moveCursor
+  ])
 
   useEffect(() => {
     decodeStems()
@@ -705,29 +746,16 @@ export function useAudioContextEngine(params: UseAudioContextEngineParams): {
     // as before this existed) rather than always hardcoded 0, so a song
     // with a long intro trimmed off skips it every time the user restarts
     // (see openspec/changes/add-song-trim-points).
-    const restartTo = trimRef.current.start
+    // Without a trim start, restart goes to where the music begins.
+    const restartTo = trimRef.current.start > 0 ? trimRef.current.start : musicStartRef.current
     if (isPlayingRef.current) {
       stopSources()
       startSources(restartTo)
     } else {
       positionRef.current = restartTo
     }
-    progressRef.current = restartTo
-    onAudioTimeRef.current(restartTo)
-    const fraction = durationRef.current > 0 ? restartTo / durationRef.current : 0
-    for (const sw of Object.values(stemWaves.current)) {
-      sw.seekTo(fraction)
-    }
-  }, [
-    stopSources,
-    startSources,
-    positionRef,
-    progressRef,
-    onAudioTimeRef,
-    lastScheduledBeatRef,
-    stemWaves,
-    durationRef
-  ])
+    moveCursor(restartTo)
+  }, [stopSources, startSources, positionRef, lastScheduledBeatRef, moveCursor])
 
   const toggleSolo = useCallback(
     (key: string): void => {

@@ -73,6 +73,16 @@ export type UpdateStatus =
   | { state: 'downloading'; version: string; percent: number }
   | { state: 'ready'; version: string }
 
+export interface BpmDetectionResult {
+  bpm: number
+  firstBeatOffset: number
+  beatTimes: number[]
+  // Estimated bar phase: beat-grid index i is a downbeat when
+  // (i - downbeatShift) % 4 === 0. Absent when it couldn't be estimated.
+  downbeatShift?: number
+  downbeatConfidence?: number
+}
+
 export interface VelodyAPI {
   openFileDialog: () => Promise<string | null>
   startSeparation: (
@@ -132,7 +142,7 @@ export interface VelodyAPI {
     // error while keeping the beat grid onset-aligned to the real audio.
     // See add-tempo-octave-correction.
     bpmHint?: number
-  ) => Promise<{ bpm: number; firstBeatOffset: number; beatTimes: number[] } | null>
+  ) => Promise<BpmDetectionResult | null>
   openExternal: (url: string) => Promise<void>
   deleteFile: (filePath: string) => Promise<{ success: boolean; error?: string }>
   importFromUrl: (

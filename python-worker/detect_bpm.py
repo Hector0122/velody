@@ -5,13 +5,41 @@ Usage:
     python detect_bpm.py <audio_file> [--ffmpeg-path <path>]
 
 Output:
-    {"bpm": 128.5, "firstBeatOffset": 0.12, "beatTimes": [0.12, 0.59, ...]}
+    {"bpm": 128.5, "firstBeatOffset": 0.12, "beatTimes": [0.12, 0.59, ...],
+     "downbeatShift": 2, "downbeatConfidence": 0.4}   # downbeat* only when stems are found
     or {"error": "..."}
 """
 
+import contextlib
 import sys
 import json
 import os
+
+
+def _with_downbeat(result: dict, audio_file: str, y) -> dict:
+    """Adds `downbeatShift`/`downbeatConfidence` (which beat is the bar's 1)
+    using the sibling bass/drums stems. Best-effort: any failure just leaves
+    them out and the app falls back to the manual "This is the 1" button."""
+    try:
+        from downbeat import estimate_downbeat_shift
+        # Reuse the already-loaded audio as the drums signal only if that's
+        # what it is (the app analyzes drums when the song has that stem).
+        is_drums = os.path.basename(audio_file).lower().startswith('drums')
+        est = estimate_downbeat_shift(
+            result.get('beatTimes', []),
+            os.path.dirname(os.path.abspath(audio_file)),
+            y if is_drums else None,
+        )
+        if est:
+            result['downbeatShift'] = est['shift']
+            result['downbeatConfidence'] = est['confidence']
+    except Exception:
+        pass
+    return result
+
+
+def _no_grid(tempo: float) -> dict:
+    return {'bpm': round(float(tempo), 1), 'firstBeatOffset': 0.0, 'beatTimes': []}
 
 
 def _beat_track_result(tempo_librosa, beat_frames, sr) -> dict:
@@ -52,22 +80,32 @@ def detect_bpm(audio_file: str, ffmpeg_path: str = 'ffmpeg', bpm_hint: float = N
         import librosa
         y, sr = librosa.load(audio_file, sr=22050, mono=True)
         tempo_librosa, beat_frames = librosa.beat.beat_track(y=y, sr=sr, bpm=bpm_hint)
-        return _beat_track_result(tempo_librosa, beat_frames, sr)
+        if len(beat_frames) == 0:
+            return _no_grid(bpm_hint)
+        return _with_downbeat(_beat_track_result(tempo_librosa, beat_frames, sr), audio_file, y)
 
     from tempocnn.classifier import TempoClassifier
     from tempocnn.feature import read_features
 
-    classifier = TempoClassifier('cnn')
-    features = read_features(audio_file, frames=256, hop_length=32)
-    tempo = classifier.estimate_tempo(features, interpolate=True)
+    # Keras prints a progress bar to stdout during predict(); keep stdout for
+    # the JSON result only (the protocol callers parse).
+    with contextlib.redirect_stdout(sys.stderr):
+        classifier = TempoClassifier('cnn')
+        features = read_features(audio_file, frames=256, hop_length=32)
+        tempo = classifier.estimate_tempo(features, interpolate=True)
 
     try:
         import librosa
         y, sr = librosa.load(audio_file, sr=22050, mono=True)
         tempo_librosa, beat_frames = librosa.beat.beat_track(y=y, sr=sr, bpm=tempo)
-        return _beat_track_result(tempo_librosa, beat_frames, sr)
+        # No onsets to track (e.g. sustained, beatless audio): librosa reports
+        # tempo 0 — keep TempoCNN's estimate instead of a 0 BPM, just without
+        # a beat grid.
+        if len(beat_frames) == 0:
+            return _no_grid(tempo)
+        return _with_downbeat(_beat_track_result(tempo_librosa, beat_frames, sr), audio_file, y)
     except ImportError:
-        return {'bpm': round(tempo, 1), 'firstBeatOffset': 0.0, 'beatTimes': []}
+        return _no_grid(tempo)
 
 
 if __name__ == '__main__':

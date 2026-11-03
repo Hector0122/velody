@@ -15,7 +15,7 @@ import useTrim from '../hooks/useTrim'
 import useSongCountIn from '../hooks/useSongCountIn'
 import useDownbeatShift from '../hooks/useDownbeatShift'
 import useSongSpeedPitch from '../hooks/useSongSpeedPitch'
-import { downbeatShiftAt } from '../hooks/downbeat'
+import { downbeatShiftAt, planCountIn } from '../hooks/downbeat'
 import useLivePresets from '../hooks/useLivePresets'
 import useCountIn, { COUNT_IN_LEAD_IN } from '../hooks/useCountIn'
 import { useExportState } from '../hooks/useExportState'
@@ -119,7 +119,13 @@ function StemPlayer({
   const audioStartRef = useRef<number | null>(null)
   const mediaStreamRef = useRef<MediaStream | null>(null)
 
-  const { downbeatShift, setDownbeatShift, downbeatShiftRef } = useDownbeatShift(stems)
+  const {
+    downbeatShift,
+    setDownbeatShift,
+    applyDetectedDownbeat,
+    clearManualDownbeat,
+    downbeatShiftRef
+  } = useDownbeatShift(stems)
   const { speed, semitones, setSpeed, setSemitones } = useSongSpeedPitch(stems)
 
   const {
@@ -156,7 +162,15 @@ function StemPlayer({
     downbeatShiftRef
   )
 
-  useSongAnalysis(urls, stems, setBpm, firstBeatOffsetRef, originalBpmRef, beatTimesRef)
+  useSongAnalysis(
+    urls,
+    stems,
+    setBpm,
+    firstBeatOffsetRef,
+    originalBpmRef,
+    beatTimesRef,
+    applyDetectedDownbeat
+  )
 
   // Named "ready to play" mix snapshots (mute/volume/pan/metronome-on/
   // master-volume) — see openspec/changes/add-live-presets. Applies the
@@ -413,28 +427,40 @@ function StemPlayer({
       return
     }
     if (!masterPlaying && playbackCountInBars > 0) {
+      // Lay the count-in on the song's own beat grid (planCountIn): it ends
+      // exactly one beat before the song's next beat and always starts on a
+      // "1", so it flows into the song (and the in-song metronome) without a
+      // gap or phase jump — previously it was N bars at the BPM from "now",
+      // unrelated to where the song's beats actually fall.
+      const beatTimes = Array.isArray(beatTimesRef.current) ? beatTimesRef.current : []
+      const position = positionRef.current
+      const clicks = planCountIn({
+        position,
+        bars: playbackCountInBars,
+        beatTimes,
+        usingGrid: beatTimes.length > 0 && bpm === originalBpmRef.current,
+        bpm,
+        firstBeatOffset: firstBeatOffsetRef.current,
+        downbeatShift: downbeatShiftRef.current
+      })
+      if (clicks.length === 0) {
+        toggleMasterPlay()
+        return
+      }
       setPlaybackCounting(true)
 
-      const totalBeats = playbackCountInBars * 4
-      // Count in at the tempo you'll actually hear (practice speed applied).
-      const heardBpm = bpm * speed
-      const interval = 60 / heardBpm
-      const countInDuration = COUNT_IN_LEAD_IN + totalBeats * interval
+      // Map song time -> AudioContext time at the practice speed: song time
+      // `position` plays at `stemWhen`, and every click keeps its distance
+      // to it (scaled by speed). The first click lands COUNT_IN_LEAD_IN from now.
       const stemCtx = ensureStemAudioCtx()
-      const stemWhen = stemCtx.currentTime + countInDuration
-
-      // Deliberately not relying on playbackCountIn's own onComplete to
-      // gate audio — see the comment above. It's given a no-op; only the
-      // visual countdown state needs to clear, handled via a plain timeout
-      // matched to the same duration (imprecision here is inaudible —
-      // display only).
-      playbackCountIn.start(
-        playbackCountInBars,
-        heardBpm,
-        (remaining) => setPlaybackCountRemaining(remaining),
-        () => {}
+      const now = stemCtx.currentTime
+      const stemWhen = now + COUNT_IN_LEAD_IN + (position - clicks[0].songTime) / speed
+      playbackCountIn.startAt(
+        clicks.map((c) => ({ when: stemWhen + (c.songTime - position) / speed, accent: c.accent })),
+        (remaining) => setPlaybackCountRemaining(remaining)
       )
-      setTimeout(() => setPlaybackCounting(false), countInDuration * 1000)
+      // Display-only: hide the countdown overlay once the song starts.
+      setTimeout(() => setPlaybackCounting(false), (stemWhen - now) * 1000)
       toggleMasterPlay(stemWhen)
       return
     }
@@ -447,7 +473,12 @@ function StemPlayer({
     speed,
     playbackCountIn,
     toggleMasterPlay,
-    ensureStemAudioCtx
+    ensureStemAudioCtx,
+    beatTimesRef,
+    positionRef,
+    originalBpmRef,
+    firstBeatOffsetRef,
+    downbeatShiftRef
   ])
 
   const onAudioTime = useCallback(
@@ -591,22 +622,43 @@ function StemPlayer({
   // and persists it — shared by both the redetected and the arithmetic-
   // fallback paths in handleCorrectTempoOctave below.
   const applyTempoOctaveCorrection = useCallback(
-    (correction: { bpm: number; firstBeatOffset: number; beatTimes: number[] }): void => {
+    (correction: {
+      bpm: number
+      firstBeatOffset: number
+      beatTimes: number[]
+      downbeatShift?: number
+    }): void => {
       beatTimesRef.current = correction.beatTimes
       firstBeatOffsetRef.current = correction.firstBeatOffset
       originalBpmRef.current = correction.bpm
       lastScheduledBeatRef.current = RESET_SCHEDULED_BEAT
       setBpm(correction.bpm)
+      // The grid was rebuilt, so a manually chosen "1" (a grid index) no
+      // longer points at the same beat — fall back to the new estimate.
+      clearManualDownbeat()
+      if (typeof correction.downbeatShift === 'number') {
+        applyDetectedDownbeat(correction.downbeatShift)
+      }
 
       const songDir = songDirFromStemPath(stems[0])
       window.api?.saveMeta(songDir, {
         bpm: correction.bpm,
         firstBeatOffset: correction.firstBeatOffset,
         beatTimes: correction.beatTimes,
+        detectedDownbeatShift: correction.downbeatShift,
         _version: CACHE_VERSION
       })
     },
-    [stems, beatTimesRef, originalBpmRef, firstBeatOffsetRef, lastScheduledBeatRef, setBpm]
+    [
+      stems,
+      beatTimesRef,
+      originalBpmRef,
+      firstBeatOffsetRef,
+      lastScheduledBeatRef,
+      setBpm,
+      clearManualDownbeat,
+      applyDetectedDownbeat
+    ]
   )
 
   // Corrects a tempo-octave detection error (detector locked onto half or

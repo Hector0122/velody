@@ -16,7 +16,8 @@ import {
   MASTER_WAVEFORM_HEIGHT,
   MASTER_MIN_PX_PER_SEC,
   STEM_WAVEFORM_HEIGHT,
-  pickBeatTrackingStem
+  pickBeatTrackingStem,
+  findMusicStart
 } from '../utils'
 
 describe('stemNameFromPath', () => {
@@ -251,5 +252,38 @@ describe('pickBeatTrackingStem', () => {
   it('falls back to the first stem when no known stem is present', () => {
     expect(pickBeatTrackingStem(['/s/song/x.mp3'])).toBe('/s/song/x.mp3')
     expect(pickBeatTrackingStem([])).toBeUndefined()
+  })
+})
+
+describe('findMusicStart', () => {
+  const sr = 1000
+  function buf(channels: number[][]): {
+    sampleRate: number
+    numberOfChannels: number
+    getChannelData: (c: number) => Float32Array<ArrayBuffer>
+  } {
+    return {
+      sampleRate: sr,
+      numberOfChannels: channels.length,
+      getChannelData: (c: number) => new Float32Array(channels[c])
+    }
+  }
+  const silence = (n: number): number[] => new Array(n).fill(0)
+
+  it('returns the earliest sound across all stems and channels, minus the pre-roll', () => {
+    const drums = buf([[...silence(2000), 0.5, ...silence(10)]]) // 2.0s
+    const bass = buf([silence(3000), [...silence(1500), 0.2, ...silence(10)]]) // 1.5s, ch 1
+    expect(findMusicStart([drums, bass])).toBeCloseTo(1.5 - 0.03, 5)
+  })
+
+  it('ignores noise below the threshold', () => {
+    const quiet = buf([[...silence(500).map(() => 0.001), ...silence(500), 0.3]])
+    expect(findMusicStart([quiet])).toBeCloseTo(1.0 - 0.03, 5)
+  })
+
+  it('returns 0 for songs that start immediately or are silent within the scan window', () => {
+    expect(findMusicStart([buf([[0.5, 0, 0]])])).toBe(0)
+    expect(findMusicStart([buf([silence(100)])])).toBe(0)
+    expect(findMusicStart([buf([[...silence(5000), 0.5]])], 0.008, 2)).toBe(0)
   })
 })

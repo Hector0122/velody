@@ -144,3 +144,38 @@ export function updateCursors(time: number, duration: number): void {
     cachedCursorEls[i].style.left = pct + '%'
   }
 }
+
+// Small pre-roll before the first sound so the attack of the first note isn't
+// clipped when playback starts exactly there.
+export const AUDIO_START_PREROLL_SECS = 0.03
+
+type PcmBuffer = Pick<AudioBuffer, 'sampleRate' | 'numberOfChannels' | 'getChannelData'>
+
+/**
+ * Where the music actually starts: the earliest sample across all stems that
+ * rises above AUDIO_START_THRESHOLD (~-42 dBFS), minus a tiny pre-roll.
+ * Scans at most AUDIO_START_MAX_SCAN_SECS; returns 0 if nothing is found (or
+ * the song starts right away), so callers can treat 0 as "no skip".
+ */
+export function findMusicStart(
+  buffers: PcmBuffer[],
+  threshold = AUDIO_START_THRESHOLD,
+  maxScanSecs = AUDIO_START_MAX_SCAN_SECS
+): number {
+  let earliest = Infinity
+  for (const buf of buffers) {
+    const limit = Math.floor(Math.min(maxScanSecs, earliest) * buf.sampleRate)
+    for (let ch = 0; ch < buf.numberOfChannels; ch++) {
+      const data = buf.getChannelData(ch)
+      const end = Math.min(limit, data.length)
+      for (let i = 0; i < end; i++) {
+        if (Math.abs(data[i]) > threshold) {
+          earliest = Math.min(earliest, i / buf.sampleRate)
+          break
+        }
+      }
+    }
+  }
+  if (!Number.isFinite(earliest)) return 0
+  return Math.max(0, earliest - AUDIO_START_PREROLL_SECS)
+}

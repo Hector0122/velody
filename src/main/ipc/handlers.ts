@@ -9,13 +9,7 @@ import crypto from 'crypto'
 import { SetupManager } from '../setup'
 import { JobManager } from '../jobs/JobManager'
 import { getStemsRootDir } from '../paths'
-import type { StemBitrate } from '../../shared/types'
-
-interface BpmDetectionResult {
-  bpm: number
-  firstBeatOffset: number
-  beatTimes: number[]
-}
+import type { BpmDetectionResult, StemBitrate } from '../../shared/types'
 
 let bpmDetectionRunning: Promise<BpmDetectionResult | null> | null = null
 // Separate singleflight guard for hint-based redetection (see
@@ -320,18 +314,35 @@ export function registerIpcHandlers(): void {
     if (typeof bpmHint === 'number') args.push('--bpm-hint', String(bpmHint))
     try {
       const out = await new Promise<string>((resolve, reject) => {
-        execFile(pythonPath, args, { timeout: 600_000, maxBuffer: 65536 }, (err, stdout) =>
+        execFile(pythonPath, args, { timeout: 600_000, maxBuffer: 1024 * 1024 }, (err, stdout) =>
           err ? reject(err) : resolve(stdout)
         )
       })
       const lines = out.trim().split('\n')
       const last = lines[lines.length - 1]
       const parsed = last ? JSON.parse(last.trim()) : null
-      if (parsed && typeof parsed.bpm === 'number' && typeof parsed.firstBeatOffset === 'number') {
+      // bpm <= 0 is a failed detection — never hand it on (it would be cached
+      // and break the metronome's 60/bpm math).
+      if (
+        parsed &&
+        typeof parsed.bpm === 'number' &&
+        parsed.bpm > 0 &&
+        typeof parsed.firstBeatOffset === 'number'
+      ) {
         // beatTimes is new; default to [] so an older script build (or any
         // unexpected shape) degrades to "no grid" rather than breaking.
         const beatTimes = Array.isArray(parsed.beatTimes) ? parsed.beatTimes : []
-        return { bpm: parsed.bpm, firstBeatOffset: parsed.firstBeatOffset, beatTimes }
+        const result: BpmDetectionResult = {
+          bpm: parsed.bpm,
+          firstBeatOffset: parsed.firstBeatOffset,
+          beatTimes
+        }
+        if (Number.isInteger(parsed.downbeatShift)) {
+          result.downbeatShift = parsed.downbeatShift
+          result.downbeatConfidence =
+            typeof parsed.downbeatConfidence === 'number' ? parsed.downbeatConfidence : undefined
+        }
+        return result
       }
       return null
     } catch (err) {
