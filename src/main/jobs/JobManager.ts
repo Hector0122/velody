@@ -40,6 +40,7 @@ function getPythonWorkerDir(): string {
 export class JobManager {
   private queue: SeparationJob[] = []
   private running = false
+  private completeListeners: ((stems: string[]) => void)[] = []
   private readonly setupManager: SetupManager | null
 
   constructor(setupManager: SetupManager | null) {
@@ -88,6 +89,16 @@ export class JobManager {
     return false
   }
 
+  /** True while a separation is running (Demucs is using the GPU/CPU). */
+  isBusy(): boolean {
+    return this.running
+  }
+
+  /** Called with the new song's stem paths after each successful separation. */
+  onJobCompleted(listener: (stems: string[]) => void): void {
+    this.completeListeners.push(listener)
+  }
+
   getQueue(): SeparationJob[] {
     return this.queue.map((j) => this.sanitizeJob(j))
   }
@@ -122,6 +133,7 @@ export class JobManager {
       job.status = 'completed'
       job.progress = 100
       this.emit('separation:complete', { jobId: job.id, stems: job.stems })
+      for (const listener of this.completeListeners) listener(job.stems ?? [])
     } catch (err) {
       if ((job.status as string) === 'cancelled') return
       job.status = 'failed'

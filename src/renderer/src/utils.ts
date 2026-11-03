@@ -11,20 +11,7 @@ export function stemNameFromPath(path: string): string {
 // output/stems/) — this is where the .velody metadata sidecar (BPM, beat
 // grid, markers, trim points) lives. Strips just the last path segment
 // (the filename) rather than assuming any particular stem name.
-// Stem to run tempo/beat detection on. Drums carry the clearest onsets for
-// beat tracking; the fallbacks are the next most rhythmic stems. Previously
-// detection just used stems[0], whose identity depended on the OS's
-// directory-listing order (bass on Windows, effectively random on Linux) —
-// a big source of wrong/half-time BPMs and drifting beat grids.
-const BEAT_TRACKING_PREFERENCE = ['drums', 'bass', 'other', 'guitar', 'piano', 'vocals']
-
-export function pickBeatTrackingStem(stems: string[]): string | undefined {
-  for (const name of BEAT_TRACKING_PREFERENCE) {
-    const match = stems.find((s) => stemNameFromPath(s) === name)
-    if (match) return match
-  }
-  return stems[0]
-}
+export { pickBeatTrackingStem } from '../../shared/analysis'
 
 export function songDirFromStemPath(stemPath: string): string {
   return stemPath.replace(/[/\\][^/\\]+$/, '')

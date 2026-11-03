@@ -107,15 +107,32 @@ def _run_demucs(
     _emit({"type": "progress", "percent": 100})
 
     stems = ["vocals", "drums", "bass", "other", "piano", "guitar"]
-    stem_paths = []
-
+    sources = []
     for stem in stems:
         src = demucs_out / f"{stem}.mp3"
-        dst = song_output / f"{stem}.mp3"
         if not src.exists():
             raise FileNotFoundError(f"Stem not generated: {src}")
+        sources.append(src)
+
+    # Don't keep stems with no real part in them (e.g. piano.mp3 for a song
+    # without piano) — see stem_activity.py. Best-effort: if the analysis
+    # fails, every stem is kept as before.
+    try:
+        from stem_activity import find_empty_stems
+        empty = set(find_empty_stems([str(p) for p in sources]))
+    except Exception:
+        empty = set()
+
+    stem_paths = []
+    for src in sources:
+        if str(src) in empty:
+            continue
+        dst = song_output / src.name
         shutil.move(str(src), str(dst))
         stem_paths.append(str(dst))
+
+    if empty:
+        _emit({"type": "skipped", "stems": sorted(Path(p).stem for p in empty)})
 
     return stem_paths
 

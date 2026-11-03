@@ -9,18 +9,65 @@ import crypto from 'crypto'
 import { SetupManager } from '../setup'
 import { JobManager } from '../jobs/JobManager'
 import { getStemsRootDir } from '../paths'
+import { SerialTaskQueue } from '../taskQueue'
+import {
+  ANALYSIS_CACHE_VERSION,
+  hasCurrentAnalysis,
+  pickBeatTrackingStem
+} from '../../shared/analysis'
 import type { BpmDetectionResult, StemBitrate } from '../../shared/types'
 
-let bpmDetectionRunning: Promise<BpmDetectionResult | null> | null = null
-// Separate singleflight guard for hint-based redetection (see
-// add-tempo-octave-correction) — kept independent from bpmDetectionRunning
-// above so a correction redetect for one song can't return the wrong
-// song's normal-detection result (or vice versa) if both happen to be
-// in flight at once. Also lower-risk to run concurrently with a normal
-// detection than two normal detections are with each other: the hint path
-// skips TempoCNN/TensorFlow entirely (the actual OOM risk on low-RAM
-// machines — see CLAUDE.md), it's just librosa's beat tracker.
-let bpmRedetectionRunning: Promise<BpmDetectionResult | null> | null = null
+// One BPM detection at a time (several TensorFlow processes at once OOM
+// low-RAM machines — see CLAUDE.md), deduplicated per stem+hint, and the
+// song the user opens (high priority) jumps ahead of background analysis.
+const detectionQueue = new SerialTaskQueue<BpmDetectionResult | null>()
+
+// Read-modify-write of a song's .velody sidecar, serialized per song so two
+// concurrent writers (UI hooks, background analysis) can't drop each other's keys.
+const metaWrites = new Map<string, Promise<void>>()
+export function updateMeta(songDir: string, patch: Record<string, unknown>): Promise<void> {
+  const metaPath = join(songDir, '.velody')
+  const previous = metaWrites.get(songDir) ?? Promise.resolve()
+  const next = previous.then(async () => {
+    let existing: Record<string, unknown> = {}
+    try {
+      existing = JSON.parse(await readFile(metaPath, 'utf-8'))
+    } catch {
+      /* file doesn't exist or invalid JSON */
+    }
+    // Write-then-rename so a concurrent reader never sees a half-written file.
+    const tmpPath = `${metaPath}.${process.pid}.tmp`
+    await writeFile(tmpPath, JSON.stringify({ ...existing, ...patch }), 'utf-8')
+    await rename(tmpPath, metaPath)
+  })
+  const settled = next.catch(() => {})
+  metaWrites.set(songDir, settled)
+  void settled.then(() => {
+    if (metaWrites.get(songDir) === settled) metaWrites.delete(songDir)
+  })
+  return next
+}
+
+async function readMeta(songDir: string): Promise<unknown> {
+  try {
+    return JSON.parse(await readFile(join(songDir, '.velody'), 'utf-8'))
+  } catch {
+    return null
+  }
+}
+
+// Set once handlers are registered; see requestLibraryAnalysis.
+let startLibraryAnalysis: (() => void) | null = null
+
+/**
+ * Analyze (BPM, beat grid, downbeat) every library song that doesn't have a
+ * current analysis yet, one at a time in the background, so songs open
+ * instantly. Pauses while a separation is running; a song the user opens
+ * meanwhile jumps the queue.
+ */
+export function requestLibraryAnalysis(): void {
+  startLibraryAnalysis?.()
+}
 
 const STEM_NAMES = ['vocals', 'drums', 'bass', 'other', 'piano', 'guitar']
 
@@ -275,15 +322,7 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     'song:saveMeta',
     async (_event, songDir: string, meta: Record<string, unknown>) => {
-      const metaPath = join(songDir, '.velody')
-      let existing: Record<string, unknown> = {}
-      try {
-        const raw = await readFile(metaPath, 'utf-8')
-        existing = JSON.parse(raw)
-      } catch {
-        /* file doesn't exist or invalid JSON */
-      }
-      await writeFile(metaPath, JSON.stringify({ ...existing, ...meta }), 'utf-8')
+      await updateMeta(songDir, meta)
       return { success: true }
     }
   )
@@ -354,21 +393,57 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     'song:detectBpm',
     async (_event, stemPath: string, bpmHint?: number): Promise<BpmDetectionResult | null> => {
-      if (typeof bpmHint === 'number') {
-        if (bpmRedetectionRunning) return bpmRedetectionRunning
-        bpmRedetectionRunning = runDetectBpm(stemPath, bpmHint).finally(() => {
-          bpmRedetectionRunning = null
-        })
-        return bpmRedetectionRunning
-      }
-
-      if (bpmDetectionRunning) return bpmDetectionRunning
-      bpmDetectionRunning = runDetectBpm(stemPath).finally(() => {
-        bpmDetectionRunning = null
-      })
-      return bpmDetectionRunning
+      return detectionQueue.run(
+        `${stemPath}|${bpmHint ?? ''}`,
+        () => runDetectBpm(stemPath, bpmHint),
+        'high'
+      )
     }
   )
+
+  let analysisRunning = false
+  let analysisRequested = false
+  const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
+
+  async function analyzeLibrary(): Promise<void> {
+    analysisRunning = true
+    try {
+      while (analysisRequested) {
+        analysisRequested = false
+        const root = getStemsRootDir()
+        for (const song of await scanSongsLibrary(root)) {
+          const songDir = join(root, song.name)
+          const stem = pickBeatTrackingStem(song.stems)
+          if (!stem || hasCurrentAnalysis(await readMeta(songDir))) continue
+          // Don't compete with Demucs for the GPU/CPU/RAM.
+          while (jobManager?.isBusy()) await sleep(5000)
+          // Re-check: the user may have opened (and analyzed) it meanwhile.
+          if (hasCurrentAnalysis(await readMeta(songDir))) continue
+          const result = await detectionQueue
+            .run(`${stem}|`, () => runDetectBpm(stem), 'low')
+            .catch(() => null)
+          // Like the renderer, only successful detections are cached.
+          if (!result) continue
+          await updateMeta(songDir, {
+            bpm: result.bpm,
+            firstBeatOffset: result.firstBeatOffset,
+            beatTimes: result.beatTimes,
+            detectedDownbeatShift: result.downbeatShift,
+            _version: ANALYSIS_CACHE_VERSION
+          })
+        }
+      }
+    } catch (err) {
+      console.error('[libraryAnalysis]', err)
+    } finally {
+      analysisRunning = false
+    }
+  }
+
+  startLibraryAnalysis = (): void => {
+    analysisRequested = true
+    if (!analysisRunning) void analyzeLibrary()
+  }
 
   ipcMain.handle('separation:start', (_event, songPath: string, bitrate?: number) => {
     if (!jobManager) return { error: 'Job manager not ready' }
@@ -690,7 +765,7 @@ export function registerIpcHandlers(): void {
     return { success: false, error: 'File not found' }
   })
 
-  ipcMain.handle('url:updateYtDlp', async () => {
+  async function updateYtDlpPackage(): Promise<{ success: boolean; error?: string }> {
     const pythonPath = setupManager?.getPythonPath() ?? 'python3'
     try {
       const { ok, stderr } = await new Promise<{ ok: boolean; stderr: string }>((resolve) => {
@@ -705,99 +780,133 @@ export function registerIpcHandlers(): void {
     } catch (e) {
       return { success: false, error: String(e).slice(0, 500) }
     }
-  })
+  }
+
+  ipcMain.handle('url:updateYtDlp', () => updateYtDlpPackage())
 
   ipcMain.handle('url:import', async (_event, url: string, bitrate?: number) => {
     const pythonPath = setupManager?.getPythonPath() ?? 'python3'
     const scriptPath = join(getPythonWorkerDir(), 'download.py')
     const ffmpegPath = setupManager?.getFfmpegPath() ?? 'ffmpeg'
 
-    const downloadResult = await new Promise<{ path: string; title: string }>((resolve, reject) => {
-      const proc = spawn(pythonPath, [scriptPath, url, '--ffmpeg-path', ffmpegPath], {
-        cwd: getPythonWorkerDir()
-      })
-
-      const jobId = `dl-${Date.now()}`
-      let title = 'Untitled'
-      let stderr = ''
-      let settled = false
-
-      const broadcastFailed = (msg: string): void => {
-        for (const win of BrowserWindow.getAllWindows()) {
-          if (!win.isDestroyed()) {
-            win.webContents.send('url:download-failed', { jobId, error: msg })
-          }
+    const jobId = `dl-${Date.now()}`
+    const notifyFailed = (msg: string): void => {
+      for (const win of BrowserWindow.getAllWindows()) {
+        if (!win.isDestroyed()) {
+          win.webContents.send('url:download-failed', { jobId, error: msg })
         }
       }
+    }
 
-      const timeout = setTimeout(() => {
-        if (!settled) {
-          settled = true
-          proc.kill('SIGTERM')
-          broadcastFailed('Download timed out')
-          reject(new Error('Download timed out'))
+    // `final`: whether a failure of this attempt is reported to the UI (the
+    // first attempt stays quiet if it may still be retried).
+    const attempt = (final: boolean): Promise<{ path: string; title: string }> =>
+      new Promise<{ path: string; title: string }>((resolve, reject) => {
+        const proc = spawn(pythonPath, [scriptPath, url, '--ffmpeg-path', ffmpegPath], {
+          cwd: getPythonWorkerDir()
+        })
+
+        let title = 'Untitled'
+        let stderr = ''
+        let settled = false
+
+        const broadcastFailed = (msg: string): void => {
+          if (final || !msg.includes('[UPDATE_YTDLP]')) notifyFailed(msg)
         }
-      }, 600_000)
 
-      proc.stdout.on('data', (data: Buffer) => {
-        const lines = data.toString().trim().split('\n')
-        for (const line of lines) {
-          if (!line) continue
-          try {
-            const parsed = JSON.parse(line)
-            if (parsed.type === 'metadata') {
-              title = parsed.title || title
-            } else if (parsed.type === 'progress') {
-              for (const win of BrowserWindow.getAllWindows()) {
-                if (!win.isDestroyed()) {
-                  win.webContents.send('url:download-progress', {
-                    jobId,
-                    percent: parsed.percent,
-                    title
-                  })
+        const timeout = setTimeout(() => {
+          if (!settled) {
+            settled = true
+            proc.kill('SIGTERM')
+            broadcastFailed('Download timed out')
+            reject(new Error('Download timed out'))
+          }
+        }, 600_000)
+
+        proc.stdout.on('data', (data: Buffer) => {
+          const lines = data.toString().trim().split('\n')
+          for (const line of lines) {
+            if (!line) continue
+            try {
+              const parsed = JSON.parse(line)
+              if (parsed.type === 'metadata') {
+                title = parsed.title || title
+              } else if (parsed.type === 'progress') {
+                for (const win of BrowserWindow.getAllWindows()) {
+                  if (!win.isDestroyed()) {
+                    win.webContents.send('url:download-progress', {
+                      jobId,
+                      percent: parsed.percent,
+                      title
+                    })
+                  }
                 }
+              } else if (parsed.type === 'complete' && !settled) {
+                settled = true
+                clearTimeout(timeout)
+                resolve({ path: parsed.path, title: parsed.title || title })
+              } else if (parsed.type === 'error' && !settled) {
+                settled = true
+                clearTimeout(timeout)
+                broadcastFailed(parsed.message)
+                reject(new Error(parsed.message))
               }
-            } else if (parsed.type === 'complete' && !settled) {
-              settled = true
-              clearTimeout(timeout)
-              resolve({ path: parsed.path, title: parsed.title || title })
-            } else if (parsed.type === 'error' && !settled) {
-              settled = true
-              clearTimeout(timeout)
-              broadcastFailed(parsed.message)
-              reject(new Error(parsed.message))
+            } catch {
+              // non-JSON output, ignore
             }
-          } catch {
-            // non-JSON output, ignore
           }
-        }
-      })
+        })
 
-      proc.stderr.on('data', (data: Buffer) => {
-        stderr += data.toString()
-      })
+        proc.stderr.on('data', (data: Buffer) => {
+          stderr += data.toString()
+        })
 
-      proc.on('close', (code) => {
-        if (!settled) {
-          settled = true
-          clearTimeout(timeout)
-          if (code !== 0) {
-            const msg = `Download process failed (code ${code}): ${stderr.slice(0, 300)}`
-            broadcastFailed(msg)
-            reject(new Error(msg))
+        proc.on('close', (code) => {
+          if (!settled) {
+            settled = true
+            clearTimeout(timeout)
+            if (code !== 0) {
+              const msg = `Download process failed (code ${code}): ${stderr.slice(0, 300)}`
+              broadcastFailed(msg)
+              reject(new Error(msg))
+            }
           }
-        }
+        })
+
+        proc.on('error', (err) => {
+          if (!settled) {
+            settled = true
+            clearTimeout(timeout)
+            broadcastFailed(err.message)
+            reject(err)
+          }
+        })
       })
 
-      proc.on('error', (err) => {
-        if (!settled) {
-          settled = true
-          clearTimeout(timeout)
-          broadcastFailed(err.message)
-          reject(err)
+    // YouTube changes break old yt-dlp versions. When download.py says so,
+    // update yt-dlp in the venv and retry once before giving up.
+    let downloadResult: { path: string; title: string }
+    try {
+      downloadResult = await attempt(false)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      if (!message.includes('[UPDATE_YTDLP]')) throw err
+      for (const win of BrowserWindow.getAllWindows()) {
+        if (!win.isDestroyed()) {
+          win.webContents.send('url:download-progress', {
+            jobId,
+            percent: 0,
+            title: 'Updating yt-dlp…'
+          })
         }
-      })
-    })
+      }
+      const updated = await updateYtDlpPackage()
+      if (!updated.success) {
+        notifyFailed(message)
+        throw err
+      }
+      downloadResult = await attempt(true)
+    }
 
     if (!jobManager) return { error: 'Job manager not ready' }
     // download.py writes into its own velody_dl_* temp dir; let the job delete it when done.

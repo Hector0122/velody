@@ -293,13 +293,37 @@ function runPythonJsonLines(pythonPath, scriptPath, args, { cwd, timeoutMs }) {
   })
 }
 
-async function downloadSong(url, pythonPath, ffmpegPath) {
-  const result = await runPythonJsonLines(
+function runDownload(url, pythonPath, ffmpegPath) {
+  return runPythonJsonLines(
     pythonPath,
     join(PYTHON_WORKER_DIR, 'download.py'),
     [url, '--ffmpeg-path', ffmpegPath],
     { cwd: PYTHON_WORKER_DIR, timeoutMs: DOWNLOAD_TIMEOUT_MS }
   )
+}
+
+function updateYtDlp(pythonPath) {
+  return new Promise((resolveUpdate) => {
+    const proc = spawn(pythonPath, ['-m', 'pip', 'install', '-q', '-U', 'yt-dlp'])
+    proc.on('close', (code) => resolveUpdate(code === 0))
+    proc.on('error', () => resolveUpdate(false))
+  })
+}
+
+let ytDlpUpdated = false
+
+async function downloadSong(url, pythonPath, ffmpegPath) {
+  let result
+  try {
+    result = await runDownload(url, pythonPath, ffmpegPath)
+  } catch (err) {
+    // YouTube changes break old yt-dlp versions: update once per run, retry.
+    if (ytDlpUpdated || !String(err?.message).includes('[UPDATE_YTDLP]')) throw err
+    process.stdout.write('(updating yt-dlp) ')
+    ytDlpUpdated = true
+    if (!(await updateYtDlp(pythonPath))) throw err
+    result = await runDownload(url, pythonPath, ffmpegPath)
+  }
   return { path: result.path, title: result.title }
 }
 

@@ -1,7 +1,12 @@
 import { app, shell, BrowserWindow, ipcMain } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
-import { registerIpcHandlers, setSetupManager, setJobManager } from './ipc/handlers'
+import {
+  registerIpcHandlers,
+  setSetupManager,
+  setJobManager,
+  requestLibraryAnalysis
+} from './ipc/handlers'
 import { SetupManager } from './setup'
 import { JobManager } from './jobs/JobManager'
 import { startAudioServer, stopAudioServer, audioUrl } from './audio-server'
@@ -86,6 +91,11 @@ app.whenReady().then(async () => {
   registerIpcHandlers()
   initAutoUpdater()
   createWindow()
+
+  // Pre-analyze songs (BPM, beat grid, downbeat) in the background so they
+  // open instantly: shortly after launch, and after every new separation.
+  setTimeout(requestLibraryAnalysis, 10_000)
+  jobManager.onJobCompleted(() => requestLibraryAnalysis())
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()

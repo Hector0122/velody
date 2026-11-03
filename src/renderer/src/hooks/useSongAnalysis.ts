@@ -1,11 +1,10 @@
 import { useEffect, useRef } from 'react'
 import { songDirFromStemPath, pickBeatTrackingStem } from '../utils'
+import { ANALYSIS_CACHE_VERSION } from '../../../shared/analysis'
 
-// 20: also caches the detected downbeat (`detectedDownbeatShift`).
-// 19: detection now runs on the drums stem (pickBeatTrackingStem) instead of
-// whatever stems[0] happened to be — older results are re-detected.
-// 18: caches started storing the detected beat-time grid.
-const CACHE_VERSION = 20
+// Version lives in src/shared/analysis.ts (main's background analysis writes
+// the same cache).
+const CACHE_VERSION = ANALYSIS_CACHE_VERSION
 export { CACHE_VERSION }
 
 // originalBpmRef/beatTimesRef, like firstBeatOffsetRef, are refs owned by

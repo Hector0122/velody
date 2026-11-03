@@ -55,7 +55,13 @@ Main-process code talks to Python by spawning a script and reading newline-delim
 
 Stems are MP3 at a per-song bitrate (128/192/320 kbps) picked in the import screen ("Stem quality", persisted in localStorage as `velody:stemBitrate`) and passed `separation:start`/`url:import` → `JobManager.enqueue({ bitrate })` → `separate.py --bitrate`. Temp files are always cleaned up: `separate.py` removes its Demucs temp dir in a `finally` (and kills the Demucs child on SIGTERM), and URL imports pass the `velody_dl_*` download dir as the job's `tempDir`, deleted when the job ends.
 
-BPM detection (`song:detectBpm`) uses a **singleflight** pattern in the IPC handler: only one Python process runs at a time; concurrent calls reuse the in-flight promise. This exists because multiple simultaneous TensorFlow (TempoCNN) processes OOM on low-RAM Windows machines — don't remove it without understanding why.
+BPM detection goes through `detectionQueue` (`src/main/taskQueue.ts`, a `SerialTaskQueue`): only one Python process runs at a time — multiple simultaneous TensorFlow (TempoCNN) processes OOM on low-RAM Windows machines, don't remove that. Requests are deduplicated per `stem|bpmHint` (the old singleflight handed an in-flight result to *any* caller, even for another song), and UI requests (`high`) jump ahead of background work (`low`). `requestLibraryAnalysis()` (10 s after launch and after every separation) walks the library and analyzes songs lacking a current cache (`hasCurrentAnalysis`, version in `src/shared/analysis.ts`), pausing while `jobManager.isBusy()`.
+
+All `.velody` writes go through `updateMeta()` (handlers.ts): serialized per song and written via temp-file + rename, so concurrent writers (UI hooks, background analysis) can't drop each other's keys or expose a half-written file.
+
+Empty stems: `separate.py` drops stems with no real part (`python-worker/stem_activity.py`: audible < 2 s, or < 8 s with p95 < -50 dB — never all of them) and emits `{"type": "skipped"}`; `prune_empty_stems.py <root> [--apply]` applies the same rule to an existing library. Songs can therefore have fewer than 6 stems.
+
+URL import: when download.py reports `[UPDATE_YTDLP]`, main updates yt-dlp in the venv and retries once before surfacing the error (batch-import.mjs does the same, once per run).
 
 ### Renderer structure
 
