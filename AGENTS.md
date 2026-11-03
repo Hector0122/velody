@@ -125,13 +125,18 @@ velody/
 │           │   └── useRecording.ts    ← Recording flow
 │
 ├── python-worker/
-│   ├── separate.py              ← Demucs script
-│   ├── detect_key.py            ← Key detection (Krumhansl-Schmuckler)
+│   ├── separate.py              ← Demucs script (drops empty stems)
+│   ├── stem_activity.py         ← Empty-stem detection
+│   ├── prune_empty_stems.py     ← Apply it to an existing library
+│   ├── detect_bpm.py            ← TempoCNN + librosa beat grid
+│   ├── downbeat.py              ← Which beat is the "1"
+│   ├── download.py              ← YouTube import (yt-dlp)
 │   ├── requirements.txt
 │   └── utils/
 │
-├── output/
-│   └── stems/                   ← Generated stems here
+├── scripts/
+│   ├── batch-import.mjs         ← Bulk download + separate
+│   └── verify-asar.mjs          ← Release check: app.asar has every runtime dep
 │
 ├── resources/                   ← App icons
 ├── build/                       ← Electron builder configs
@@ -155,35 +160,22 @@ velody/
 
 ## Stem Separation
 
-Initial stems:
+Demucs `htdemucs_6s` produce hasta 6 stems: Vocals, Drums, Bass, Other, Piano, Guitar.
 
-- Vocals
-- Drums
-- Bass
-- Other
-- Piano
-- Guitar
-
-Using:
-
-- Demucs (htdemucs_6s)
+- **Calidad por canción**: MP3 a 128 / 192 / 320 kbps, elegido en "Stem quality" al importar (~23 / 35 / 58 MB por canción de 4 min). `separate.py --bitrate`.
+- **Stems vacíos fuera**: `python-worker/stem_activity.py` descarta stems sin una parte real (ej. `piano.mp3` en una canción sin piano): audible < 2 s, o < 8 s con p95 < −50 dB. Nunca descarta todos. `prune_empty_stems.py <root> [--apply]` aplica la misma regla a una biblioteca existente. Una canción puede tener menos de 6 stems.
+- **Biblioteca**: `<userData>/output/stems` (Linux: `~/.config/velody/output/stems`), igual en `pnpm dev` y en la app instalada (`src/main/paths.ts`). Nada se escribe dentro del repo.
+- **Temporales**: la carpeta temporal de Demucs y la descarga de YouTube se borran siempre, aunque la separación falle o se cancele; al cancelar también se termina el proceso hijo de Demucs.
+- **Importación masiva**: `node scripts/batch-import.mjs links.txt [--bitrate 128]` descarga y separa una lista de links (reanudable).
 
 ---
 
 ## Audio Playback
 
-Features:
-
-- Play/Pause
-- Timeline
-- Waveforms
-- Mute stem
-- Solo stem
-- Volume per stem (individual slider)
-
-Using:
-
-- WaveSurfer.js
+- Play/Pause, timeline y waveforms (WaveSurfer.js), mute/solo/volumen/pan por stem
+- **Arranca donde empieza la música**: al cargar, el cursor salta al primer sonido (`findMusicStart`); Restart vuelve ahí si no hay trim
+- **Practice**: velocidad 50–150 % sin cambiar el tono y transposición ±12 semitonos, en tiempo real (`playbackRate` en los stems + un nodo Signalsmith Stretch en el bus master; ver `pitchShifter.ts`). Se guardan por canción.
+- **Live mode** (interruptor en la barra lateral): muestra Setlists y Live Presets, pensados para tocar con banda; apagado por defecto.
 
 ---
 
@@ -202,61 +194,31 @@ Allow exporting:
 
 ## How It Works
 
-`python-worker/detect_bpm.py` detecta el BPM usando TempoCNN + librosa:
+`python-worker/detect_bpm.py`, siempre sobre el stem de **batería** (`pickBeatTrackingStem`; antes era `stems[0]`, que dependía del orden del sistema de archivos):
 
-1. TempoCNN (TensorFlow): estima el tempo base a partir de features MFCC
-2. librosa `beat.beat_track()`: refina el BPM y calcula el `firstBeatOffset` (tiempo del primer golpe)
-3. Fallback: si librosa no está instalado, usa solo el estimado de TempoCNN
+1. TempoCNN (TensorFlow): tempo base
+2. librosa `beat.beat_track()`: rejilla completa de beats (`beatTimes`) y `firstBeatOffset`
+3. **Downbeat** (`downbeat.py`): estima qué beat es el "1" con golpes del bajo + bombo + cambios de acorde del bajo → `downbeatShift`
+4. Si librosa no encuentra beats, se usa el tempo de TempoCNN sin rejilla (nunca devuelve BPM 0)
 
-## IPC Concurrency
+## Metrónomo y count-in
 
-El handler `song:detectBpm` usa un patrón **singleflight**: solo un proceso de Python puede correr a la vez. Si se llama mientras ya hay una detección en progreso, reutiliza la misma promesa (mismo resultado). Esto evita spawne múltiples procesos de TensorFlow que causan OOM.
+- El click se programa en el **mismo AudioContext** que los stems, con la posición leída del reloj de audio (exacto a la muestra), respeta la velocidad de práctica y compensa la latencia del nodo de tono.
+- **"This is the 1"** / ◀ ▶ corrige el acento a mano; la corrección manual siempre gana sobre la detectada.
+- **Count-in sobre la rejilla** (`planCountIn`): termina un beat antes del siguiente beat real de la canción y siempre empieza en un "1".
 
-## Caché BPM
+## Concurrencia y análisis en segundo plano
 
-- Resultado guardado en `.velody` (sidecar JSON) con `CACHE_VERSION`
-- Solo se guarda al caché cuando la detección fue **exitosa** (result no null)
-- Si la detección falla, NO se guarda el fallback (120) — la próxima vez reintenta
-- Si `CACHE_VERSION` cambia, el caché anterior se invalida forzando re-detección
-- `useSongAnalysis` usa un `detectedRef` para no re-ejecutar si ya detectó (el singleflight del backend maneja la deduplicación de procesos)
-
-## Known Issues
-
-- TempoCNN depende de TensorFlow que es pesado (~1-2GB RAM por proceso)
-- En Windows con poca RAM, múltiples procesos simultáneos causaban crash (exit code `0xC0000409`)
-- Solucionado con singleflight en el backend + caché que no envenena con fallbacks
-
----
-
-# Key Detection
-
-## How It Works
-
-`python-worker/detect_key.py` detecta la tonalidad usando numpy FFT + Krumhansl-Schmuckler:
-
-1. Decodifica el stem de bajo con FFmpeg (solo bajo — más confiable que el mix completo)
-2. FFT de 32768 puntos (resolución ~1.35 Hz/bin, separa semitonos incluso a 40 Hz)
-3. Chroma vector (12 notas) en rango 40–2000 Hz
-4. Krumhansl-Schmuckler: correlaciona el chroma contra 24 perfiles (12 mayores + 12 menores)
-5. Si KS tiene poca certeza (gap < 5% entre 1° y 2°) Y el bajo tiene una nota claramente dominante (>10% de margen), overridea con la nota más fuerte del bajo
+- `detectionQueue` (`src/main/taskQueue.ts`): **un solo proceso de Python a la vez** (varios TensorFlow simultáneos causaban OOM en Windows con poca RAM), deduplicado por canción, y la canción que abres pasa antes que el trabajo de fondo.
+- `requestLibraryAnalysis()`: 10 s después de abrir la app y tras cada separación, analiza las canciones sin caché vigente, una por una, en pausa mientras Demucs trabaja. Así las canciones abren al instante.
 
 ## Caché
 
-- Resultado guardado en `.velody` (sidecar JSON) con versión
-- Al cargar una canción, se muestra la key de caché instantáneamente y Python la corrige si es necesario
+- `.velody` (JSON junto a los stems), versión en `src/shared/analysis.ts` (`ANALYSIS_CACHE_VERSION`, hoy 20)
+- Solo se guardan detecciones **exitosas**; si falla, la próxima vez reintenta
+- Todas las escrituras pasan por `updateMeta()`: serializadas por canción y atómicas (temp + rename)
 
----
-
-# Jam Zone
-
-Botón en el panel lateral que despliega las escalas para improvisar sobre la canción:
-
-| Tonalidad | Escalas mostradas                                                                                 |
-| --------- | ------------------------------------------------------------------------------------------------- |
-| **Mayor** | Major (Ionian), Lydian, Mixolydian, Major Pentatonic, Blues                                       |
-| **Menor** | Natural Minor (Aeolian), Dorian, Phrygian, Harmonic Minor, Melodic Minor, Minor Pentatonic, Blues |
-
-Cada escala muestra las notas como chips de colores. Ideal para improvisar o aprender la escala correcta para cada canción.
+> Las funciones de **tonalidad (Key Detection)** y **Jam Zone / diapasón** se retiraron de la app; ya no existen en el código.
 
 ---
 
@@ -342,22 +304,21 @@ https://ffmpeg.org
 | --- | --- |
 | `pnpm dev` | Desarrollo con hot-reload |
 | `pnpm build` | Typecheck + vite build (sin empaquetar) |
-| `pnpm build:win` | Build completo → genera `dist/velody-<version>-setup.exe` |
-| `pnpm build:unpack` | Build sin instalador (solo carpeta `dist/win-unpacked/`) |
+| `pnpm build:linux` | AppImage + `.deb` en `dist/` |
+| `node scripts/verify-asar.mjs` | Verifica que `app.asar` traiga todas las dependencias de runtime |
 
-## Installer
+## Flujo para release (Linux)
 
-- **NSIS one-click**: se ejecuta el `.exe` y se instala silenciosamente en `%LOCALAPPDATA%\Programs\velody`
-- Crea acceso directo en el escritorio
-- Incluye `python-worker/` como extra resource (empaquetado dentro del `.exe`)
-- Configuración: `electron-builder.yml`
+```bash
+pnpm version patch        # o minor: sube package.json, hace commit y tag vX.Y.Z
+git push origin main --follow-tags
+```
 
-## Flujo para release
+`.github/workflows/release.yml` corre los tests, empaqueta AppImage + `.deb`, ejecuta `verify-asar.mjs` (la 1.1.0 salió sin `ms` y no abría; ahora el release falla si falta una dependencia) y publica el GitHub Release.
 
-1. Actualizar `version` en `package.json`
-2. Ejecutar `pnpm build:win`
-3. El instalador se genera en `dist/velody-<version>-setup.exe`
-4. Distribuir el `.exe` directamente (no requiere firma de código para uso local)
+## Auto-update
+
+`src/main/updater.ts` (electron-updater) revisa los Releases de GitHub al abrir la app instalada, descarga la versión nueva en segundo plano y muestra **"Restart to update"**. El `.deb` pide la contraseña de administrador al instalar; el AppImage no. En `pnpm dev` no aplica.
 
 ---
 
@@ -405,6 +366,23 @@ Update UI
 
 # Future Features
 
+## Próxima sesión — Separación extra (opcional, por stem)
+
+Idea: botones opcionales sobre un stem ya separado que solo corren cuando el usuario los pide en esa canción, así no se gasta tiempo ni espacio donde no hace falta. Cada modelo se descarga una sola vez (cientos de MB), cada división tarda ~30 s–1 min con GPU y cada stem extra pesa ~4 MB a 128 kbps.
+
+1. **Dividir batería** — bombo, tarola, toms, hi-hat y platillos. Viable y con buena calidad: modelos abiertos tipo *DrumSep* (MDX23C) aplicados al stem de batería, en local.
+2. **Voz principal vs. coros** — modelos "karaoke" que separan la voz líder de los coros. Funcionan bien cuando los coros son claramente otra voz.
+3. **Dividir guitarras (L/R)** — no existe un modelo abierto confiable para separar dos guitarras (rítmica/lead). Pero en mucho rock las guitarras dobladas van paneadas izquierda/derecha: dividir el stem de guitarra por canal las separa casi limpio, al instante y sin IA. No sirve si ambas van al centro.
+
+Pendientes de decidir: dónde va el botón en la UI, cómo se nombran/agrupan los sub-stems en el mezclador, y si se pueden revertir (borrar sub-stems y volver al stem original).
+
+## Otras ideas propuestas (sin priorizar)
+
+- Atajos de teclado (espacio, ←/→ por compás, L loop, M metrónomo, R restart, [ ] velocidad)
+- Loop que se ajusta a compases + entrenador de velocidad (70 % → +5 % por vuelta)
+- Count-in de **grabación** alineado a la rejilla (el de reproducción ya lo está)
+- Detección de acordes y de secciones (intro/verso/coro)
+
 ## Phase 2 — Navegación
 
 Features para navegar y practicar secciones específicas de la canción:
@@ -424,9 +402,10 @@ Herramientas mínimas para que el músico se grabe practicando:
 ## Phase 2 — Herramientas de práctica
 
 - **Tempo tap**: tocar el tempo manualmente con un botón si la detección automática falla
-- **Manual key override**: permitir al usuario cambiar la tonalidad detectada si el algoritmo falla ✅
-- **Key-aware Jam Zone**: que las escalas cambien en tiempo real si el usuario sobreescribe la key ✅
-- **Jam Zone visual / Diapasón interactivo**: fretboard SVG con notas de escala, toggle guitarra/bajo ✅
+- ~~Manual key override / Jam Zone / diapasón~~ — retirados de la app (ya no existen)
+- **Velocidad sin cambiar tono + transposición** en tiempo real ✅
+- **Detección automática del "1"** + botón "This is the 1" ✅
+- **Count-in sobre la rejilla de la canción** ✅
 - **🔗 Tab Finder**: botón por stem que busca tabs en Ultimate Guitar ✅
 
 ## Phase 2 — Mezcla

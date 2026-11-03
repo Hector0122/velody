@@ -1,6 +1,6 @@
 # Velody 🎧
 
-App de escritorio para separar canciones en pistas (voz, batería, bajo, otros) y practicar sobre ellas — 100% local, sin nube.
+App de escritorio para separar canciones en pistas (voz, batería, bajo, guitarra, piano, otros) y practicar sobre ellas — 100% local, sin nube.
 
 <table align="center">
   <tr>
@@ -17,13 +17,16 @@ Las herramientas de separación de stems suelen ser un servicio online: subes tu
 
 ## Features
 
-- 🎚️ Separación de stems (voz, batería, bajo, otros) con Demucs
-- 🎧 Reproductor con volumen, pan y mute independiente por stem, sincronizado sample a sample
-- 📊 Detección automática de BPM y tonalidad
-- 🥁 Metrónomo sincronizado a la canción
+- 🎚️ Separación en hasta 6 stems (voz, batería, bajo, guitarra, piano, otros) con Demucs, sin guardar stems vacíos
+- 💾 Calidad elegible por canción (128 / 192 / 320 kbps)
+- 🎧 Reproductor con volumen, pan, mute y solo por stem, sincronizado sample a sample; arranca donde empieza la música
+- 🐢 Velocidad 50–150 % sin cambiar el tono y transposición ±12 semitonos, en tiempo real
+- 📊 Detección automática de BPM, rejilla de beats y del "1" del compás (analizada en segundo plano)
+- 🥁 Metrónomo y count-in amarrados a la rejilla de la canción
 - 🎙️ Grabar sobre un stem (por ejemplo, reemplazar la voz con la tuya)
-- 🔄 Transposición de tono
+- 📥 Importar desde YouTube, uno o en lote
 - 💾 Exportar stems o la mezcla final
+- 🔄 Se actualiza sola desde GitHub Releases (AppImage / .deb)
 
 ## Cómo está resuelto
 
