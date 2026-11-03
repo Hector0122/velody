@@ -1,0 +1,45 @@
+# Builds Velody and publishes a GitHub Release whenever a version tag is pushed:
+#
+#   pnpm version patch     # 1.1.0 -> 1.1.1 (bumps package.json, commits, tags v1.1.1)
+#   git push --follow-tags
+#
+# electron-builder uploads the AppImage, .deb and latest-linux.yml to the
+# release; installed copies of the app pick it up on their next launch
+# (src/main/updater.ts).
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write # create the release and upload assets
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4 # version comes from package.json "packageManager"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Check the tag matches package.json
+        run: |
+          pkg="v$(node -p "require('./package.json').version")"
+          if [ "$pkg" != "$GITHUB_REF_NAME" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match package.json version $pkg"; exit 1
+          fi
+
+      - run: pnpm test
+
+      - name: Build and publish
+        run: pnpm build && pnpm exec electron-builder --linux --publish always
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -20,6 +20,9 @@ interface UseLivePresetsParams {
   setStemPannings: (v: Record<string, number>) => void
   setMetronomeOn: (v: boolean) => void
   setMasterVolume: (v: number) => void
+  // Re-apply the last-used preset when a song opens. Off while live mode is
+  // hidden, so a preset nobody can see doesn't silently change the mix.
+  autoApply?: boolean
 }
 
 interface UseLivePresetsReturn {
@@ -49,7 +52,8 @@ export default function useLivePresets({
   setStemVolumes,
   setStemPannings,
   setMetronomeOn,
-  setMasterVolume
+  setMasterVolume,
+  autoApply = true
 }: UseLivePresetsParams): UseLivePresetsReturn {
   const [presets, setPresets] = useState<LivePreset[]>([])
   const [activePresetId, setActivePresetId] = useState<string | null>(null)
@@ -88,7 +92,7 @@ export default function useLivePresets({
       setPresets(loaded)
 
       const lastId = cached?.lastAppliedLivePresetId
-      const toApply = lastId ? loaded.find((p) => p.id === lastId) : undefined
+      const toApply = autoApply && lastId ? loaded.find((p) => p.id === lastId) : undefined
       if (toApply) {
         setActive(toApply.active)
         setStemVolumes(toApply.stemVolumes)
@@ -100,7 +104,15 @@ export default function useLivePresets({
         setActivePresetId(null)
       }
     })()
-  }, [stems, setActive, setStemVolumes, setStemPannings, setMetronomeOn, setMasterVolume])
+  }, [
+    stems,
+    setActive,
+    setStemVolumes,
+    setStemPannings,
+    setMetronomeOn,
+    setMasterVolume,
+    autoApply
+  ])
 
   const persist = useCallback(
     (nextPresets: LivePreset[], lastAppliedId: string | null): void => {

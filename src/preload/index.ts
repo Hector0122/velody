@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type { StemBitrate } from '../shared/types'
+import type { StemBitrate, UpdateStatus } from '../shared/types'
 
 export interface SeparationProgressEvent {
   jobId: string
@@ -170,7 +170,16 @@ const api = {
     }
   },
   updateYtDlp: () =>
-    ipcRenderer.invoke('url:updateYtDlp') as Promise<{ success: boolean; error?: string }>
+    ipcRenderer.invoke('url:updateYtDlp') as Promise<{ success: boolean; error?: string }>,
+  getUpdateStatus: () => ipcRenderer.invoke('update:getStatus') as Promise<UpdateStatus>,
+  onUpdateStatus: (callback: (s: UpdateStatus) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, s: UpdateStatus): void => callback(s)
+    ipcRenderer.on('update:status', handler)
+    return (): void => {
+      ipcRenderer.removeListener('update:status', handler)
+    }
+  },
+  installUpdate: () => ipcRenderer.invoke('update:install') as Promise<void>
 }
 
 if (process.contextIsolated) {

@@ -1,5 +1,6 @@
 import { memo, useState } from 'react'
 import { formatTime, BPM_MIN, BPM_MAX } from '../utils'
+import { SPEED_MIN, SPEED_MAX, SPEED_STEP } from '../hooks/pitchShifter'
 import type { TempoOctaveDirection } from '../hooks/tempoOctaveCorrection'
 
 interface MasterPanelProps {
@@ -24,6 +25,14 @@ interface MasterPanelProps {
   onBpmChange: (v: number) => void
   onBpmIncrement: () => void
   onCorrectTempoOctave: (direction: TempoOctaveDirection) => void
+  downbeatShift: number
+  speed: number
+  semitones: number
+  onSpeedChange: (speed: number) => void
+  onSemitonesChange: (semitones: number) => void
+  pitchShifterError: string | null
+  onMarkDownbeat: () => void
+  onDownbeatShiftChange: (shift: number) => void
   correctingTempoOctave: boolean
   onMetronomeToggle: () => void
   onMetroVolumeChange: (v: number) => void
@@ -56,6 +65,14 @@ function MasterPanel({
   onBpmChange,
   onBpmIncrement,
   onCorrectTempoOctave,
+  downbeatShift,
+  speed,
+  semitones,
+  onSpeedChange,
+  onSemitonesChange,
+  pitchShifterError,
+  onMarkDownbeat,
+  onDownbeatShiftChange,
   correctingTempoOctave,
   onMetronomeToggle,
   onMetroVolumeChange,
@@ -213,6 +230,81 @@ function MasterPanel({
 
       <div className="border-t border-neutral-800 pt-4 w-full flex flex-col gap-3">
         <h3 className="text-sm font-semibold text-neutral-400 uppercase tracking-wide text-center">
+          Practice
+        </h3>
+        <div className="flex flex-col gap-1 w-full px-1">
+          <div className="flex items-center justify-between text-xs">
+            <span className="text-neutral-500">Speed</span>
+            <button
+              onClick={() => onSpeedChange(1)}
+              disabled={speed === 1}
+              title="Reset to normal speed"
+              className="font-mono-brand text-white disabled:text-neutral-400 hover:text-orange-400 disabled:hover:text-neutral-400"
+            >
+              {Math.round(speed * 100)}%
+            </button>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <button
+              onClick={() => onSpeedChange(speed - SPEED_STEP)}
+              aria-label="Slower"
+              className="w-6 h-6 shrink-0 rounded bg-neutral-800 text-neutral-400 hover:text-white text-xs flex items-center justify-center"
+            >
+              −
+            </button>
+            <input
+              type="range"
+              aria-label="Playback speed"
+              min={SPEED_MIN}
+              max={SPEED_MAX}
+              step={SPEED_STEP}
+              value={speed}
+              onChange={(e) => onSpeedChange(parseFloat(e.target.value))}
+              className="accent-orange-500 cursor-pointer w-full"
+            />
+            <button
+              onClick={() => onSpeedChange(speed + SPEED_STEP)}
+              aria-label="Faster"
+              className="w-6 h-6 shrink-0 rounded bg-neutral-800 text-neutral-400 hover:text-white text-xs flex items-center justify-center"
+            >
+              +
+            </button>
+          </div>
+        </div>
+        <div className="flex items-center justify-between w-full px-1 text-xs">
+          <span className="text-neutral-500">Pitch</span>
+          <div className="flex items-center gap-1.5">
+            <button
+              onClick={() => onSemitonesChange(semitones - 1)}
+              aria-label="Transpose down a semitone"
+              className="w-6 h-6 rounded bg-neutral-800 text-neutral-400 hover:text-white text-xs flex items-center justify-center"
+            >
+              ♭
+            </button>
+            <button
+              onClick={() => onSemitonesChange(0)}
+              disabled={semitones === 0}
+              title="Reset to original key"
+              className="w-10 text-center font-mono-brand text-white disabled:text-neutral-400 hover:text-orange-400 disabled:hover:text-neutral-400"
+            >
+              {semitones > 0 ? `+${semitones}` : semitones}
+            </button>
+            <button
+              onClick={() => onSemitonesChange(semitones + 1)}
+              aria-label="Transpose up a semitone"
+              className="w-6 h-6 rounded bg-neutral-800 text-neutral-400 hover:text-white text-xs flex items-center justify-center"
+            >
+              ♯
+            </button>
+          </div>
+        </div>
+        {pitchShifterError && (
+          <p className="text-[10px] text-red-400 text-center">{pitchShifterError}</p>
+        )}
+      </div>
+
+      <div className="border-t border-neutral-800 pt-4 w-full flex flex-col gap-3">
+        <h3 className="text-sm font-semibold text-neutral-400 uppercase tracking-wide text-center">
           Metronome
         </h3>
         <div className="flex items-center justify-center gap-1.5">
@@ -264,6 +356,31 @@ function MasterPanel({
             className="px-2 py-0.5 rounded text-[10px] font-medium bg-neutral-800 text-neutral-400 hover:text-white transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
           >
             ×2
+          </button>
+        </div>
+        <div className="flex items-center justify-center gap-1.5">
+          <button
+            onClick={() => onDownbeatShiftChange(downbeatShift - 1)}
+            title="Move the accent one beat earlier"
+            aria-label="Move accent earlier"
+            className="w-6 h-6 rounded bg-neutral-800 text-neutral-400 hover:text-white text-[10px] flex items-center justify-center"
+          >
+            ◀
+          </button>
+          <button
+            onClick={onMarkDownbeat}
+            title="Press on the first beat of a bar while the song plays: that beat becomes the accented '1'. Saved for this song."
+            className="px-2.5 h-6 rounded bg-neutral-800 text-neutral-300 hover:text-white text-[10px] font-medium transition-colors"
+          >
+            This is the 1
+          </button>
+          <button
+            onClick={() => onDownbeatShiftChange(downbeatShift + 1)}
+            title="Move the accent one beat later"
+            aria-label="Move accent later"
+            className="w-6 h-6 rounded bg-neutral-800 text-neutral-400 hover:text-white text-[10px] flex items-center justify-center"
+          >
+            ▶
           </button>
         </div>
         <div className="flex items-center justify-between px-1">

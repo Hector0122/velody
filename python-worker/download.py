@@ -2,7 +2,7 @@
 """Velody URL Download Worker.
 
 Usage:
-    python download.py <url> [--ffmpeg-path <path>] [--mode audio|video]
+    python download.py <url> [--ffmpeg-path <path>]
 
 Output:
     JSON lines to stdout (same protocol as separate.py).
@@ -47,11 +47,10 @@ def _clean_youtube_url(url: str) -> str:
     return url
 
 
-VIDEO_EXTENSIONS = ('.mp4', '.mkv', '.webm')
 AUDIO_EXTENSIONS = ('.mp3', '.wav', '.flac', '.m4a', '.ogg')
 
 
-def download_audio(url: str, ffmpeg_path: str | None = None, mode: str = "audio") -> dict:
+def download_audio(url: str, ffmpeg_path: str | None = None) -> dict:
     tmp_dir = tempfile.mkdtemp(prefix="velody_dl_")
     output_path = str(Path(tmp_dir) / "%(title)s.%(ext)s")
 
@@ -68,16 +67,12 @@ def download_audio(url: str, ffmpeg_path: str | None = None, mode: str = "audio"
         },
     }
 
-    if mode == "video":
-        ydl_opts['format'] = 'bv*+ba/b'
-        ydl_opts['merge_output_format'] = 'mp4'
-    else:
-        ydl_opts['format'] = 'ba/b/worst*'
-        ydl_opts['postprocessors'] = [{
-            'key': 'FFmpegExtractAudio',
-            'preferredcodec': 'mp3',
-            'preferredquality': '0',
-        }]
+    ydl_opts['format'] = 'ba/b/worst*'
+    ydl_opts['postprocessors'] = [{
+        'key': 'FFmpegExtractAudio',
+        'preferredcodec': 'mp3',
+        'preferredquality': '0',
+    }]
 
     if ffmpeg_path and ('/' in ffmpeg_path or '\\' in ffmpeg_path):
         ydl_opts['ffmpeg_location'] = str(Path(ffmpeg_path).parent)
@@ -92,11 +87,10 @@ def download_audio(url: str, ffmpeg_path: str | None = None, mode: str = "audio"
         ydl.download([clean_url])
 
     # Find the downloaded file
-    wanted_exts = VIDEO_EXTENSIONS if mode == "video" else AUDIO_EXTENSIONS
-    downloaded_files = [f for f in Path(tmp_dir).glob("*.*") if f.suffix in wanted_exts]
+    downloaded_files = [f for f in Path(tmp_dir).glob("*.*") if f.suffix in AUDIO_EXTENSIONS]
 
     if not downloaded_files:
-        raise FileNotFoundError(f"Download completed but no {mode} file found")
+        raise FileNotFoundError("Download completed but no audio file found")
 
     return {
         "path": str(downloaded_files[0]),
@@ -111,7 +105,6 @@ if __name__ == "__main__":
 
     url = sys.argv[1]
     ffmpeg_path = None
-    mode = "audio"
 
     args = sys.argv[2:]
     i = 0
@@ -119,13 +112,10 @@ if __name__ == "__main__":
         if args[i] == '--ffmpeg-path' and i + 1 < len(args):
             i += 1
             ffmpeg_path = args[i]
-        elif args[i] == '--mode' and i + 1 < len(args):
-            i += 1
-            mode = args[i]
         i += 1
 
     try:
-        result = download_audio(url, ffmpeg_path, mode)
+        result = download_audio(url, ffmpeg_path)
         _emit({"type": "complete", "path": result["path"], "title": result["title"]})
     except yt_dlp.utils.DownloadError as e:
         error_msg = str(e)

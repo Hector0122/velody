@@ -46,15 +46,21 @@ mac:
 dmg:
   artifactName: ${name}-${version}.${ext}
 linux:
+  # AppImage auto-updates silently; .deb auto-updates too but asks for the
+  # admin password (it's a system package). Both are published per release.
   target:
     - AppImage
-    - snap
     - deb
-  maintainer: electronjs.org
-  category: Utility
+  maintainer: Hector Paramo <130419379+Hector0122@users.noreply.github.com>
+  category: AudioVideo
 appImage:
   artifactName: ${name}-${version}.${ext}
 npmRebuild: false
+# Auto-update source (src/main/updater.ts). CI (.github/workflows/release.yml)
+# uploads the installers + latest*.yml here on every `v*` tag. releaseType
+# must be `release`: the updater ignores drafts.
 publish:
-  provider: generic
-  url: https://example.com/auto-updates
+  provider: github
+  owner: Hector0122
+  repo: velody
+  releaseType: release

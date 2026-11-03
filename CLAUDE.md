@@ -38,7 +38,7 @@ Electron desktop app: React/TS renderer → Electron IPC → Electron main → s
 
 ```
 src/main/index.ts          Electron entrypoint: creates BrowserWindow, wires SetupManager + JobManager, starts audio-server, registers top-level IPC (setup:*, audio:url)
-src/main/ipc/handlers.ts   Bulk of IPC handlers (song list/delete, export, recording, BPM/key detection, URL import, transpose)
+src/main/ipc/handlers.ts   Bulk of IPC handlers (song list/delete, setlists, export, recording, BPM detection, URL import)
 src/main/jobs/JobManager.ts  Separation job queue (FIFO, one job running at a time); spawns separate.py, parses its JSON stdout protocol
 src/main/audio-server.ts   Local HTTP server (127.0.0.1, random port) that streams stem files with Range support to the renderer's <audio>/AudioContext consumers
 src/main/setup/index.ts    First-run SetupManager: detects Python3, creates a venv at ~/.local/share/velody/venv, pip-installs Demucs/PyTorch, fetches portable FFmpeg
@@ -51,7 +51,9 @@ python-worker/             Isolated Python scripts invoked as subprocesses — n
 
 Main-process code talks to Python by spawning a script and reading newline-delimited JSON from stdout, e.g. `separate.py` emits `{"type": "progress", "percent": N}`, `{"type": "complete", "stems": [...]}`, `{"type": "error", "message": "..."}`. `JobManager` parses these line-by-line, tolerating non-JSON lines (Demucs's own logging). Long-running spawns (Demucs, FFmpeg) have hard timeouts (10 min) and are killed on cancel/app-quit. Follow this same JSON-lines pattern if adding new Python-backed operations rather than inventing a new protocol.
 
-`useRealDemucs` (`SetupManager.canUseRealDemucs()`) gates real Demucs vs. a sine-wave simulation fallback used when the venv isn't set up — check this when touching separation behavior, since dev environments without the venv silently run in simulation mode.
+`SetupManager.canUseRealDemucs()` gates separation: if the venv/Demucs isn't set up, the job fails with an explicit error (there is no simulation fallback anymore).
+
+Stems are MP3 at a per-song bitrate (128/192/320 kbps) picked in the import screen ("Stem quality", persisted in localStorage as `velody:stemBitrate`) and passed `separation:start`/`url:import` → `JobManager.enqueue({ bitrate })` → `separate.py --bitrate`. Temp files are always cleaned up: `separate.py` removes its Demucs temp dir in a `finally` (and kills the Demucs child on SIGTERM), and URL imports pass the `velody_dl_*` download dir as the job's `tempDir`, deleted when the job ends.
 
 BPM detection (`song:detectBpm`) uses a **singleflight** pattern in the IPC handler: only one Python process runs at a time; concurrent calls reuse the in-flight promise. This exists because multiple simultaneous TensorFlow (TempoCNN) processes OOM on low-RAM Windows machines — don't remove it without understanding why.
 
@@ -59,17 +61,20 @@ BPM detection (`song:detectBpm`) uses a **singleflight** pattern in the IPC hand
 
 `StemPlayer.tsx` is the main orchestrator/god component; most audio logic has been extracted into hooks under `src/renderer/src/hooks/`:
 - `useAudioContextEngine` — the audio engine: one `AudioBufferSourceNode` + `GainNode` + `StereoPannerNode` per stem, preloaded buffers, RAF loop for position. Muting sets gain to 0 rather than stopping the source, so stems stay sample-accurate in sync — never reconnect/recreate nodes for mute/volume/pan.
-- `useMetronome` — owns its own `AudioContext` (independent of the playback engine) and reads `positionRef` directly; beat alignment uses `firstBeatOffsetRef` from TempoCNN.
+- `useMetronome` — schedules clicks on the playback engine's `AudioContext` via `playbackClockRef` (`PlaybackClock`: the engine's `ensureAudioCtx` + `getLivePosition`), so clicks are sample-locked to the stems; the click bypasses the engine's master gain/pan. Falls back to its own context + `positionRef` only when no clock is wired (tests); an owned context is closed on unmount. Don't go back to scheduling from the RAF-sampled `positionRef` — it's up to a frame stale and made clicks jitter. Beat alignment uses the detected `beatTimes` grid.
+- Practice speed/transpose (`pitchShifter.ts`, persisted per song by `useSongSpeedPitch`): speed is `playbackRate` on every stem source (engine position = elapsed × speed; speed changes re-anchor `startRef`/`startTimeRef`), and one Signalsmith Stretch AudioWorklet on the master bus (masterPan → shifter → destination) applies `semitones − 12·log2(speed)`. It's bypassed (disconnected) at 100%/0 st. Its latency is exposed as `getOutputDelay()` and added to every metronome click; the in-song scheduler divides song-time delays by the rate. Recording is blocked while speed/pitch aren't default. Export ignores speed/pitch. The CSP allows `blob:` + `'wasm-unsafe-eval'` in `script-src` only because the library loads its worklet that way.
+- Downbeat ("This is the 1", `downbeat.ts` + `useDownbeatShift`): a per-song 0–3 shift of which beat gets the accent; the scheduler uses `isGridAccent`/`isConstantAccent` instead of hardcoded `% 4`.
 - `useWaveSurfers` — uses a `seekRef` to avoid a circular dependency with the audio engine.
-- `useSongAnalysis` — BPM + key detection orchestration; a `detectedRef` prevents re-running detection once done client-side (backend singleflight handles process-level dedup).
-- `useRecording` — "record over a stem" flow: mutes the original stem, captures mic via `MediaRecorder` (webm), and on save the backend converts webm → WAV/MP3 via FFmpeg into `output/stems/<song>/`.
+- `useSongAnalysis` — BPM detection orchestration; runs on the drums stem (`pickBeatTrackingStem`, never `stems[0]`, whose identity depends on directory-listing order); a `detectedRef` prevents re-running detection once done client-side (backend singleflight handles process-level dedup).
+- `useRecording` — "record over a stem" flow: mutes the original stem, captures mic via `MediaRecorder` (webm), and on save the backend converts webm → WAV/MP3 via FFmpeg into `<stems root>/<song>/`.
 
-Metadata (BPM, key, markers) is cached per song as a sidecar JSON file (`.velody`) next to the stems, versioned via `CACHE_VERSION`. Only successful detections are cached — failures are never persisted, so the next load retries rather than getting stuck on a fallback value. If you bump the detection algorithm, bump `CACHE_VERSION` to invalidate old caches.
+The song library lives at `<userData>/output/stems` (Linux: `~/.config/velody/output/stems`) in both `pnpm dev` and packaged builds — one helper, `src/main/paths.ts`; `scripts/batch-import.mjs` defaults to the same place. Nothing is written inside the repo.
 
-### Key/BPM detection algorithms (python-worker/)
+Metadata (BPM, beat grid, markers, trim, count-in, live presets) is cached per song as a sidecar JSON file (`.velody`) next to the stems, versioned via `CACHE_VERSION`. Only successful detections are cached — failures are never persisted, so the next load retries rather than getting stuck on a fallback value. If you bump the detection algorithm, bump `CACHE_VERSION` to invalidate old caches.
 
-- `detect_bpm.py`: TempoCNN (TensorFlow) for a base tempo estimate, refined by `librosa.beat.beat_track()` (also gives `firstBeatOffset`); falls back to TempoCNN-only if librosa is unavailable.
-- `detect_key.py`: decodes the bass stem only (more reliable than full mix) via FFmpeg, 32768-point FFT → 12-bin chroma vector (40–2000 Hz) → Krumhansl-Schmuckler correlation against 24 key profiles. If KS confidence is low (gap < 5% between top two) but the bass has a clearly dominant note (>10% margin), the bass note overrides KS.
+### BPM detection (python-worker/)
+
+- `detect_bpm.py`: TempoCNN (TensorFlow) for a base tempo estimate, refined by `librosa.beat.beat_track()` (gives `firstBeatOffset` and the full `beatTimes` grid); `--bpm-hint` re-runs beat tracking at a user-corrected tempo (half/double-time fix). Falls back to TempoCNN-only if librosa is unavailable. There is no key detection.
 
 ### Security-relevant details
 
@@ -77,6 +82,8 @@ Metadata (BPM, key, markers) is cached per song as a sidecar JSON file (`.velody
 
 ## Notes
 
-- `AGENTS.md` at the repo root is the canonical, detailed product/architecture doc (feature specs, full IPC surface, roadmap, performance-optimization changelog). Consult it for anything not covered above, especially before changing BPM/key detection, the audio engine, or the recording flow.
+- Live-band features (Setlists, Live Presets) are kept but hidden behind a "Live mode" toggle; the app is now primarily a personal practice tool.
+- Tests run under Node 25+ with `--no-experimental-webstorage` (set in `vitest.config.ts`) so jsdom's `localStorage` isn't shadowed by Node's.
+- `AGENTS.md` at the repo root is the canonical, detailed product/architecture doc (feature specs, full IPC surface, roadmap, performance-optimization changelog). Consult it for anything not covered above, especially before changing BPM detection, the audio engine, or the recording flow.
 - `MOBILE_APP.md` describes a *separate*, not-yet-built React Native companion app (cloud sync via Railway/Postgres/R2) — it is a design doc, not code in this repo.
 - This is a local-first tool by design: no cloud processing, no accounts, no telemetry. Don't introduce network dependencies for core separation/playback/export flows.

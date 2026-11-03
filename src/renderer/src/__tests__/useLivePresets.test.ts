@@ -97,6 +97,22 @@ describe('useLivePresets', () => {
     expect(setters.setMasterVolume).toHaveBeenCalledWith(preset.masterVolume)
   })
 
+  it('does not auto-apply the last-used preset when live mode is off (autoApply: false)', async () => {
+    stubApi({
+      loadMeta: vi.fn(async () => ({
+        livePresets: [preset],
+        lastAppliedLivePresetId: 'preset-1'
+      }))
+    })
+    const { setters, result } = setup({ autoApply: false })
+
+    await waitFor(() => expect(result.current.presets).toEqual([preset]))
+    expect(result.current.activePresetId).toBeNull()
+    expect(setters.setActive).not.toHaveBeenCalled()
+    expect(setters.setStemVolumes).not.toHaveBeenCalled()
+    expect(setters.setMasterVolume).not.toHaveBeenCalled()
+  })
+
   it('does not auto-apply (and does not crash) when lastAppliedLivePresetId points at a preset that no longer exists', async () => {
     stubApi({
       loadMeta: vi.fn(async () => ({

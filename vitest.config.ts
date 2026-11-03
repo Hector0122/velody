@@ -7,7 +7,9 @@ export default defineConfig({
     include: ['src/**/__tests__/**/*.test.ts'],
     // Node 25+ ships a global localStorage that shadows jsdom's (and is broken
     // without --localstorage-file); turn it off so tests get jsdom's.
-    execArgv: ['--no-experimental-webstorage'],
+    // (flag only exists/needed on Node 25+; CI runs Node 22)
+    execArgv:
+      Number(process.versions.node.split('.')[0]) >= 25 ? ['--no-experimental-webstorage'] : [],
     coverage: {
       provider: 'v8',
       include: ['src/**/*.ts', 'src/**/*.tsx'],

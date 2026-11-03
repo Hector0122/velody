@@ -32,7 +32,7 @@
  *
  * Defaults:
  *   links-file    links.txt (in the current working directory)
- *   --output-dir  <repo>/output/stems
+ *   --output-dir  the app library (~/.config/velody/output/stems on Linux)
  */
 
 import { spawn } from 'node:child_process'
@@ -42,7 +42,8 @@ import {
   readFileSync,
   writeFileSync,
   readdirSync,
-  renameSync
+  renameSync,
+  rmSync
 } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join, resolve, extname } from 'node:path'
@@ -77,10 +78,16 @@ function getFfmpegPath() {
   return 'ffmpeg'
 }
 
-const DEFAULT_STEMS_OUTPUT_DIR = join(REPO_ROOT, 'output', 'stems')
-const DEFAULT_VIDEO_OUTPUT_DIR = join(REPO_ROOT, 'output', 'videos')
+// Same library the app reads (src/main/paths.ts): Electron's userData dir for
+// an app named "velody" + /output/stems.
+function userDataDir() {
+  if (isWin) return join(process.env.APPDATA || join(homedir(), 'AppData', 'Roaming'), 'velody')
+  if (process.platform === 'darwin')
+    return join(homedir(), 'Library', 'Application Support', 'velody')
+  return join(process.env.XDG_CONFIG_HOME || join(homedir(), '.config'), 'velody')
+}
+const DEFAULT_STEMS_OUTPUT_DIR = join(userDataDir(), 'output', 'stems')
 const STEM_NAMES = ['vocals', 'drums', 'bass', 'other', 'piano', 'guitar']
-const VIDEO_EXTENSIONS = ['.mp4', '.mkv', '.webm']
 const DOWNLOAD_TIMEOUT_MS = 600_000 // matches url:import's timeout in src/main/ipc/handlers.ts
 const SEPARATE_TIMEOUT_MS = 600_000 // matches JobManager.runDemucs's timeout
 const INTER_SONG_DELAY_MS = 5_000 // brief pause between downloads to avoid YouTube rate limiting
@@ -93,7 +100,8 @@ function sleep(ms) {
 // Links file parsing
 // ---------------------------------------------------------------------------
 
-const URL_PATTERN = /https?:\/\/(?:www\.|music\.)?(?:youtube\.com\/watch\?v=[\w-]+|youtu\.be\/[\w-]+)\S*/i
+const URL_PATTERN =
+  /https?:\/\/(?:www\.|music\.)?(?:youtube\.com\/watch\?v=[\w-]+|youtu\.be\/[\w-]+)\S*/i
 
 /**
  * Parse the links file into raw lines (for later rewriting) plus structured rows.
@@ -208,21 +216,6 @@ function hasStemsAlready(outputDir, folderName) {
   }
 }
 
-/** Video mode writes one flat file per song (no stems subfolder), e.g. "Artist - Title.mp4". */
-function hasVideoAlready(outputDir, folderName) {
-  if (!existsSync(outputDir)) return false
-  try {
-    const files = readdirSync(outputDir)
-    return files.some((f) => VIDEO_EXTENSIONS.some((ext) => f === `${folderName}${ext}`))
-  } catch {
-    return false
-  }
-}
-
-function alreadyOnDisk(outputDir, folderName, mode) {
-  return mode === 'video' ? hasVideoAlready(outputDir, folderName) : hasStemsAlready(outputDir, folderName)
-}
-
 // ---------------------------------------------------------------------------
 // Download + separate pipeline
 // ---------------------------------------------------------------------------
@@ -300,11 +293,11 @@ function runPythonJsonLines(pythonPath, scriptPath, args, { cwd, timeoutMs }) {
   })
 }
 
-async function downloadSong(url, pythonPath, ffmpegPath, mode) {
+async function downloadSong(url, pythonPath, ffmpegPath) {
   const result = await runPythonJsonLines(
     pythonPath,
     join(PYTHON_WORKER_DIR, 'download.py'),
-    [url, '--ffmpeg-path', ffmpegPath, '--mode', mode],
+    [url, '--ffmpeg-path', ffmpegPath],
     { cwd: PYTHON_WORKER_DIR, timeoutMs: DOWNLOAD_TIMEOUT_MS }
   )
   return { path: result.path, title: result.title }
@@ -320,13 +313,13 @@ async function separateSong(audioPath, pythonPath, outputDir, bitrate) {
   return { stems: result.stems }
 }
 
-/** Download (+ separate, in audio mode) a single row. Throws on failure; caller decides how to record it. */
-async function processRow(row, { pythonPath, ffmpegPath, outputDir, mode, bitrate }) {
+/** Download + separate a single row. Throws on failure; caller decides how to record it. */
+async function processRow(row, { pythonPath, ffmpegPath, outputDir, bitrate }) {
   // Pre-flight disk check when the folder name is already knowable (Title+Artist
   // present) -- skips the download entirely for songs already on disk.
   if (row.title && row.artist) {
     const folderName = outputFolderNameFor(row)
-    if (alreadyOnDisk(outputDir, folderName, mode)) {
+    if (hasStemsAlready(outputDir, folderName)) {
       return { note: 'already on disk' }
     }
   }
@@ -334,34 +327,29 @@ async function processRow(row, { pythonPath, ffmpegPath, outputDir, mode, bitrat
   const { path: downloadedPath, title: downloadedTitle } = await downloadSong(
     row.url,
     pythonPath,
-    ffmpegPath,
-    mode
+    ffmpegPath
   )
 
-  const folderName = outputFolderNameFor(row, downloadedTitle)
+  // download.py writes into its own velody_dl_* temp dir -- always remove it.
+  try {
+    const folderName = outputFolderNameFor(row, downloadedTitle)
 
-  // Second check, now that we know the folder name even for plain-URL rows.
-  if (alreadyOnDisk(outputDir, folderName, mode)) {
-    return { note: 'already on disk' }
-  }
+    // Second check, now that we know the folder name even for plain-URL rows.
+    if (hasStemsAlready(outputDir, folderName)) {
+      return { note: 'already on disk' }
+    }
 
-  const ext = extname(downloadedPath) || (mode === 'video' ? '.mp4' : '.mp3')
+    // Rename the downloaded temp file to the sanitized name so separate.py's own
+    // (unsanitized) Path.stem derivation produces a filesystem-safe folder name.
+    const ext = extname(downloadedPath) || '.mp3'
+    const renamedPath = join(dirname(downloadedPath), `${folderName}${ext}`)
+    renameSync(downloadedPath, renamedPath)
 
-  if (mode === 'video') {
-    // Video mode has no separation step -- just land the file in outputDir directly.
-    renameSync(downloadedPath, join(outputDir, `${folderName}${ext}`))
+    await separateSong(renamedPath, pythonPath, outputDir, bitrate)
     return {}
+  } finally {
+    rmSync(dirname(downloadedPath), { recursive: true, force: true })
   }
-
-  // Rename the downloaded temp file to the sanitized name so separate.py's own
-  // (unsanitized) Path.stem derivation produces a filesystem-safe folder name --
-  // this avoids needing to touch separate.py itself.
-  const renamedPath = join(dirname(downloadedPath), `${folderName}${ext}`)
-  renameSync(downloadedPath, renamedPath)
-
-  await separateSong(renamedPath, pythonPath, outputDir, bitrate)
-
-  return {}
 }
 
 // ---------------------------------------------------------------------------
@@ -371,21 +359,18 @@ async function processRow(row, { pythonPath, ffmpegPath, outputDir, mode, bitrat
 const HELP_TEXT = `Velody batch importer
 
 Usage:
-  node scripts/batch-import.mjs [links-file] [--output-dir <dir>] [--video]
+  node scripts/batch-import.mjs [links-file] [--output-dir <dir>] [--bitrate <kbps>]
 
 Arguments:
   links-file      Path to the links file (default: links.txt)
-  --output-dir    Output root (default: <repo>/output/stems, or
-                   <repo>/output/videos with --video)
+  --output-dir    Output root (default: app library, ~/.config/velody/output/stems)
   --bitrate <kbps> Stem MP3 quality: 128 (default), 192 or 320
-  --video         Download full video (.mp4) instead of audio -- skips
-                   stem separation entirely
 
 Re-run the same command to resume an interrupted batch or retry failed rows.
 `
 
 function parseArgs(argv) {
-  const args = { linksFile: 'links.txt', outputDir: null, video: false, help: false, bitrate: 128 }
+  const args = { linksFile: 'links.txt', outputDir: null, help: false, bitrate: 128 }
   const rest = []
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--output-dir' && argv[i + 1]) {
@@ -394,8 +379,6 @@ function parseArgs(argv) {
       const kbps = Number(argv[++i])
       if (![128, 192, 320].includes(kbps)) throw new Error('--bitrate must be 128, 192 or 320')
       args.bitrate = kbps
-    } else if (argv[i] === '--video') {
-      args.video = true
     } else if (argv[i] === '--help' || argv[i] === '-h') {
       args.help = true
     } else {
@@ -422,8 +405,7 @@ async function main() {
 
   const pythonPath = getPythonPath()
   const ffmpegPath = getFfmpegPath()
-  const mode = args.video ? 'video' : 'audio'
-  const outputDir = args.outputDir ?? (args.video ? DEFAULT_VIDEO_OUTPUT_DIR : DEFAULT_STEMS_OUTPUT_DIR)
+  const outputDir = args.outputDir ?? DEFAULT_STEMS_OUTPUT_DIR
   mkdirSync(outputDir, { recursive: true })
 
   const text = readFileSync(linksPath, 'utf-8')
@@ -433,7 +415,6 @@ async function main() {
 
   console.log('Velody batch import')
   console.log(`  Links file : ${linksPath}`)
-  console.log(`  Mode       : ${mode}`)
   console.log(`  Bitrate    : ${args.bitrate} kbps`)
   console.log(`  Output dir : ${outputDir}`)
   console.log(`  Python     : ${pythonPath}`)
@@ -458,7 +439,6 @@ async function main() {
         pythonPath,
         ffmpegPath,
         outputDir,
-        mode,
         bitrate: args.bitrate
       })
       okCount++

@@ -4,6 +4,7 @@ import { rm } from 'fs/promises'
 import { BrowserWindow, app } from 'electron'
 import { randomUUID } from 'crypto'
 import type { SetupManager } from '../setup'
+import { getStemsRootDir } from '../paths'
 
 export interface SeparationJob {
   id: string
@@ -34,13 +35,6 @@ function getPythonWorkerDir(): string {
     return join(process.resourcesPath, 'python-worker')
   }
   return join(__dirname, '../../python-worker')
-}
-
-function getOutputStemsDir(): string {
-  if (app.isPackaged) {
-    return join(app.getPath('userData'), 'output', 'stems')
-  }
-  return join(__dirname, '../../output/stems')
 }
 
 export class JobManager {
@@ -116,11 +110,14 @@ export class JobManager {
     const useRealDemucs = (await this.setupManager?.canUseRealDemucs()) ?? false
 
     try {
-      if (useRealDemucs) {
-        await this.runDemucs(job)
-      } else {
-        await this.runSimulation(job)
+      if (!useRealDemucs) {
+        // Used to silently fall back to writing fake sine-wave "stems" here,
+        // which looked like a successful separation. Fail loudly instead.
+        throw new Error(
+          'Demucs is not installed. Finish the setup (Python venv + Demucs) and try again.'
+        )
       }
+      await this.runDemucs(job)
 
       job.status = 'completed'
       job.progress = 100
@@ -143,7 +140,7 @@ export class JobManager {
       const pythonPath = this.setupManager?.getPythonPath() ?? 'python3'
       const scriptDir = getPythonWorkerDir()
       const pythonScript = join(scriptDir, 'separate.py')
-      const outputDir = getOutputStemsDir()
+      const outputDir = getStemsRootDir()
       let settled = false
 
       const proc = spawn(
@@ -234,68 +231,6 @@ export class JobManager {
         reject(err)
       })
     })
-  }
-
-  private async runSimulation(job: SeparationJob): Promise<void> {
-    const stemsDir = join(getOutputStemsDir(), job.songName)
-    const { mkdirSync, writeFileSync } = await import('fs')
-
-    mkdirSync(stemsDir, { recursive: true })
-
-    const stemNames = ['vocals', 'drums', 'bass', 'other', 'piano', 'guitar']
-    const frequencies: Record<string, number> = {
-      vocals: 440,
-      drums: 180,
-      bass: 110,
-      other: 660,
-      piano: 523,
-      guitar: 330
-    }
-
-    const stems: string[] = []
-
-    for (let i = 0; i < stemNames.length; i++) {
-      const name = stemNames[i]
-      const filePath = join(stemsDir, `${name}.wav`)
-      // Simulate work (minimum delay so queue shows progress)
-      await new Promise((r) => setTimeout(r, 300))
-
-      const sampleRate = 44100
-      const durationSec = 60
-      const freq = frequencies[name] || 440
-      const numSamples = Math.floor(sampleRate * durationSec)
-      const buffer = Buffer.alloc(44 + numSamples * 2)
-
-      buffer.write('RIFF', 0)
-      buffer.writeUInt32LE(36 + numSamples * 2, 4)
-      buffer.write('WAVE', 8)
-      buffer.write('fmt ', 12)
-      buffer.writeUInt32LE(16, 16)
-      buffer.writeUInt16LE(1, 20)
-      buffer.writeUInt16LE(1, 22)
-      buffer.writeUInt32LE(sampleRate, 24)
-      buffer.writeUInt32LE(sampleRate * 2, 28)
-      buffer.writeUInt16LE(2, 32)
-      buffer.writeUInt16LE(16, 34)
-      buffer.write('data', 36)
-      buffer.writeUInt32LE(numSamples * 2, 40)
-
-      for (let s = 0; s < numSamples; s++) {
-        const t = s / sampleRate
-        const sample = Math.sin(2 * Math.PI * freq * t)
-        const intSample = Math.max(-32768, Math.min(32767, Math.floor(sample * 20000)))
-        buffer.writeInt16LE(intSample, 44 + s * 2)
-      }
-
-      writeFileSync(filePath, buffer)
-      stems.push(filePath)
-
-      job.progress = Math.round(((i + 1) / stemNames.length) * 100)
-      this.emit('separation:progress', { jobId: job.id, percent: job.progress })
-      this.emit('separation:jobs-changed', this.getQueue())
-    }
-
-    job.stems = stems
   }
 
   private cleanupTempDir(job: SeparationJob): void {

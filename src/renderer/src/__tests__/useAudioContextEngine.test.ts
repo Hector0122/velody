@@ -2,6 +2,16 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { renderHook, act, waitFor } from '@testing-library/react'
 import { useAudioContextEngine, resolveTickAction } from '../hooks/useAudioContextEngine'
+
+const shifterNode = {
+  connect: vi.fn(),
+  disconnect: vi.fn(),
+  start: vi.fn(async () => undefined),
+  stop: vi.fn(async () => undefined),
+  schedule: vi.fn(async () => undefined),
+  latency: vi.fn(async () => 0.15)
+}
+vi.mock('signalsmith-stretch', () => ({ default: vi.fn(async () => shifterNode) }))
 import type { VelodyAPI } from '../../../shared/types'
 
 // Minimal fake AudioContext: jsdom doesn't implement the Web Audio API, and
@@ -23,10 +33,10 @@ class FakeAudioContext {
     return { connect: vi.fn(), gain: { setValueAtTime: vi.fn(), setTargetAtTime: vi.fn() } }
   }
   createStereoPanner(): unknown {
-    return { connect: vi.fn(), pan: { value: 0 } }
+    return { connect: vi.fn(), disconnect: vi.fn(), pan: { value: 0 } }
   }
   createBufferSource(): unknown {
-    return { connect: vi.fn(), start: vi.fn(), stop: vi.fn() }
+    return { connect: vi.fn(), start: vi.fn(), stop: vi.fn(), playbackRate: { value: 1 } }
   }
   resume(): void {
     /* no-op */
@@ -207,12 +217,18 @@ interface TrackedSource {
   connect: ReturnType<typeof vi.fn>
   start: ReturnType<typeof vi.fn>
   stop: ReturnType<typeof vi.fn>
+  playbackRate: { value: number; setValueAtTime: ReturnType<typeof vi.fn> }
 }
 
 function stubTrackingAudioContext(createdSources: TrackedSource[]): void {
   class TrackingAudioContext extends FakeAudioContext {
     createBufferSource(): TrackedSource {
-      const src: TrackedSource = { connect: vi.fn(), start: vi.fn(), stop: vi.fn() }
+      const src: TrackedSource = {
+        connect: vi.fn(),
+        start: vi.fn(),
+        stop: vi.fn(),
+        playbackRate: { value: 1, setValueAtTime: vi.fn() }
+      }
       createdSources.push(src)
       return src
     }
@@ -689,5 +705,89 @@ describe('useAudioContextEngine - pre-scheduled playback (count-in handoff)', ()
       result.current.toggleMasterPlay(0)
     })
     expect(playbackPendingRef.current).toBe(false)
+  })
+})
+
+describe('useAudioContextEngine - practice speed + transpose', () => {
+  beforeEach(() => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ arrayBuffer: async () => new ArrayBuffer(16) }))
+    )
+    for (const fn of Object.values(shifterNode)) fn.mockClear()
+  })
+
+  async function startPlaying(
+    createdSources: TrackedSource[],
+    overrides: Partial<Parameters<typeof useAudioContextEngine>[0]> = {}
+  ): Promise<{
+    result: { current: ReturnType<typeof useAudioContextEngine> }
+    rerender: (p: Parameters<typeof useAudioContextEngine>[0]) => void
+    params: Parameters<typeof useAudioContextEngine>[0]
+  }> {
+    stubTrackingAudioContext(createdSources)
+    const notifyStemDecodedRef = { current: vi.fn() }
+    const params = buildParams({ notifyStemDecodedRef, masterPlaying: false, ...overrides })
+    const { result, rerender } = renderHook((p) => useAudioContextEngine(p), {
+      initialProps: params
+    })
+    await waitFor(() => expect(notifyStemDecodedRef.current).toHaveBeenCalledTimes(2))
+    act(() => {
+      result.current.toggleMasterPlay()
+    })
+    return { result, rerender, params }
+  }
+
+  it('starts every source at the practice speed and advances position at that rate', async () => {
+    const createdSources: TrackedSource[] = []
+    const { result } = await startPlaying(createdSources, { speed: 0.5 })
+
+    expect(createdSources).toHaveLength(2)
+    for (const src of createdSources) expect(src.playbackRate.value).toBe(0.5)
+
+    const ctx = result.current.audioCtxRef.current as unknown as { currentTime: number }
+    ctx.currentTime = 4
+    expect(result.current.getLivePosition()).toBeCloseTo(2, 5)
+    expect(result.current.getRate()).toBe(0.5)
+  })
+
+  it('changing speed mid-play re-anchors the clock and switches all sources together', async () => {
+    const createdSources: TrackedSource[] = []
+    const { result, rerender, params } = await startPlaying(createdSources)
+    const ctx = result.current.audioCtxRef.current as unknown as { currentTime: number }
+
+    ctx.currentTime = 10 // 10s of song played at 1x
+    act(() => {
+      rerender({ ...params, masterPlaying: true, speed: 0.8 })
+    })
+    for (const src of createdSources) {
+      expect(src.playbackRate.setValueAtTime).toHaveBeenCalledWith(0.8, 10)
+    }
+    ctx.currentTime = 15 // 5 more real seconds at 0.8x -> 4 song seconds
+    expect(result.current.getLivePosition()).toBeCloseTo(14, 5)
+  })
+
+  it('inserts the pitch shifter only when needed and reports its latency as output delay', async () => {
+    const createdSources: TrackedSource[] = []
+    const { result } = await startPlaying(createdSources, { semitones: -2 })
+
+    await waitFor(() => expect(result.current.getOutputDelay()).toBeCloseTo(0.15, 5))
+    expect(shifterNode.schedule).toHaveBeenCalledWith({ semitones: -2 })
+    expect(shifterNode.connect).toHaveBeenCalled()
+  })
+
+  it('compensates the pitch change introduced by slowing down', async () => {
+    const createdSources: TrackedSource[] = []
+    await startPlaying(createdSources, { speed: 0.5 })
+    // playbackRate 0.5 drops pitch an octave; the shifter raises it back.
+    await waitFor(() => expect(shifterNode.schedule).toHaveBeenCalledWith({ semitones: 12 }))
+  })
+
+  it('keeps the shifter bypassed at normal speed and pitch', async () => {
+    const createdSources: TrackedSource[] = []
+    const { result } = await startPlaying(createdSources)
+    await Promise.resolve()
+    expect(shifterNode.schedule).not.toHaveBeenCalled()
+    expect(result.current.getOutputDelay()).toBe(0)
   })
 })

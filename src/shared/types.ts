@@ -67,6 +67,12 @@ export interface SeparationJob {
   error?: string
 }
 
+/** Auto-update state (packaged builds only — see src/main/updater.ts). */
+export type UpdateStatus =
+  | { state: 'idle' }
+  | { state: 'downloading'; version: string; percent: number }
+  | { state: 'ready'; version: string }
+
 export interface VelodyAPI {
   openFileDialog: () => Promise<string | null>
   startSeparation: (
@@ -136,4 +142,7 @@ export interface VelodyAPI {
   onDownloadProgress: (callback: (e: DownloadProgressEvent) => void) => () => void
   onDownloadFailed: (callback: (e: DownloadFailedEvent) => void) => () => void
   updateYtDlp: () => Promise<{ success: boolean; error?: string }>
+  getUpdateStatus: () => Promise<UpdateStatus>
+  onUpdateStatus: (callback: (s: UpdateStatus) => void) => () => void
+  installUpdate: () => Promise<void>
 }

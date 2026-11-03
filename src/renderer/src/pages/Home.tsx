@@ -3,6 +3,7 @@ import AudioUploader from '../components/AudioUploader'
 import UrlImporter from '../components/UrlImporter'
 import StemPlayer from '../components/StemPlayer'
 import SetlistPanel from '../components/SetlistPanel'
+import UpdateBanner from '../components/UpdateBanner'
 import useLocalStoragePreference from '../hooks/useLocalStoragePreference'
 import { filterSongsByQuery, reorderSetlistSongs, resolveNextSetlistSong } from '../utils'
 
@@ -35,6 +36,7 @@ const STEM_BITRATE_OPTIONS: { value: StemBitrate; hint: string }[] = [
 ]
 
 const isStemBitrate = (v: unknown): v is StemBitrate => v === 128 || v === 192 || v === 320
+const isBoolean = (v: unknown): v is boolean => typeof v === 'boolean'
 
 function Home(): React.JSX.Element {
   const [currentSong, setCurrentSong] = useState<{
@@ -56,8 +58,16 @@ function Home(): React.JSX.Element {
   const [showNewSongMenu, setShowNewSongMenu] = useState(false)
   const [songSearch, setSongSearch] = useState('')
   const [sidebarView, setSidebarView] = useState<'library' | 'setlists'>('library')
+  // Live-band features (Setlists, Live Presets) are hidden unless this is on.
+  const [liveMode, setLiveMode] = useLocalStoragePreference<boolean>(
+    'velody:liveMode',
+    false,
+    isBoolean
+  )
   const [setlists, setSetlists] = useState<Setlist[]>([])
   const [activeSetlistId, setActiveSetlistId] = useState<string | null>(null)
+  // Setlist actions in the library only apply while live mode is on.
+  const libraryActiveSetlistId = liveMode ? activeSetlistId : null
   // Which setlist + index the currently open song was opened from, so
   // "Next song" (StemPlayer) knows what to advance to. Cleared whenever a
   // song is opened from anywhere other than the active setlist's song list.
@@ -436,28 +446,30 @@ function Home(): React.JSX.Element {
           )}
         </div>
 
-        <div className="mx-3 mt-3 flex gap-1 bg-neutral-900 rounded-lg p-1 border border-neutral-800 shrink-0">
-          <button
-            onClick={() => setSidebarView('library')}
-            className={`flex-1 py-1 rounded text-xs font-medium transition-colors ${
-              sidebarView === 'library'
-                ? 'bg-neutral-800 text-white'
-                : 'text-neutral-500 hover:text-neutral-300'
-            }`}
-          >
-            Library
-          </button>
-          <button
-            onClick={() => setSidebarView('setlists')}
-            className={`flex-1 py-1 rounded text-xs font-medium transition-colors ${
-              sidebarView === 'setlists'
-                ? 'bg-neutral-800 text-white'
-                : 'text-neutral-500 hover:text-neutral-300'
-            }`}
-          >
-            Setlists
-          </button>
-        </div>
+        {liveMode && (
+          <div className="mx-3 mt-3 flex gap-1 bg-neutral-900 rounded-lg p-1 border border-neutral-800 shrink-0">
+            <button
+              onClick={() => setSidebarView('library')}
+              className={`flex-1 py-1 rounded text-xs font-medium transition-colors ${
+                sidebarView === 'library'
+                  ? 'bg-neutral-800 text-white'
+                  : 'text-neutral-500 hover:text-neutral-300'
+              }`}
+            >
+              Library
+            </button>
+            <button
+              onClick={() => setSidebarView('setlists')}
+              className={`flex-1 py-1 rounded text-xs font-medium transition-colors ${
+                sidebarView === 'setlists'
+                  ? 'bg-neutral-800 text-white'
+                  : 'text-neutral-500 hover:text-neutral-300'
+              }`}
+            >
+              Setlists
+            </button>
+          </div>
+        )}
 
         {/* Queue */}
         {queuedJobs.length > 0 && (
@@ -524,7 +536,7 @@ function Home(): React.JSX.Element {
           </div>
         )}
 
-        {sidebarView === 'library' ? (
+        {!liveMode || sidebarView === 'library' ? (
           <>
             <div className="mt-3 mx-3 shrink-0">
               <h3 className="text-[10px] font-semibold text-neutral-500 uppercase tracking-wide mb-1.5">
@@ -548,7 +560,7 @@ function Home(): React.JSX.Element {
                   </button>
                 )}
               </div>
-              {activeSetlistId && (
+              {libraryActiveSetlistId && (
                 <p className="text-[10px] text-brand-primary mt-1.5 truncate">
                   Adding to &ldquo;{setlists.find((sl) => sl.id === activeSetlistId)?.name}&rdquo;
                 </p>
@@ -566,7 +578,7 @@ function Home(): React.JSX.Element {
                     <button
                       onClick={() => handleSelectRecent(song)}
                       className={`w-full text-left pl-3 py-2 rounded-lg text-sm transition-colors ${
-                        activeSetlistId ? 'pr-14' : 'pr-9'
+                        libraryActiveSetlistId ? 'pr-14' : 'pr-9'
                       } ${
                         currentSong?.songName === song.name
                           ? 'bg-brand-primary/20 text-brand-primary border border-brand-primary/30'
@@ -576,7 +588,7 @@ function Home(): React.JSX.Element {
                       <span className="truncate block">{song.name}</span>
                     </button>
                     <div className="absolute right-1 top-1/2 -translate-y-1/2 flex items-center opacity-0 group-hover:opacity-100 transition-opacity">
-                      {activeSetlistId && (
+                      {libraryActiveSetlistId && (
                         <button
                           onClick={(e) => {
                             e.stopPropagation()
@@ -615,6 +627,16 @@ function Home(): React.JSX.Element {
             onMoveSong={handleMoveSongInSetlist}
           />
         )}
+        <UpdateBanner />
+        <label className="mt-auto mx-3 mb-3 pt-3 border-t border-neutral-800 flex items-center justify-between gap-2 text-xs text-neutral-500 cursor-pointer select-none shrink-0">
+          <span title="Setlists and Live Presets, for playing with a band">Live mode</span>
+          <input
+            type="checkbox"
+            checked={liveMode}
+            onChange={(e) => setLiveMode(e.target.checked)}
+            className="accent-brand-primary"
+          />
+        </label>
       </aside>
 
       {/* Main */}
@@ -631,7 +653,8 @@ function Home(): React.JSX.Element {
             stems={currentSong.stems}
             songName={currentSong.songName}
             onToast={addToast}
-            onNextSong={songSetlistContext ? handleNextSongInSetlist : undefined}
+            onNextSong={liveMode && songSetlistContext ? handleNextSongInSetlist : undefined}
+            liveMode={liveMode}
             hasNextSong={hasNextSongInSetlist}
           />
         ) : (

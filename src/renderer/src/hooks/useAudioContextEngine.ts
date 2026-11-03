@@ -1,4 +1,6 @@
-import { useEffect, useLayoutEffect, useCallback, useRef } from 'react'
+import { useEffect, useLayoutEffect, useCallback, useRef, useState } from 'react'
+import type { StretchNode } from 'signalsmith-stretch'
+import { compensatingSemitones, createPitchShifter, needsPitchShifter } from './pitchShifter'
 import type WaveSurfer from 'wavesurfer.js'
 import { stemNameFromPath } from '../utils'
 import useLocalStoragePreference from './useLocalStoragePreference'
@@ -71,6 +73,10 @@ interface UseAudioContextEngineParams {
   // click scheduled during the count-in wait, and the real beat at the
   // correct moment would then be skipped by the dedup ratchet).
   playbackPendingRef: React.MutableRefObject<boolean>
+  // Practice speed (playbackRate, 1 = normal) and transpose in semitones —
+  // see pitchShifter.ts.
+  speed?: number
+  semitones?: number
 
   progressRef: React.MutableRefObject<number>
   setMasterPlaying: (v: boolean | ((prev: boolean) => boolean)) => void
@@ -120,6 +126,12 @@ export function useAudioContextEngine(params: UseAudioContextEngineParams): {
   // time (not the RAF-sampled positionRef, which can be up to a frame stale).
   // Lets the metronome schedule clicks sample-accurately against playback.
   getLivePosition: () => number
+  // Current playback speed (song seconds per real second).
+  getRate: () => number
+  // Extra output latency added by the pitch shifter when it's active (0
+  // when bypassed) — clicks are delayed by this so they stay on the beat.
+  getOutputDelay: () => number
+  pitchShifterError: string | null
   getDecodedBuffer: (key: string) => AudioBuffer | undefined
   masterPan: number
   setMasterPan: (v: number) => void
@@ -147,6 +159,8 @@ export function useAudioContextEngine(params: UseAudioContextEngineParams): {
     onAudioTimeRef,
     lastScheduledBeatRef,
     playbackPendingRef,
+    speed = 1,
+    semitones = 0,
     progressRef,
     setMasterPlaying,
     setActive,
@@ -178,6 +192,17 @@ export function useAudioContextEngine(params: UseAudioContextEngineParams): {
   const sourcesRef = useRef<Record<string, AudioBufferSourceNode>>({})
   const isPlayingRef = useRef(false)
   const startRef = useRef(0)
+  // Updated only by the speed effect below (which needs the previous value to
+  // re-anchor the clock), never by the generic ref-sync layout effect.
+  const speedRef = useRef(speed)
+  const semitonesRef = useRef(semitones)
+  const shifterRef = useRef<StretchNode | null>(null)
+  const shifterActiveRef = useRef(false)
+  const outputDelayRef = useRef(0)
+  // Routing changes are async (loading the worklet, reading latency); chain
+  // them so rapid clicks on speed/pitch can't interleave half-done rewires.
+  const routingChainRef = useRef<Promise<void>>(Promise.resolve())
+  const [pitchShifterError, setPitchShifterError] = useState<string | null>(null)
   const startTimeRef = useRef(0)
   const rafRef = useRef(0)
 
@@ -203,6 +228,54 @@ export function useAudioContextEngine(params: UseAudioContextEngineParams): {
     if (masterPanNodeRef.current) masterPanNodeRef.current.pan.value = masterPan
   })
 
+  // Insert/remove the pitch shifter between masterPan and the destination.
+  // Bypassed entirely at speed 1 / transpose 0: no CPU, no added latency.
+  const applyPitchRouting = useCallback(async (): Promise<void> => {
+    const ctx = audioCtxRef.current
+    const pan = masterPanNodeRef.current
+    if (!ctx || !pan || ctx.state === 'closed') return
+    const speedNow = speedRef.current
+    const semitonesNow = semitonesRef.current
+
+    if (needsPitchShifter(speedNow, semitonesNow)) {
+      if (!shifterRef.current) {
+        try {
+          shifterRef.current = await createPitchShifter(ctx)
+        } catch (err) {
+          console.error('[audioEngine] pitch shifter failed to load', err)
+          setPitchShifterError('Pitch correction unavailable')
+          return
+        }
+        if (audioCtxRef.current !== ctx) return
+      }
+      const node = shifterRef.current
+      await node.schedule({ semitones: compensatingSemitones(speedNow, semitonesNow) })
+      if (!shifterActiveRef.current) {
+        await node.start()
+        pan.disconnect()
+        pan.connect(node)
+        node.connect(ctx.destination)
+        shifterActiveRef.current = true
+        outputDelayRef.current = await node.latency()
+      }
+      setPitchShifterError(null)
+    } else if (shifterActiveRef.current && shifterRef.current) {
+      const node = shifterRef.current
+      pan.disconnect()
+      pan.connect(ctx.destination)
+      node.disconnect()
+      await node.stop()
+      shifterActiveRef.current = false
+      outputDelayRef.current = 0
+    }
+  }, [])
+
+  const queuePitchRouting = useCallback((): void => {
+    routingChainRef.current = routingChainRef.current.then(applyPitchRouting).catch((err) => {
+      console.error('[audioEngine] pitch routing failed', err)
+    })
+  }, [applyPitchRouting])
+
   const ensureCtx = useCallback((): AudioContext => {
     if (!audioCtxRef.current) {
       audioCtxRef.current = new AudioContext()
@@ -215,10 +288,12 @@ export function useAudioContextEngine(params: UseAudioContextEngineParams): {
       // stem relative to wherever masterPan places the overall mix.
       masterGainRef.current.connect(masterPanNodeRef.current)
       masterPanNodeRef.current.connect(audioCtxRef.current.destination)
+      // A song can open with a saved speed/transpose.
+      queuePitchRouting()
     }
     if (audioCtxRef.current.state === 'suspended') audioCtxRef.current.resume()
     return audioCtxRef.current
-  }, [])
+  }, [queuePitchRouting])
 
   const computeGain = useCallback((key: string): number => {
     if (!masterPlayingRef.current) return 0
@@ -273,6 +348,7 @@ export function useAudioContextEngine(params: UseAudioContextEngineParams): {
       ensureNodes(key)
       const source = ctx.createBufferSource()
       source.buffer = buffer
+      source.playbackRate.value = speedRef.current
       source.connect(gainNodesRef.current[key])
 
       const gain = computeGain(key)
@@ -323,7 +399,7 @@ export function useAudioContextEngine(params: UseAudioContextEngineParams): {
       const ctx = audioCtxRef.current
       if (!ctx || !isPlayingRef.current || sourcesRef.current[key]) return
       const elapsed = Math.max(0, ctx.currentTime - startTimeRef.current)
-      const position = startRef.current + elapsed
+      const position = startRef.current + elapsed * speedRef.current
       const when = ctx.currentTime < startTimeRef.current ? startTimeRef.current : undefined
       startSourceForKey(key, buffer, position, when)
     },
@@ -387,8 +463,11 @@ export function useAudioContextEngine(params: UseAudioContextEngineParams): {
   const getLivePosition = useCallback((): number => {
     const ctx = audioCtxRef.current
     if (!ctx || !isPlayingRef.current) return positionRef.current
-    return startRef.current + Math.max(0, ctx.currentTime - startTimeRef.current)
+    return startRef.current + Math.max(0, ctx.currentTime - startTimeRef.current) * speedRef.current
   }, [positionRef])
+
+  const getRate = useCallback((): number => speedRef.current, [])
+  const getOutputDelay = useCallback((): number => outputDelayRef.current, [])
 
   const tick = useCallback((): void => {
     const ctx = audioCtxRef.current
@@ -399,7 +478,7 @@ export function useAudioContextEngine(params: UseAudioContextEngineParams): {
     // that instant arrives, position must hold at startRef.current, not go
     // negative.
     const elapsed = Math.max(0, ctx.currentTime - startTimeRef.current)
-    const position = startRef.current + elapsed
+    const position = startRef.current + elapsed * speedRef.current
     // Self-correcting each frame (cheap): stays true while still waiting
     // for a pre-scheduled `when`, flips false the first frame it's
     // actually passed — see the field's doc comment.
@@ -498,6 +577,32 @@ export function useAudioContextEngine(params: UseAudioContextEngineParams): {
       cancelled = true
     }
   }, [allStems, setUrls])
+
+  // Speed change: re-anchor the clock at "now" with the old rate, then switch
+  // every live source's rate at the same instant so stems stay in lockstep.
+  useEffect(() => {
+    const prev = speedRef.current
+    if (prev === speed) return
+    const ctx = audioCtxRef.current
+    if (ctx && isPlayingRef.current) {
+      const now = ctx.currentTime
+      if (now > startTimeRef.current) {
+        startRef.current += (now - startTimeRef.current) * prev
+        startTimeRef.current = now
+      }
+      for (const source of Object.values(sourcesRef.current)) {
+        source.playbackRate.setValueAtTime(speed, now)
+      }
+    }
+    speedRef.current = speed
+    queuePitchRouting()
+  }, [speed, queuePitchRouting])
+
+  useEffect(() => {
+    if (semitonesRef.current === semitones) return
+    semitonesRef.current = semitones
+    queuePitchRouting()
+  }, [semitones, queuePitchRouting])
 
   useEffect(() => {
     return () => {
@@ -712,6 +817,9 @@ export function useAudioContextEngine(params: UseAudioContextEngineParams): {
     audioCtxRef,
     ensureAudioCtx: ensureCtx,
     getLivePosition,
+    getRate,
+    getOutputDelay,
+    pitchShifterError,
     getDecodedBuffer,
     masterPan,
     setMasterPan

@@ -8,6 +8,7 @@ import { constants } from 'fs'
 import crypto from 'crypto'
 import { SetupManager } from '../setup'
 import { JobManager } from '../jobs/JobManager'
+import { getStemsRootDir } from '../paths'
 import type { StemBitrate } from '../../shared/types'
 
 interface BpmDetectionResult {
@@ -95,13 +96,6 @@ export function clickSampleValue(beatPos: number, accent: boolean): number {
     sample += (Math.random() * 2 - 1) * (1 - beatPos / noiseDur) * (accent ? 0.3 : 0.2)
   }
   return sample
-}
-
-function getStemsRootDir(): string {
-  if (app.isPackaged) {
-    return join(app.getPath('userData'), 'output', 'stems')
-  }
-  return join(__dirname, '../../output/stems')
 }
 
 // Named setlists — ordered references to library songs by name (never a

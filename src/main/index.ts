@@ -5,6 +5,7 @@ import { registerIpcHandlers, setSetupManager, setJobManager } from './ipc/handl
 import { SetupManager } from './setup'
 import { JobManager } from './jobs/JobManager'
 import { startAudioServer, stopAudioServer, audioUrl } from './audio-server'
+import { initAutoUpdater } from './updater'
 
 let mainWindow: BrowserWindow | null = null
 let setupManager: SetupManager | null = null
@@ -83,6 +84,7 @@ app.whenReady().then(async () => {
   })
 
   registerIpcHandlers()
+  initAutoUpdater()
   createWindow()
 
   app.on('activate', () => {

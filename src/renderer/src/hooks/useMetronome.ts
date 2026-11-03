@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback, useLayoutEffect } from 'react'
 import useLocalStoragePreference from './useLocalStoragePreference'
 import { CLICK_PRESETS } from './clickPresets'
+import { isConstantAccent, isGridAccent } from './downbeat'
 
 const LOOKAHEAD = 0.3
 
@@ -15,6 +16,11 @@ const isFiniteNumber = (v: unknown): v is number => typeof v === 'number' && Num
 export interface PlaybackClock {
   ensureCtx: () => AudioContext | null
   getPosition: () => number
+  // Song seconds per real second (practice speed). Defaults to 1.
+  getRate?: () => number
+  // Latency the engine adds after its sources (pitch shifter); every click
+  // is delayed by this so it lines up with what's actually heard.
+  getOutputDelay?: () => number
 }
 
 // Sentinel for lastScheduledBeatRef meaning "nothing scheduled yet this
@@ -61,7 +67,9 @@ export function useMetronome(
   // count-in's wait, consuming the dedup ratchet so the real beat at the
   // correct moment then gets skipped. See fix-count-in-handoff-precision.
   playbackPendingRef: React.MutableRefObject<boolean>,
-  playbackClockRef?: React.MutableRefObject<PlaybackClock | null>
+  playbackClockRef?: React.MutableRefObject<PlaybackClock | null>,
+  // Which beat is the bar's "1" (0–3, per song — see downbeat.ts).
+  downbeatShiftRef?: React.MutableRefObject<number>
 ): {
   bpm: number
   setBpm: (v: number | ((prev: number) => number)) => void
@@ -124,6 +132,13 @@ export function useMetronome(
   // Whether audioCtxRef is our own context (we must close it on unmount) or
   // the engine's shared one (the engine owns and closes it).
   const ownsCtxRef = useRef(false)
+  // Beat positions are in song time; at practice speed `r`, song time passes
+  // r× faster than real time, so a song-time delay d is d / r real seconds.
+  const currentRate = useCallback((): number => {
+    if (ownsCtxRef.current) return 1
+    const rate = playbackClockRef?.current?.getRate?.() ?? 1
+    return rate > 0 ? rate : 1
+  }, [playbackClockRef])
 
   useLayoutEffect(() => {
     metronomeOnRef.current = metronomeOn
@@ -175,12 +190,23 @@ export function useMetronome(
     []
   )
 
-  const playClick = useCallback((accent: boolean, scheduledTime: number): void => {
-    const ctx = audioCtxRef.current
-    if (!ctx) return
-    const destination = panNodeRef.current ?? ctx.destination
-    CLICK_PRESETS.woodblock(ctx, accent, scheduledTime, metroVolumeRef.current, destination)
-  }, [])
+  const playClick = useCallback(
+    (accent: boolean, scheduledTime: number): void => {
+      const ctx = audioCtxRef.current
+      if (!ctx) return
+      const destination = panNodeRef.current ?? ctx.destination
+      // Only on the shared engine context — our own context has no shifter.
+      const delay = ownsCtxRef.current ? 0 : (playbackClockRef?.current?.getOutputDelay?.() ?? 0)
+      CLICK_PRESETS.woodblock(
+        ctx,
+        accent,
+        scheduledTime + delay,
+        metroVolumeRef.current,
+        destination
+      )
+    },
+    [playbackClockRef]
+  )
 
   // Constant-tempo extrapolation from `offset`/beat 0 — today's algorithm,
   // used when no detected beat grid applies (none available, or the tempo was
@@ -192,12 +218,15 @@ export function useMetronome(
 
       while ((beat * 60) / bpmValue - tAdj < LOOKAHEAD) {
         const delaySong = (beat * 60) / bpmValue - tAdj
-        playClick(beat % 4 === 1, ctx.currentTime + Math.max(0, delaySong))
+        playClick(
+          isConstantAccent(beat, downbeatShiftRef?.current ?? 0),
+          ctx.currentTime + Math.max(0, delaySong) / currentRate()
+        )
         lastScheduledBeatRef.current = beat
         beat++
       }
     },
-    [playClick]
+    [playClick, downbeatShiftRef, currentRate]
   )
 
   // Schedules from the real detected beat-time grid. Once playback advances
@@ -233,7 +262,10 @@ export function useMetronome(
         // negative audio position, just consume the ratchet past it.
         if (beatTime >= 0) {
           const delaySong = beatTime - t
-          playClick(idx % 4 === 0, ctx.currentTime + Math.max(0, delaySong))
+          playClick(
+            isGridAccent(idx, downbeatShiftRef?.current ?? 0),
+            ctx.currentTime + Math.max(0, delaySong) / currentRate()
+          )
         }
         lastScheduledBeatRef.current = idx
         idx++
@@ -250,13 +282,16 @@ export function useMetronome(
 
         while ((n * 60) / bpmValue - tAdj < LOOKAHEAD) {
           const delaySong = (n * 60) / bpmValue - tAdj
-          playClick((lastIdx + n) % 4 === 0, ctx.currentTime + Math.max(0, delaySong))
+          playClick(
+            isGridAccent(lastIdx + n, downbeatShiftRef?.current ?? 0),
+            ctx.currentTime + Math.max(0, delaySong) / currentRate()
+          )
           lastScheduledBeatRef.current = lastIdx + n
           n++
         }
       }
     },
-    [playClick]
+    [playClick, downbeatShiftRef, currentRate]
   )
 
   const schedulerTick = useCallback((): void => {

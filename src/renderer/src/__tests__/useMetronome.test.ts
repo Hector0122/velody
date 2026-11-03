@@ -512,3 +512,48 @@ describe('useMetronome - own context lifecycle', () => {
     expect((ctx as unknown as { close: ReturnType<typeof vi.fn> }).close).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('useMetronome - downbeat shift', () => {
+  let oscillators: TrackedOsc[]
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    oscillators = []
+    stubAudioContext(oscillators)
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+    window.localStorage.clear()
+  })
+
+  it('accents the grid beat selected by downbeatShiftRef instead of index 0', () => {
+    const downbeatShiftRef = { current: 2 }
+    const positionRef = { current: 0.8 }
+    const { result } = renderHook(() =>
+      useMetronome(
+        true,
+        { current: true },
+        positionRef,
+        { current: 0 },
+        { current: 120 },
+        { current: [1.0, 1.5, 2.0, 2.5, 3.0] },
+        { current: false },
+        undefined,
+        downbeatShiftRef
+      )
+    )
+    act(() => {
+      result.current.setMetronomeOn(true)
+    })
+    // Walk through the grid one beat at a time.
+    for (const t of [0.8, 1.3, 1.8, 2.3]) {
+      positionRef.current = t
+      act(() => {
+        vi.advanceTimersByTime(25)
+      })
+    }
+    // idx 0, 1 not accented; idx 2 accented; idx 3 not.
+    expect(oscillators.map(startFreq)).toEqual([650, 650, 900, 650])
+  })
+})

@@ -13,6 +13,9 @@ import { correctTempoOctave, type TempoOctaveDirection } from '../hooks/tempoOct
 import useMarkers from '../hooks/useMarkers'
 import useTrim from '../hooks/useTrim'
 import useSongCountIn from '../hooks/useSongCountIn'
+import useDownbeatShift from '../hooks/useDownbeatShift'
+import useSongSpeedPitch from '../hooks/useSongSpeedPitch'
+import { downbeatShiftAt } from '../hooks/downbeat'
 import useLivePresets from '../hooks/useLivePresets'
 import useCountIn, { COUNT_IN_LEAD_IN } from '../hooks/useCountIn'
 import { useExportState } from '../hooks/useExportState'
@@ -39,6 +42,8 @@ interface StemPlayerProps {
   // that setlist's order.
   onNextSong?: () => void
   hasNextSong?: boolean
+  // Shows Live Presets (and auto-applies the last one) only when on.
+  liveMode?: boolean
 }
 
 const STEM_META: Record<string, { color: string; label: string }> = {
@@ -66,7 +71,8 @@ function StemPlayer({
   songName,
   onToast,
   onNextSong,
-  hasNextSong
+  hasNextSong,
+  liveMode = false
 }: StemPlayerProps): React.JSX.Element {
   const progressRef = useRef(0)
   const [masterVolume, setMasterVolume] = useState(1)
@@ -113,9 +119,13 @@ function StemPlayer({
   const audioStartRef = useRef<number | null>(null)
   const mediaStreamRef = useRef<MediaStream | null>(null)
 
+  const { downbeatShift, setDownbeatShift, downbeatShiftRef } = useDownbeatShift(stems)
+  const { speed, semitones, setSpeed, setSemitones } = useSongSpeedPitch(stems)
+
   const {
     bpm,
     setBpm,
+    bpmRef,
     metronomeOn,
     setMetronomeOn,
     metroVolume,
@@ -142,7 +152,8 @@ function StemPlayer({
     originalBpmRef,
     beatTimesRef,
     playbackPendingRef,
-    playbackClockRef
+    playbackClockRef,
+    downbeatShiftRef
   )
 
   useSongAnalysis(urls, stems, setBpm, firstBeatOffsetRef, originalBpmRef, beatTimesRef)
@@ -167,7 +178,8 @@ function StemPlayer({
     setStemVolumes,
     setStemPannings,
     setMetronomeOn,
-    setMasterVolume
+    setMasterVolume,
+    autoApply: liveMode
   })
 
   const {
@@ -286,6 +298,9 @@ function StemPlayer({
     // the count-in handoff in handleToggleMasterPlayWithCountIn.
     ensureAudioCtx: ensureStemAudioCtx,
     getLivePosition,
+    getRate,
+    getOutputDelay,
+    pitchShifterError,
     getDecodedBuffer,
     masterPan,
     setMasterPan
@@ -312,6 +327,8 @@ function StemPlayer({
     onAudioTimeRef,
     lastScheduledBeatRef,
     playbackPendingRef,
+    speed,
+    semitones,
     progressRef,
     setMasterPlaying,
     setActive,
@@ -327,8 +344,13 @@ function StemPlayer({
     notifyStemDecodedRef
   })
   useLayoutEffect(() => {
-    playbackClockRef.current = { ensureCtx: ensureStemAudioCtx, getPosition: getLivePosition }
-  }, [ensureStemAudioCtx, getLivePosition])
+    playbackClockRef.current = {
+      ensureCtx: ensureStemAudioCtx,
+      getPosition: getLivePosition,
+      getRate,
+      getOutputDelay
+    }
+  }, [ensureStemAudioCtx, getLivePosition, getRate, getOutputDelay])
 
   useLayoutEffect(() => {
     seekRef.current = seek
@@ -394,7 +416,9 @@ function StemPlayer({
       setPlaybackCounting(true)
 
       const totalBeats = playbackCountInBars * 4
-      const interval = 60 / bpm
+      // Count in at the tempo you'll actually hear (practice speed applied).
+      const heardBpm = bpm * speed
+      const interval = 60 / heardBpm
       const countInDuration = COUNT_IN_LEAD_IN + totalBeats * interval
       const stemCtx = ensureStemAudioCtx()
       const stemWhen = stemCtx.currentTime + countInDuration
@@ -406,7 +430,7 @@ function StemPlayer({
       // display only).
       playbackCountIn.start(
         playbackCountInBars,
-        bpm,
+        heardBpm,
         (remaining) => setPlaybackCountRemaining(remaining),
         () => {}
       )
@@ -420,6 +444,7 @@ function StemPlayer({
     masterPlaying,
     playbackCountInBars,
     bpm,
+    speed,
     playbackCountIn,
     toggleMasterPlay,
     ensureStemAudioCtx
@@ -507,7 +532,15 @@ function StemPlayer({
         onSolo: () => toggleSolo(key),
         onExport: () => handleExportSingle(key),
         onOpenTab: () => handleOpenTab(key),
-        onStartRecording: () => handleStartRecording(key),
+        onStartRecording: () => {
+          // A take recorded against slowed/transposed playback wouldn't line up
+          // with the original stems (and the shifter adds latency).
+          if (speed !== 1 || semitones !== 0) {
+            onToast?.('Set speed to 100% and pitch to 0 to record', 'error')
+            return
+          }
+          handleStartRecording(key)
+        },
         onVolumeChange: (v: number) => handleStemVolume(key, v),
         onPanningChange: (v: number) => handleStemPanning(key, v),
         onDeleteRecording: recPath ? () => handleDeleteRecording(recPath) : () => {}
@@ -522,6 +555,9 @@ function StemPlayer({
     handleExportSingle,
     handleOpenTab,
     handleStartRecording,
+    speed,
+    semitones,
+    onToast,
     handleStemVolume,
     handleStemPanning,
     handleDeleteRecording
@@ -594,6 +630,22 @@ function StemPlayer({
   // arithmetic approach only if redetection itself fails (e.g. the Python
   // worker errors) — an imperfect grid is still better than none.
   // See openspec/changes/add-tempo-octave-correction.
+  // "This is the 1": make the beat nearest the current playback position the
+  // bar's accented downbeat (see downbeat.ts). Works paused too (uses the
+  // cursor position).
+  const handleMarkDownbeat = useCallback((): void => {
+    const beatTimes = Array.isArray(beatTimesRef.current) ? beatTimesRef.current : []
+    const bpmNow = bpmRef.current
+    setDownbeatShift(
+      downbeatShiftAt(getLivePosition(), {
+        beatTimes,
+        usingGrid: beatTimes.length > 0 && bpmNow === originalBpmRef.current,
+        bpm: bpmNow,
+        firstBeatOffset: firstBeatOffsetRef.current
+      })
+    )
+  }, [beatTimesRef, bpmRef, originalBpmRef, firstBeatOffsetRef, getLivePosition, setDownbeatShift])
+
   const handleCorrectTempoOctave = useCallback(
     (direction: TempoOctaveDirection): void => {
       if (stems.length === 0 || correctingTempoOctave) return
@@ -683,13 +735,15 @@ function StemPlayer({
                 </button>
               )}
             </div>
-            <LivePresetBar
-              presets={livePresets}
-              activePresetId={activePresetId}
-              onApply={handleApplyPreset}
-              onSave={handleSavePreset}
-              onDelete={handleDeletePreset}
-            />
+            {liveMode && (
+              <LivePresetBar
+                presets={livePresets}
+                activePresetId={activePresetId}
+                onApply={handleApplyPreset}
+                onSave={handleSavePreset}
+                onDelete={handleDeletePreset}
+              />
+            )}
           </div>
 
           <TimelinePanel
@@ -751,6 +805,14 @@ function StemPlayer({
           onBpmChange={handleBpmChange}
           onBpmIncrement={handleBpmIncrement}
           onCorrectTempoOctave={handleCorrectTempoOctave}
+          downbeatShift={downbeatShift}
+          speed={speed}
+          semitones={semitones}
+          onSpeedChange={setSpeed}
+          onSemitonesChange={setSemitones}
+          pitchShifterError={pitchShifterError}
+          onMarkDownbeat={handleMarkDownbeat}
+          onDownbeatShiftChange={setDownbeatShift}
           correctingTempoOctave={correctingTempoOctave}
           onMetronomeToggle={handleMetronomeToggle}
           onMetroVolumeChange={handleMetroVolumeChange}
