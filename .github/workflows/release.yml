@@ -3,9 +3,9 @@
 #   pnpm version patch     # 1.1.0 -> 1.1.1 (bumps package.json, commits, tags v1.1.1)
 #   git push --follow-tags
 #
-# electron-builder uploads the AppImage, .deb and latest-linux.yml to the
-# release; installed copies of the app pick it up on their next launch
-# (src/main/updater.ts).
+# The AppImage, .deb and latest-linux.yml are uploaded to the release only
+# after scripts/verify-asar.mjs confirms the package is complete; installed
+# copies of the app pick it up on their next launch (src/main/updater.ts).
 name: Release
 
 on:
@@ -39,7 +39,18 @@ jobs:
 
       - run: pnpm test
 
-      - name: Build and publish
-        run: pnpm build && pnpm exec electron-builder --linux --publish always
+      - name: Build installers
+        run: pnpm build && pnpm exec electron-builder --linux --publish never
+
+      # Fails the release if electron-builder dropped a runtime dependency
+      # from app.asar (v1.1.0 shipped without `ms` and crashed on launch).
+      - name: Verify app.asar has every runtime dependency
+        run: node scripts/verify-asar.mjs dist/linux-unpacked/resources/app.asar
+
+      - name: Publish GitHub Release
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            dist/*.AppImage dist/*.deb dist/latest-linux.yml \
+            --title "$GITHUB_REF_NAME" --generate-notes
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
