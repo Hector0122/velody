@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
+import type { StemBitrate } from '../shared/types'
 
 export interface SeparationProgressEvent {
   jobId: string
@@ -49,8 +50,8 @@ export interface DownloadFailedEvent {
 
 const api = {
   openFileDialog: () => ipcRenderer.invoke('dialog:openFile'),
-  startSeparation: (songPath: string) =>
-    ipcRenderer.invoke('separation:start', songPath) as Promise<{
+  startSeparation: (songPath: string, bitrate?: StemBitrate) =>
+    ipcRenderer.invoke('separation:start', songPath, bitrate) as Promise<{
       jobId: string
       songName: string
     }>,
@@ -109,13 +110,9 @@ const api = {
   listSetlists: () => ipcRenderer.invoke('setlists:list'),
   saveSetlist: (setlist: Setlist) => ipcRenderer.invoke('setlists:save', setlist),
   deleteSetlist: (id: string) => ipcRenderer.invoke('setlists:delete', id),
-  readAudioFile: (filePath: string) => ipcRenderer.invoke('audio:readFile', filePath),
   getAudioUrl: (filePath: string) => ipcRenderer.invoke('audio:url', filePath),
   getSetupStatus: () => ipcRenderer.invoke('setup:status'),
   startSetup: () => ipcRenderer.invoke('setup:start'),
-  getPythonPath: () => ipcRenderer.invoke('setup:pythonPath'),
-  getFfmpegPath: () => ipcRenderer.invoke('setup:ffmpegPath'),
-  openDirectoryDialog: () => ipcRenderer.invoke('dialog:openDirectory'),
   saveFileDialog: (defaultName: string, filters?: { name: string; extensions: string[] }[]) =>
     ipcRenderer.invoke('dialog:saveFile', defaultName, filters ?? []),
   exportMix: (
@@ -135,8 +132,6 @@ const api = {
   ) => ipcRenderer.invoke('export:single', filePath, outputPath, options),
   saveRecording: (songDir: string, data: number[], name: string, format: string, offset: number) =>
     ipcRenderer.invoke('record:save', songDir, data, name, format, offset),
-  transposeStems: (stemPaths: string[], semitones: number) =>
-    ipcRenderer.invoke('stems:transpose', stemPaths, semitones),
   onSetupProgress: (callback: (progress: unknown) => void) => {
     ipcRenderer.on('setup:progress', (_event, progress) => callback(progress))
   },
@@ -151,8 +146,8 @@ const api = {
     } | null>,
   openExternal: (url: string) => ipcRenderer.invoke('shell:openExternal', url),
   deleteFile: (filePath: string) => ipcRenderer.invoke('file:delete', filePath),
-  importFromUrl: (url: string) =>
-    ipcRenderer.invoke('url:import', url) as Promise<{
+  importFromUrl: (url: string, bitrate?: StemBitrate) =>
+    ipcRenderer.invoke('url:import', url, bitrate) as Promise<{
       jobId: string
       songName: string
     }>,
@@ -174,7 +169,6 @@ const api = {
       ipcRenderer.removeListener('url:download-failed', handler)
     }
   },
-  checkYtDlp: () => ipcRenderer.invoke('url:checkYtDlp') as Promise<{ available: boolean }>,
   updateYtDlp: () =>
     ipcRenderer.invoke('url:updateYtDlp') as Promise<{ success: boolean; error?: string }>
 }

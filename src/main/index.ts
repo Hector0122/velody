@@ -20,7 +20,11 @@ function createWindow(): void {
     autoHideMenuBar: true,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
-      sandbox: false
+      sandbox: false,
+      // Keep audio scheduling timers (metronome, count-in) running at full
+      // rate when the window is minimized or behind another app — Chromium
+      // otherwise throttles them to ~1/s and the click drops out.
+      backgroundThrottling: false
     }
   })
 
@@ -76,14 +80,6 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('audio:url', (_event, filePath: string) => {
     return audioUrl(filePath)
-  })
-
-  ipcMain.handle('setup:pythonPath', () => {
-    return setupManager?.getPythonPath() ?? 'python3'
-  })
-
-  ipcMain.handle('setup:ffmpegPath', () => {
-    return setupManager?.getFfmpegPath() ?? 'ffmpeg'
   })
 
   registerIpcHandlers()

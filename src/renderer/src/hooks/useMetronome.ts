@@ -6,6 +6,17 @@ const LOOKAHEAD = 0.3
 
 const isFiniteNumber = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v)
 
+// Bridge to the playback engine's clock (filled in by StemPlayer once
+// useAudioContextEngine exists — it's created after this hook). When set,
+// clicks are scheduled on the *same* AudioContext as the stems, against a
+// position read from that context's clock at scheduling time, so every click
+// lands sample-accurately on the beat. Without it (tests, or before the engine
+// is wired) the metronome falls back to its own AudioContext + positionRef.
+export interface PlaybackClock {
+  ensureCtx: () => AudioContext | null
+  getPosition: () => number
+}
+
 // Sentinel for lastScheduledBeatRef meaning "nothing scheduled yet this
 // playback session" — reset here and by every seek/loop/restart/BPM-change
 // site elsewhere (useAudioContextEngine, useWaveSurfers, StemPlayer's BPM
@@ -49,7 +60,8 @@ export function useMetronome(
   // add-song-trim-points) would get a click wrongly scheduled during a
   // count-in's wait, consuming the dedup ratchet so the real beat at the
   // correct moment then gets skipped. See fix-count-in-handoff-precision.
-  playbackPendingRef: React.MutableRefObject<boolean>
+  playbackPendingRef: React.MutableRefObject<boolean>,
+  playbackClockRef?: React.MutableRefObject<PlaybackClock | null>
 ): {
   bpm: number
   setBpm: (v: number | ((prev: number) => number)) => void
@@ -93,6 +105,7 @@ export function useMetronome(
   const metronomeOnRef = useRef(metronomeOn)
   const bpmRef = useRef(bpm)
   const metroVolumeRef = useRef(metroVolume)
+  const metroPanRef = useRef(metroPan)
   // Dual-purpose dedup counter: "last scheduled beat number" in constant-tempo
   // mode, "last scheduled beat-grid index" in grid mode. The two modes are
   // mutually exclusive per tick, and every transition between them (song
@@ -108,29 +121,59 @@ export function useMetronome(
   // metroPan applies uniformly without needing to thread it into each
   // preset's own node graph.
   const panNodeRef = useRef<StereoPannerNode | null>(null)
+  // Whether audioCtxRef is our own context (we must close it on unmount) or
+  // the engine's shared one (the engine owns and closes it).
+  const ownsCtxRef = useRef(false)
 
   useLayoutEffect(() => {
     metronomeOnRef.current = metronomeOn
     bpmRef.current = bpm
     metroVolumeRef.current = metroVolume
+    metroPanRef.current = metroPan
     if (panNodeRef.current) panNodeRef.current.pan.value = metroPan
   })
 
   const ensureAudioCtx = useCallback((): AudioContext | null => {
-    if (!audioCtxRef.current) {
+    const shared = playbackClockRef?.current?.ensureCtx() ?? null
+    if (shared && audioCtxRef.current !== shared) {
+      // Switch to the engine's context (first use, or the engine recreated it).
+      if (ownsCtxRef.current) audioCtxRef.current?.close()
+      audioCtxRef.current = shared
+      ownsCtxRef.current = false
+      panNodeRef.current = null
+    }
+    if (!audioCtxRef.current || audioCtxRef.current.state === 'closed') {
       try {
         audioCtxRef.current = new AudioContext()
-        panNodeRef.current = audioCtxRef.current.createStereoPanner()
-        panNodeRef.current.pan.value = metroPan
-        panNodeRef.current.connect(audioCtxRef.current.destination)
+        ownsCtxRef.current = true
+        panNodeRef.current = null
       } catch {
         return null
       }
     }
-    if (audioCtxRef.current.state === 'suspended') audioCtxRef.current.resume()
-    return audioCtxRef.current
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+    const ctx = audioCtxRef.current
+    if (!panNodeRef.current) {
+      // Straight to destination — the click deliberately bypasses the
+      // engine's master gain/pan so it keeps its own volume/pan controls.
+      panNodeRef.current = ctx.createStereoPanner()
+      panNodeRef.current.pan.value = metroPanRef.current
+      panNodeRef.current.connect(ctx.destination)
+    }
+    if (ctx.state === 'suspended') ctx.resume()
+    return ctx
+  }, [playbackClockRef])
+
+  // Close our own context when the song (StemPlayer) unmounts — it's keyed
+  // per song, so leaking one AudioContext per opened song used to pile up
+  // audio threads until clicks glitched or the context failed to open.
+  useEffect(
+    () => () => {
+      if (ownsCtxRef.current) audioCtxRef.current?.close()
+      audioCtxRef.current = null
+      panNodeRef.current = null
+    },
+    []
+  )
 
   const playClick = useCallback((accent: boolean, scheduledTime: number): void => {
     const ctx = audioCtxRef.current
@@ -230,7 +273,11 @@ export function useMetronome(
       return
     }
 
-    const t = positionRef.current
+    // On the shared engine context, read the position from its clock right
+    // now so `ctx.currentTime + (beat - t)` is exact; otherwise use the
+    // RAF-sampled positionRef.
+    const clock = playbackClockRef?.current
+    const t = clock && !ownsCtxRef.current ? clock.getPosition() : positionRef.current
     const currentBpm = bpmRef.current
     // Defensive fallback in case anything ever hands this ref a non-array
     // (e.g. a stale caller) — degrade to constant-tempo rather than throw.
@@ -252,6 +299,7 @@ export function useMetronome(
     originalBpmRef,
     beatTimesRef,
     playbackPendingRef,
+    playbackClockRef,
     scheduleFromGrid,
     scheduleConstantTempo
   ])

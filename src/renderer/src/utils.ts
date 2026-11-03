@@ -11,6 +11,21 @@ export function stemNameFromPath(path: string): string {
 // output/stems/) — this is where the .velody metadata sidecar (BPM, beat
 // grid, markers, trim points) lives. Strips just the last path segment
 // (the filename) rather than assuming any particular stem name.
+// Stem to run tempo/beat detection on. Drums carry the clearest onsets for
+// beat tracking; the fallbacks are the next most rhythmic stems. Previously
+// detection just used stems[0], whose identity depended on the OS's
+// directory-listing order (bass on Windows, effectively random on Linux) —
+// a big source of wrong/half-time BPMs and drifting beat grids.
+const BEAT_TRACKING_PREFERENCE = ['drums', 'bass', 'other', 'guitar', 'piano', 'vocals']
+
+export function pickBeatTrackingStem(stems: string[]): string | undefined {
+  for (const name of BEAT_TRACKING_PREFERENCE) {
+    const match = stems.find((s) => stemNameFromPath(s) === name)
+    if (match) return match
+  }
+  return stems[0]
+}
+
 export function songDirFromStemPath(stemPath: string): string {
   return stemPath.replace(/[/\\][^/\\]+$/, '')
 }
@@ -95,13 +110,9 @@ export const formatFilter = (fmt: string): { name: string; extensions: string[] 
 // Constants
 export const BPM_MIN = 40
 export const BPM_MAX = 280
-export const PITCH_SHIFT_MIN = -12
-export const PITCH_SHIFT_MAX = 12
 export const DEFAULT_SAMPLE_RATE = 44100
 export const AUDIO_START_THRESHOLD = 0.008
 export const AUDIO_START_MAX_SCAN_SECS = 30
-export const DRIFT_THRESHOLD = 0.05
-export const DRIFT_CORRECTION_INTERVAL_MS = 500
 export const MASTER_WAVEFORM_HEIGHT = 64
 export const MASTER_MIN_PX_PER_SEC = 20
 export const STEM_WAVEFORM_HEIGHT = 32

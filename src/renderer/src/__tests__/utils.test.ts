@@ -10,14 +10,13 @@ import {
   formatFilter,
   BPM_MIN,
   BPM_MAX,
-  PITCH_SHIFT_MIN,
-  PITCH_SHIFT_MAX,
   DEFAULT_SAMPLE_RATE,
   AUDIO_START_THRESHOLD,
   AUDIO_START_MAX_SCAN_SECS,
   MASTER_WAVEFORM_HEIGHT,
   MASTER_MIN_PX_PER_SEC,
-  STEM_WAVEFORM_HEIGHT
+  STEM_WAVEFORM_HEIGHT,
+  pickBeatTrackingStem
 } from '../utils'
 
 describe('stemNameFromPath', () => {
@@ -215,12 +214,6 @@ describe('constants', () => {
     expect(BPM_MIN).toBeLessThan(BPM_MAX)
   })
 
-  it('has correct pitch shift range', () => {
-    expect(PITCH_SHIFT_MIN).toBe(-12)
-    expect(PITCH_SHIFT_MAX).toBe(12)
-    expect(PITCH_SHIFT_MIN).toBeLessThan(PITCH_SHIFT_MAX)
-  })
-
   it('has correct sample rate', () => {
     expect(DEFAULT_SAMPLE_RATE).toBe(44100)
   })
@@ -241,5 +234,22 @@ describe('constants', () => {
 
   it('has valid min px per sec', () => {
     expect(MASTER_MIN_PX_PER_SEC).toBeGreaterThan(0)
+  })
+})
+
+describe('pickBeatTrackingStem', () => {
+  it('prefers the drums stem regardless of listing order', () => {
+    const stems = ['/s/song/bass.mp3', '/s/song/vocals.mp3', '/s/song/drums.mp3']
+    expect(pickBeatTrackingStem(stems)).toBe('/s/song/drums.mp3')
+  })
+
+  it('ignores recordings that merely start with a stem name', () => {
+    const stems = ['/s/song/drums_take1.wav', '/s/song/bass.mp3']
+    expect(pickBeatTrackingStem(stems)).toBe('/s/song/bass.mp3')
+  })
+
+  it('falls back to the first stem when no known stem is present', () => {
+    expect(pickBeatTrackingStem(['/s/song/x.mp3'])).toBe('/s/song/x.mp3')
+    expect(pickBeatTrackingStem([])).toBeUndefined()
   })
 })

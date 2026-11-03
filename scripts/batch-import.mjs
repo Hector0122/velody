@@ -310,18 +310,18 @@ async function downloadSong(url, pythonPath, ffmpegPath, mode) {
   return { path: result.path, title: result.title }
 }
 
-async function separateSong(audioPath, pythonPath, outputDir) {
+async function separateSong(audioPath, pythonPath, outputDir, bitrate) {
   const result = await runPythonJsonLines(
     pythonPath,
     join(PYTHON_WORKER_DIR, 'separate.py'),
-    [audioPath, '--output-dir', outputDir],
+    [audioPath, '--output-dir', outputDir, '--bitrate', String(bitrate)],
     { cwd: PYTHON_WORKER_DIR, timeoutMs: SEPARATE_TIMEOUT_MS }
   )
   return { stems: result.stems }
 }
 
 /** Download (+ separate, in audio mode) a single row. Throws on failure; caller decides how to record it. */
-async function processRow(row, { pythonPath, ffmpegPath, outputDir, mode }) {
+async function processRow(row, { pythonPath, ffmpegPath, outputDir, mode, bitrate }) {
   // Pre-flight disk check when the folder name is already knowable (Title+Artist
   // present) -- skips the download entirely for songs already on disk.
   if (row.title && row.artist) {
@@ -359,7 +359,7 @@ async function processRow(row, { pythonPath, ffmpegPath, outputDir, mode }) {
   const renamedPath = join(dirname(downloadedPath), `${folderName}${ext}`)
   renameSync(downloadedPath, renamedPath)
 
-  await separateSong(renamedPath, pythonPath, outputDir)
+  await separateSong(renamedPath, pythonPath, outputDir, bitrate)
 
   return {}
 }
@@ -377,6 +377,7 @@ Arguments:
   links-file      Path to the links file (default: links.txt)
   --output-dir    Output root (default: <repo>/output/stems, or
                    <repo>/output/videos with --video)
+  --bitrate <kbps> Stem MP3 quality: 128 (default), 192 or 320
   --video         Download full video (.mp4) instead of audio -- skips
                    stem separation entirely
 
@@ -384,11 +385,15 @@ Re-run the same command to resume an interrupted batch or retry failed rows.
 `
 
 function parseArgs(argv) {
-  const args = { linksFile: 'links.txt', outputDir: null, video: false, help: false }
+  const args = { linksFile: 'links.txt', outputDir: null, video: false, help: false, bitrate: 128 }
   const rest = []
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--output-dir' && argv[i + 1]) {
       args.outputDir = resolve(argv[++i])
+    } else if (argv[i] === '--bitrate' && argv[i + 1]) {
+      const kbps = Number(argv[++i])
+      if (![128, 192, 320].includes(kbps)) throw new Error('--bitrate must be 128, 192 or 320')
+      args.bitrate = kbps
     } else if (argv[i] === '--video') {
       args.video = true
     } else if (argv[i] === '--help' || argv[i] === '-h') {
@@ -429,6 +434,7 @@ async function main() {
   console.log('Velody batch import')
   console.log(`  Links file : ${linksPath}`)
   console.log(`  Mode       : ${mode}`)
+  console.log(`  Bitrate    : ${args.bitrate} kbps`)
   console.log(`  Output dir : ${outputDir}`)
   console.log(`  Python     : ${pythonPath}`)
   console.log(`  FFmpeg     : ${ffmpegPath}`)
@@ -448,7 +454,13 @@ async function main() {
     let skippedNetwork = false
     try {
       // Intentionally sequential (not Promise.all) -- see design.md Non-Goals.
-      const result = await processRow(row, { pythonPath, ffmpegPath, outputDir, mode })
+      const result = await processRow(row, {
+        pythonPath,
+        ffmpegPath,
+        outputDir,
+        mode,
+        bitrate: args.bitrate
+      })
       okCount++
       skippedNetwork = Boolean(result.note)
       console.log(`OK${result.note ? ` (${result.note})` : ''}`)

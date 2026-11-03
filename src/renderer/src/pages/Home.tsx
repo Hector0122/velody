@@ -3,6 +3,7 @@ import AudioUploader from '../components/AudioUploader'
 import UrlImporter from '../components/UrlImporter'
 import StemPlayer from '../components/StemPlayer'
 import SetlistPanel from '../components/SetlistPanel'
+import useLocalStoragePreference from '../hooks/useLocalStoragePreference'
 import { filterSongsByQuery, reorderSetlistSongs, resolveNextSetlistSong } from '../utils'
 
 interface RecentSong {
@@ -24,6 +25,17 @@ interface PendingFile {
 
 let toastCounter = 0
 
+type StemBitrate = 128 | 192 | 320
+
+// Approximate size of the 6 stems of a 4-minute song at each bitrate.
+const STEM_BITRATE_OPTIONS: { value: StemBitrate; hint: string }[] = [
+  { value: 128, hint: '~23 MB per song — fine for practice' },
+  { value: 192, hint: '~35 MB per song — balanced' },
+  { value: 320, hint: '~58 MB per song — maximum quality' }
+]
+
+const isStemBitrate = (v: unknown): v is StemBitrate => v === 128 || v === 192 || v === 320
+
 function Home(): React.JSX.Element {
   const [currentSong, setCurrentSong] = useState<{
     stems: string[]
@@ -35,6 +47,12 @@ function Home(): React.JSX.Element {
   const [toasts, setToasts] = useState<Toast[]>([])
   const [error, setError] = useState<string | null>(null)
   const [importMode, setImportMode] = useState<'local' | 'url'>('local')
+  // MP3 bitrate for newly separated stems; remembered, changeable per import.
+  const [stemBitrate, setStemBitrate] = useLocalStoragePreference<StemBitrate>(
+    'velody:stemBitrate',
+    128,
+    isStemBitrate
+  )
   const [showNewSongMenu, setShowNewSongMenu] = useState(false)
   const [songSearch, setSongSearch] = useState('')
   const [sidebarView, setSidebarView] = useState<'library' | 'setlists'>('library')
@@ -206,7 +224,7 @@ function Home(): React.JSX.Element {
 
     for (const file of files) {
       try {
-        const result = await window.api.startSeparation(file.path)
+        const result = await window.api.startSeparation(file.path, stemBitrate)
         setJobQueue((prev) => {
           if (prev.some((j) => j.id === result.jobId)) return prev
           return [
@@ -644,6 +662,29 @@ function Home(): React.JSX.Element {
                 </button>
               </div>
 
+              <div className="flex items-center justify-between gap-3 mb-4 text-sm">
+                <span className="text-neutral-500">Stem quality</span>
+                <div className="flex gap-1 bg-neutral-900 rounded-lg p-1 border border-neutral-800">
+                  {STEM_BITRATE_OPTIONS.map((opt) => (
+                    <button
+                      key={opt.value}
+                      onClick={() => setStemBitrate(opt.value)}
+                      title={opt.hint}
+                      className={`py-1 px-2.5 rounded-md text-xs font-medium transition-colors ${
+                        stemBitrate === opt.value
+                          ? 'bg-neutral-800 text-white'
+                          : 'text-neutral-500 hover:text-neutral-300'
+                      }`}
+                    >
+                      {opt.value} kbps
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <p className="text-xs text-neutral-600 -mt-2 mb-4 text-right">
+                {STEM_BITRATE_OPTIONS.find((o) => o.value === stemBitrate)?.hint}
+              </p>
+
               {importMode === 'local' ? (
                 <AudioUploader
                   files={pendingFiles}
@@ -652,7 +693,7 @@ function Home(): React.JSX.Element {
                   onProcessAll={handleProcessAll}
                 />
               ) : (
-                <UrlImporter onImportStarted={handleUrlImport} />
+                <UrlImporter onImportStarted={handleUrlImport} bitrate={stemBitrate} />
               )}
             </div>
           </div>

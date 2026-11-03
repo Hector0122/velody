@@ -98,10 +98,6 @@ export function stopAudioServer(): void {
   stemsRootDir = ''
 }
 
-export function getAudioPort(): number {
-  return activePort
-}
-
 export function audioUrl(filePath: string): string {
   const normalizedPath = filePath.replace(/\\/g, '/')
   return `http://127.0.0.1:${activePort}/${encodeURI(normalizedPath)}`

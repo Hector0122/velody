@@ -1,10 +1,10 @@
 import { useEffect, useRef } from 'react'
-import { songDirFromStemPath } from '../utils'
+import { songDirFromStemPath, pickBeatTrackingStem } from '../utils'
 
-// Bumped from 17: older caches never stored the detected beat-time grid, so
-// they must be treated as stale rather than silently falling back to
-// constant-tempo scheduling for songs whose grid was already detected once.
-const CACHE_VERSION = 18
+// 19: detection now runs on the drums stem (pickBeatTrackingStem) instead of
+// whatever stems[0] happened to be — older results are re-detected.
+// 18: caches started storing the detected beat-time grid.
+const CACHE_VERSION = 19
 export { CACHE_VERSION }
 
 // originalBpmRef/beatTimesRef, like firstBeatOffsetRef, are refs owned by
@@ -52,8 +52,7 @@ export default function useSongAnalysis(
       }
 
       try {
-        const firstStem = stems[0]
-        const result = await window.api.detectBpm(firstStem)
+        const result = await window.api.detectBpm(pickBeatTrackingStem(stems) ?? stems[0])
         if (result) {
           // Defensive: guard against a stale/mismatched main process (e.g. a
           // dev session not yet restarted after this field was added) still

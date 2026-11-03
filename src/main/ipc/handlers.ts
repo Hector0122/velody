@@ -3,11 +3,12 @@ import { spawn, execFile } from 'child_process'
 import { join, dirname } from 'path'
 import { tmpdir } from 'os'
 import { createWriteStream } from 'fs'
-import { mkdir, writeFile, readFile, rm, readdir, stat, mkdtemp, access, rename } from 'fs/promises'
+import { writeFile, readFile, rm, readdir, stat, mkdtemp, access, rename } from 'fs/promises'
 import { constants } from 'fs'
 import crypto from 'crypto'
 import { SetupManager } from '../setup'
 import { JobManager } from '../jobs/JobManager'
+import type { StemBitrate } from '../../shared/types'
 
 interface BpmDetectionResult {
   bpm: number
@@ -65,7 +66,7 @@ export function trimOutputArgs(trimStart?: number, trimEnd?: number): string[] {
 // independent from the renderer's ClickPreset type rather than shared — the
 // two implementations (Web Audio vs. raw PCM) are unrelated code with no
 // common runtime.
-export type ClickTrackPreset = 'woodblock'
+type ClickTrackPreset = 'woodblock'
 
 // `beatPos` is a *signed* offset from the nearest beat (see the caller:
 // `t - Math.round(t / beatInterval) * beatInterval`), so it's negative for
@@ -194,6 +195,13 @@ export interface SongItem {
 
 // Extracted from the IPC handler so it's directly unit-testable without
 // mocking Electron's ipcMain — the handler below is a thin wrapper over this.
+const STEM_BITRATES: readonly StemBitrate[] = [128, 192, 320]
+
+// Renderer input — only pass through a bitrate separate.py actually accepts.
+function validBitrate(v: unknown): StemBitrate | undefined {
+  return STEM_BITRATES.includes(v as StemBitrate) ? (v as StemBitrate) : undefined
+}
+
 export async function scanSongsLibrary(root: string): Promise<SongItem[]> {
   if (!(await fileExists(root))) return []
   const entries = await readdir(root)
@@ -357,9 +365,9 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  ipcMain.handle('separation:start', (_event, songPath: string) => {
+  ipcMain.handle('separation:start', (_event, songPath: string, bitrate?: number) => {
     if (!jobManager) return { error: 'Job manager not ready' }
-    const job = jobManager.enqueue(songPath)
+    const job = jobManager.enqueue(songPath, { bitrate: validBitrate(bitrate) })
     return { jobId: job.id, songName: job.songName }
   })
 
@@ -371,14 +379,6 @@ export function registerIpcHandlers(): void {
   ipcMain.handle('separation:list', () => {
     if (!jobManager) return []
     return jobManager.getQueue()
-  })
-
-  ipcMain.handle('dialog:openDirectory', async () => {
-    const result = await dialog.showOpenDialog({
-      properties: ['openDirectory', 'createDirectory']
-    })
-    if (result.canceled || result.filePaths.length === 0) return null
-    return result.filePaths[0]
   })
 
   ipcMain.handle(
@@ -685,65 +685,6 @@ export function registerIpcHandlers(): void {
     return { success: false, error: 'File not found' }
   })
 
-  ipcMain.handle('stems:transpose', async (_event, stemPaths: string[], semitones: number) => {
-    if (!stemPaths.length) return []
-    const baseDir = join(stemPaths[0], '../../_transposed')
-    const suffix = semitones >= 0 ? `+${semitones}` : `${semitones}`
-    const absDir = join(baseDir, suffix)
-    await mkdir(absDir, { recursive: true })
-
-    const ffmpeg = setupManager?.getFfmpegPath() ?? 'ffmpeg'
-    const pitchFactor = Math.pow(2, semitones / 12)
-    const newPaths: string[] = []
-
-    for (const stemPath of stemPaths) {
-      const name = stemPath.split(/[/\\]/).pop()
-      const outPath = join(absDir, name!)
-      newPaths.push(outPath)
-
-      if (await fileExists(outPath)) continue // cache hit — skip FFmpeg
-
-      await new Promise<void>((resolve, reject) => {
-        const proc = spawn(ffmpeg, [
-          '-i',
-          stemPath,
-          '-af',
-          `asetrate=44100*${pitchFactor},atempo=${1 / pitchFactor}`,
-          '-ar',
-          '44100',
-          '-y',
-          outPath
-        ])
-        const timeout = setTimeout(() => proc.kill('SIGTERM'), 600_000)
-        proc.stderr.on('data', () => {})
-        proc.on('close', (code) => {
-          clearTimeout(timeout)
-          code === 0 ? resolve() : reject(new Error(`FFmpeg exit code ${code}`))
-        })
-        proc.on('error', (err) => {
-          clearTimeout(timeout)
-          reject(err)
-        })
-      })
-    }
-
-    return newPaths
-  })
-
-  ipcMain.handle('url:checkYtDlp', async () => {
-    const pythonPath = setupManager?.getPythonPath() ?? 'python3'
-    try {
-      await new Promise<void>((resolve, reject) => {
-        execFile(pythonPath, ['-m', 'pip', 'show', 'yt-dlp'], { timeout: 5000 }, (err) =>
-          err ? reject(err) : resolve()
-        )
-      })
-      return { available: true }
-    } catch {
-      return { available: false }
-    }
-  })
-
   ipcMain.handle('url:updateYtDlp', async () => {
     const pythonPath = setupManager?.getPythonPath() ?? 'python3'
     try {
@@ -761,7 +702,7 @@ export function registerIpcHandlers(): void {
     }
   })
 
-  ipcMain.handle('url:import', async (_event, url: string) => {
+  ipcMain.handle('url:import', async (_event, url: string, bitrate?: number) => {
     const pythonPath = setupManager?.getPythonPath() ?? 'python3'
     const scriptPath = join(getPythonWorkerDir(), 'download.py')
     const ffmpegPath = setupManager?.getFfmpegPath() ?? 'ffmpeg'
@@ -854,7 +795,11 @@ export function registerIpcHandlers(): void {
     })
 
     if (!jobManager) return { error: 'Job manager not ready' }
-    const job = jobManager.enqueue(downloadResult.path)
+    // download.py writes into its own velody_dl_* temp dir; let the job delete it when done.
+    const job = jobManager.enqueue(downloadResult.path, {
+      tempDir: dirname(downloadResult.path),
+      bitrate: validBitrate(bitrate)
+    })
     return { jobId: job.id, songName: downloadResult.title || job.songName }
   })
 }

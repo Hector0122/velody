@@ -6,7 +6,7 @@ import StemGrid from './StemGrid'
 import MasterPanel from './MasterPanel'
 import TimelinePanel from './TimelinePanel'
 import LivePresetBar from './LivePresetBar'
-import { useMetronome, RESET_SCHEDULED_BEAT } from '../hooks/useMetronome'
+import { useMetronome, RESET_SCHEDULED_BEAT, type PlaybackClock } from '../hooks/useMetronome'
 import { useRecording } from '../hooks/useRecording'
 import useSongAnalysis, { CACHE_VERSION } from '../hooks/useSongAnalysis'
 import { correctTempoOctave, type TempoOctaveDirection } from '../hooks/tempoOctaveCorrection'
@@ -21,6 +21,7 @@ import { useAudioContextEngine } from '../hooks/useAudioContextEngine'
 import {
   stemNameFromPath,
   songDirFromStemPath,
+  pickBeatTrackingStem,
   formatTime,
   BPM_MIN,
   BPM_MAX,
@@ -98,6 +99,9 @@ function StemPlayer({
   // that's clamped/not really advancing yet. See
   // fix-count-in-handoff-precision.
   const playbackPendingRef = useRef(false)
+  // Filled in below once the engine exists: lets the metronome click on the
+  // engine's own AudioContext/clock (see PlaybackClock in useMetronome).
+  const playbackClockRef = useRef<PlaybackClock | null>(null)
   const firstBeatOffsetRef = useRef(0)
   // originalBpmRef/beatTimesRef are written by useSongAnalysis and read by
   // useMetronome for grid-based scheduling — same shared-ref pattern as
@@ -137,7 +141,8 @@ function StemPlayer({
     firstBeatOffsetRef,
     originalBpmRef,
     beatTimesRef,
-    playbackPendingRef
+    playbackPendingRef,
+    playbackClockRef
   )
 
   useSongAnalysis(urls, stems, setBpm, firstBeatOffsetRef, originalBpmRef, beatTimesRef)
@@ -280,6 +285,7 @@ function StemPlayer({
     // ensureAudioCtx (destructured below as ensureMetronomeAudioCtx) — see
     // the count-in handoff in handleToggleMasterPlayWithCountIn.
     ensureAudioCtx: ensureStemAudioCtx,
+    getLivePosition,
     getDecodedBuffer,
     masterPan,
     setMasterPan
@@ -320,6 +326,9 @@ function StemPlayer({
     mediaStreamRef,
     notifyStemDecodedRef
   })
+  useLayoutEffect(() => {
+    playbackClockRef.current = { ensureCtx: ensureStemAudioCtx, getPosition: getLivePosition }
+  }, [ensureStemAudioCtx, getLivePosition])
 
   useLayoutEffect(() => {
     seekRef.current = seek
@@ -594,7 +603,10 @@ function StemPlayer({
       setCorrectingTempoOctave(true)
       ;(async (): Promise<void> => {
         try {
-          const redetected = await window.api?.detectBpm(stems[0], hintBpm)
+          const redetected = await window.api?.detectBpm(
+            pickBeatTrackingStem(stems) ?? stems[0],
+            hintBpm
+          )
           if (redetected && redetected.beatTimes.length > 0) {
             applyTempoOctaveCorrection(redetected)
             return

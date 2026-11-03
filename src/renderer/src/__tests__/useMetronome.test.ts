@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { renderHook, act } from '@testing-library/react'
-import { useMetronome } from '../hooks/useMetronome'
+import { useMetronome, type PlaybackClock } from '../hooks/useMetronome'
 
 interface TrackedOsc {
   type: string
@@ -68,6 +68,10 @@ function stubAudioContext(oscillators: TrackedOsc[]): void {
     resume(): void {
       /* no-op */
     }
+    close = vi.fn(() => {
+      this.state = 'closed'
+      return Promise.resolve()
+    })
   }
   vi.stubGlobal('AudioContext', FakeAudioContext)
 }
@@ -365,6 +369,9 @@ describe('useMetronome - metronome pan', () => {
       resume(): void {
         /* no-op */
       }
+      close(): Promise<void> {
+        return Promise.resolve()
+      }
     }
     vi.stubGlobal('AudioContext', FakeAudioContext)
   })
@@ -415,5 +422,93 @@ describe('useMetronome - metronome pan', () => {
     expect(result.current.metroPan).toBe(-1)
     expect(panNodes[0].pan.value).toBe(-1)
     expect(window.localStorage.getItem('velody:metroPan')).toBe('-1')
+  })
+})
+
+describe('useMetronome - shared playback clock', () => {
+  let oscillators: TrackedOsc[]
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    oscillators = []
+    stubAudioContext(oscillators)
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+    window.localStorage.clear()
+  })
+
+  function renderWithClock(
+    clock: PlaybackClock,
+    positionRef: { current: number },
+    beatTimesRef: { current: number[] }
+  ): ReturnType<typeof renderHook<ReturnType<typeof useMetronome>, unknown>> {
+    return renderHook(() =>
+      useMetronome(
+        true,
+        { current: true },
+        positionRef,
+        { current: 0 },
+        { current: 120 },
+        beatTimesRef,
+        { current: false },
+        { current: clock }
+      )
+    )
+  }
+
+  it("schedules on the engine's context using its live clock position, not the stale positionRef", () => {
+    const engineCtx = new AudioContext() as unknown as AudioContext & { currentTime: number }
+    ;(engineCtx as unknown as { currentTime: number }).currentTime = 10
+    // positionRef lags a frame behind (0.75) — the live clock says 0.8.
+    const positionRef = { current: 0.75 }
+    const clock: PlaybackClock = { ensureCtx: () => engineCtx, getPosition: () => 0.8 }
+
+    const { result } = renderWithClock(clock, positionRef, { current: [1.0, 1.5, 2.0] })
+    act(() => {
+      result.current.setMetronomeOn(true)
+    })
+    act(() => {
+      vi.advanceTimersByTime(25)
+    })
+
+    // Beat at 1.0 from live position 0.8 -> 0.2s after the engine's currentTime.
+    expect(oscillators).toHaveLength(1)
+    expect(oscillators[0].start).toHaveBeenCalledWith(expect.closeTo(10.2, 5))
+  })
+
+  it("never closes the engine's shared context on unmount", () => {
+    const engineCtx = new AudioContext() as unknown as { close: ReturnType<typeof vi.fn> }
+    const clock: PlaybackClock = {
+      ensureCtx: () => engineCtx as unknown as AudioContext,
+      getPosition: () => 0
+    }
+    const { result, unmount } = renderWithClock(clock, { current: 0 }, { current: [] })
+    act(() => {
+      result.current.ensureAudioCtx()
+    })
+    unmount()
+    expect(engineCtx.close).not.toHaveBeenCalled()
+  })
+})
+
+describe('useMetronome - own context lifecycle', () => {
+  beforeEach(() => {
+    stubAudioContext([])
+  })
+
+  afterEach(() => {
+    window.localStorage.clear()
+  })
+
+  it('closes its own AudioContext on unmount so contexts do not pile up per song', () => {
+    const { result, unmount } = renderMetronome({ current: 0 }, { current: [] }, { current: 120 })
+    let ctx: AudioContext | null = null
+    act(() => {
+      ctx = result.current.ensureAudioCtx()
+    })
+    unmount()
+    expect((ctx as unknown as { close: ReturnType<typeof vi.fn> }).close).toHaveBeenCalledTimes(1)
   })
 })

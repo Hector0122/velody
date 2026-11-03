@@ -1,5 +1,6 @@
 import { spawn, ChildProcess } from 'child_process'
 import { join } from 'path'
+import { rm } from 'fs/promises'
 import { BrowserWindow, app } from 'electron'
 import { randomUUID } from 'crypto'
 import type { SetupManager } from '../setup'
@@ -13,6 +14,10 @@ export interface SeparationJob {
   process?: ChildProcess | null
   stems?: string[]
   error?: string
+  /** Temp dir holding a downloaded source file; deleted once the job ends. */
+  tempDir?: string
+  /** MP3 bitrate (kbps) for the stems; separate.py's default when unset. */
+  bitrate?: number
 }
 
 function songNameFromPath(path: string): string {
@@ -47,13 +52,15 @@ export class JobManager {
     this.setupManager = setupManager
   }
 
-  enqueue(songPath: string): SeparationJob {
+  enqueue(songPath: string, opts: { tempDir?: string; bitrate?: number } = {}): SeparationJob {
     const job: SeparationJob = {
       id: randomUUID(),
       songPath,
       songName: songNameFromPath(songPath),
       status: 'queued',
-      progress: 0
+      progress: 0,
+      tempDir: opts.tempDir,
+      bitrate: opts.bitrate
     }
     this.queue.push(job)
     this.emit('separation:jobs-changed', this.getQueue())
@@ -67,6 +74,7 @@ export class JobManager {
 
     if (job.status === 'queued') {
       this.queue = this.queue.filter((j) => j.id !== jobId)
+      this.cleanupTempDir(job)
       this.emit('separation:jobs-changed', this.getQueue())
       this.emit('separation:cancelled', { jobId })
       return true
@@ -123,6 +131,7 @@ export class JobManager {
       job.error = err instanceof Error ? err.message : 'Unknown error'
       this.emit('separation:failed', { jobId: job.id, error: job.error })
     } finally {
+      this.cleanupTempDir(job)
       this.running = false
       this.emit('separation:jobs-changed', this.getQueue())
       this.tryDequeue()
@@ -139,7 +148,15 @@ export class JobManager {
 
       const proc = spawn(
         pythonPath,
-        [pythonScript, job.songPath, '--job-id', job.id, '--output-dir', outputDir],
+        [
+          pythonScript,
+          job.songPath,
+          '--job-id',
+          job.id,
+          '--output-dir',
+          outputDir,
+          ...(job.bitrate ? ['--bitrate', String(job.bitrate)] : [])
+        ],
         {
           cwd: scriptDir
         }
@@ -281,9 +298,17 @@ export class JobManager {
     job.stems = stems
   }
 
+  private cleanupTempDir(job: SeparationJob): void {
+    if (!job.tempDir) return
+    const dir = job.tempDir
+    job.tempDir = undefined
+    rm(dir, { recursive: true, force: true }).catch(() => {})
+  }
+
   private sanitizeJob(job: SeparationJob): SeparationJob {
-    const { process: _p, ...rest } = job
+    const { process: _p, tempDir: _t, ...rest } = job
     void _p
+    void _t
     return rest
   }
 

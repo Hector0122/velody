@@ -2,6 +2,7 @@ import { useState } from 'react'
 
 interface UrlImporterProps {
   onImportStarted: (url: string, jobId: string, songName: string) => void
+  bitrate?: 128 | 192 | 320
 }
 
 function normalizeUrl(text: string): string {
@@ -19,7 +20,7 @@ function isValidUrl(text: string): boolean {
   }
 }
 
-function UrlImporter({ onImportStarted }: UrlImporterProps): React.JSX.Element {
+function UrlImporter({ onImportStarted, bitrate }: UrlImporterProps): React.JSX.Element {
   const [url, setUrl] = useState('')
   const [status, setStatus] = useState<'idle' | 'downloading' | 'error'>('idle')
   const [progress, setProgress] = useState(0)
@@ -40,7 +41,7 @@ function UrlImporter({ onImportStarted }: UrlImporterProps): React.JSX.Element {
     })
 
     try {
-      const result = await window.api.importFromUrl(normalizeUrl(url))
+      const result = await window.api.importFromUrl(normalizeUrl(url), bitrate)
       onImportStarted(url, result.jobId, result.songName)
       setUrl('')
       setStatus('idle')

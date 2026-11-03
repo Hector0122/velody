@@ -54,6 +54,9 @@ export interface DownloadFailedEvent {
   error: string
 }
 
+/** MP3 bitrate (kbps) Demucs encodes stems with — chosen per song at import time. */
+export type StemBitrate = 128 | 192 | 320
+
 export interface SeparationJob {
   id: string
   songPath: string
@@ -66,7 +69,10 @@ export interface SeparationJob {
 
 export interface VelodyAPI {
   openFileDialog: () => Promise<string | null>
-  startSeparation: (songPath: string) => Promise<{ jobId: string; songName: string }>
+  startSeparation: (
+    songPath: string,
+    bitrate?: StemBitrate
+  ) => Promise<{ jobId: string; songName: string }>
   cancelSeparation: (jobId: string) => Promise<boolean>
   listSeparationJobs: () => Promise<SeparationJob[]>
 
@@ -81,17 +87,13 @@ export interface VelodyAPI {
   listSetlists: () => Promise<Setlist[]>
   saveSetlist: (setlist: Setlist) => Promise<Setlist>
   deleteSetlist: (id: string) => Promise<{ success: boolean }>
-  readAudioFile: (filePath: string) => Promise<Uint8Array>
   getAudioUrl: (filePath: string) => Promise<string>
   getSetupStatus: () => Promise<{ complete: boolean }>
   startSetup: () => Promise<{ success: boolean; error?: string }>
-  getPythonPath: () => Promise<string>
-  getFfmpegPath: () => Promise<string>
   saveFileDialog: (
     defaultName: string,
     filters?: { name: string; extensions: string[] }[]
   ) => Promise<string | null>
-  openDirectoryDialog: () => Promise<string | null>
   exportMix: (
     filePaths: string[],
     outputPath: string,
@@ -114,7 +116,6 @@ export interface VelodyAPI {
     format: string,
     offset: number
   ) => Promise<ExportResult & { path?: string }>
-  transposeStems: (stemPaths: string[], semitones: number) => Promise<string[]>
   onSetupProgress: (callback: (progress: SetupProgress) => void) => void
   saveMeta: (songDir: string, meta: Record<string, unknown>) => Promise<{ success: boolean }>
   loadMeta: (songDir: string) => Promise<Record<string, unknown> | null>
@@ -128,9 +129,11 @@ export interface VelodyAPI {
   ) => Promise<{ bpm: number; firstBeatOffset: number; beatTimes: number[] } | null>
   openExternal: (url: string) => Promise<void>
   deleteFile: (filePath: string) => Promise<{ success: boolean; error?: string }>
-  importFromUrl: (url: string) => Promise<{ jobId: string; songName: string }>
+  importFromUrl: (
+    url: string,
+    bitrate?: StemBitrate
+  ) => Promise<{ jobId: string; songName: string }>
   onDownloadProgress: (callback: (e: DownloadProgressEvent) => void) => () => void
   onDownloadFailed: (callback: (e: DownloadFailedEvent) => void) => () => void
-  checkYtDlp: () => Promise<{ available: boolean }>
   updateYtDlp: () => Promise<{ success: boolean; error?: string }>
 }

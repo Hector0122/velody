@@ -116,6 +116,10 @@ export function useAudioContextEngine(params: UseAudioContextEngineParams): {
   // currentTime *before* actually starting playback — e.g. the count-in
   // handoff, to compute a future `when` — can guarantee it exists first.
   ensureAudioCtx: () => AudioContext
+  // Playback position computed straight from this context's clock at call
+  // time (not the RAF-sampled positionRef, which can be up to a frame stale).
+  // Lets the metronome schedule clicks sample-accurately against playback.
+  getLivePosition: () => number
   getDecodedBuffer: (key: string) => AudioBuffer | undefined
   masterPan: number
   setMasterPan: (v: number) => void
@@ -379,6 +383,12 @@ export function useAudioContextEngine(params: UseAudioContextEngineParams): {
     },
     [positionRef, stopSources, startSources]
   )
+
+  const getLivePosition = useCallback((): number => {
+    const ctx = audioCtxRef.current
+    if (!ctx || !isPlayingRef.current) return positionRef.current
+    return startRef.current + Math.max(0, ctx.currentTime - startTimeRef.current)
+  }, [positionRef])
 
   const tick = useCallback((): void => {
     const ctx = audioCtxRef.current
@@ -701,6 +711,7 @@ export function useAudioContextEngine(params: UseAudioContextEngineParams): {
     seek,
     audioCtxRef,
     ensureAudioCtx: ensureCtx,
+    getLivePosition,
     getDecodedBuffer,
     masterPan,
     setMasterPan
