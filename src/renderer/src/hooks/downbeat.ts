@@ -24,6 +24,55 @@ export function isConstantAccent(beat: number, shift: number): boolean {
   return mod(beat - 1 - shift, BEATS_PER_BAR) === 0
 }
 
+/**
+ * Beat spacing of the detected grid at its start or end, used to extrapolate
+ * beats before/after it. The song's rounded BPM drifts hundreds of ms over a
+ * long intro (e.g. 124 bpm vs a real 487.6 ms grid), putting clicks off-beat.
+ */
+export function gridEdgeInterval(
+  beatTimes: number[],
+  edge: 'start' | 'end',
+  fallback: number
+): number {
+  const n = Math.min(8, beatTimes.length - 1)
+  if (n < 1) return fallback
+  const s = edge === 'start' ? beatTimes.slice(0, n + 1) : beatTimes.slice(-n - 1)
+  const gaps = s
+    .slice(1)
+    .map((t, i) => t - s[i])
+    .sort((a, b) => a - b)
+  return gaps[gaps.length >> 1]
+}
+
+/**
+ * Removes the beat tracker's frame quantization: librosa snaps beats to
+ * 23 ms frames, so a steady song comes back as 0.372/0.395/0.418 s gaps and
+ * the clicks wobble audibly. Each beat is moved onto a least-squares line
+ * through its ±4 neighbours — the jitter averages out, gradual tempo
+ * changes are kept. Beat count and indices are unchanged.
+ */
+export function smoothBeatGrid(beatTimes: number[], radius = 4): number[] {
+  const n = beatTimes.length
+  if (n < 3) return beatTimes
+  return beatTimes.map((_, i) => {
+    const lo = Math.max(0, i - radius)
+    const hi = Math.min(n - 1, i + radius)
+    let sx = 0
+    let sy = 0
+    let sxx = 0
+    let sxy = 0
+    const m = hi - lo + 1
+    for (let j = lo; j <= hi; j++) {
+      sx += j
+      sy += beatTimes[j]
+      sxx += j * j
+      sxy += j * beatTimes[j]
+    }
+    const slope = (m * sxy - sx * sy) / (m * sxx - sx * sx)
+    return (sy - slope * sx) / m + slope * i
+  })
+}
+
 // How late, on average, someone presses "this is the 1" after hearing it.
 // Subtracted so a slightly late tap still snaps to the intended beat, even
 // at fast tempos where beats are only ~300ms apart.
@@ -47,9 +96,9 @@ export function downbeatShiftAt(
     const last = beatTimes[lastIdx]
     let idx: number
     if (t <= first) {
-      idx = Math.round((t - first) / interval)
+      idx = Math.round((t - first) / gridEdgeInterval(beatTimes, 'start', interval))
     } else if (t >= last) {
-      idx = lastIdx + Math.round((t - last) / interval)
+      idx = lastIdx + Math.round((t - last) / gridEdgeInterval(beatTimes, 'end', interval))
     } else {
       let lo = 0
       let hi = lastIdx
@@ -76,10 +125,9 @@ export interface CountInClick {
 /**
  * Count-in clicks laid on the song's own beat grid, ending right before the
  * first beat at/after `position`, so the count flows straight into the song's
- * beats (and the in-song metronome) with no gap or phase jump. The count
- * always starts on a "1": `bars` full bars plus whatever beats of the entry
- * bar come before the entry beat (a song entering on beat 3 is counted
- * "1 2 3 4 | 1 2" → song).
+ * beats (and the in-song metronome) with no gap or phase jump. Always exactly
+ * `bars × 4` clicks, the first of every 4 accented ("1 2 3 4") — it counts
+ * the player in, it doesn't depend on (possibly wrong) bar detection.
  */
 export function planCountIn(opts: {
   position: number
@@ -88,27 +136,26 @@ export function planCountIn(opts: {
   usingGrid: boolean
   bpm: number
   firstBeatOffset: number
-  downbeatShift: number
 }): CountInClick[] {
-  const { position, bars, beatTimes, bpm, downbeatShift } = opts
+  const { position, bars, beatTimes, bpm } = opts
   if (bars <= 0 || !(bpm > 0)) return []
   const interval = 60 / bpm
 
   let beatAt: (i: number) => number
-  let isAccent: (i: number) => boolean
   let entry: number
 
   if (opts.usingGrid && beatTimes.length > 0) {
     const first = beatTimes[0]
     const lastIdx = beatTimes.length - 1
     const last = beatTimes[lastIdx]
+    const before = gridEdgeInterval(beatTimes, 'start', interval)
+    const after = gridEdgeInterval(beatTimes, 'end', interval)
     beatAt = (i) =>
-      i < 0 ? first + i * interval : i > lastIdx ? last + (i - lastIdx) * interval : beatTimes[i]
-    isAccent = (i) => isGridAccent(i, downbeatShift)
+      i < 0 ? first + i * before : i > lastIdx ? last + (i - lastIdx) * after : beatTimes[i]
     if (position <= first) {
-      entry = Math.ceil((position - first) / interval - 1e-9)
+      entry = Math.ceil((position - first) / before - 1e-9)
     } else if (position > last) {
-      entry = lastIdx + Math.ceil((position - last) / interval - 1e-9)
+      entry = lastIdx + Math.ceil((position - last) / after - 1e-9)
     } else {
       let lo = 0
       let hi = lastIdx
@@ -120,22 +167,14 @@ export function planCountIn(opts: {
       entry = lo
     }
   } else {
-    // Constant tempo: beat n sits at firstBeatOffset + n·interval (the
-    // scheduler's own numbering — see useMetronome's scheduleConstantTempo).
     beatAt = (n) => opts.firstBeatOffset + n * interval
-    isAccent = (n) => isConstantAccent(n, downbeatShift)
     entry = Math.ceil((position - opts.firstBeatOffset) / interval - 1e-9)
   }
 
-  // Beats of the entry bar that precede the entry beat.
-  let lead = 0
-  while (lead < BEATS_PER_BAR - 1 && !isAccent(entry - lead)) lead++
-  const total = bars * BEATS_PER_BAR + lead
-
+  const total = bars * BEATS_PER_BAR
   const clicks: CountInClick[] = []
-  for (let k = total; k >= 1; k--) {
-    const i = entry - k
-    clicks.push({ songTime: beatAt(i), accent: isAccent(i) })
+  for (let j = 0; j < total; j++) {
+    clicks.push({ songTime: beatAt(entry - total + j), accent: j % BEATS_PER_BAR === 0 })
   }
   return clicks
 }

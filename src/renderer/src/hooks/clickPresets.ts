@@ -99,7 +99,7 @@ function woodblock(
     start,
     end,
     0.03,
-    0.03,
+    0.07, // longer tail = more body at the same peak, so it isn't buried by the mix
     scheduledTime,
     volume * (accent ? 0.7 : 0.55),
     destination

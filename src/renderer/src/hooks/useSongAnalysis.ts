@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { songDirFromStemPath, pickBeatTrackingStem } from '../utils'
 import { ANALYSIS_CACHE_VERSION } from '../../../shared/analysis'
+import { smoothBeatGrid } from './downbeat'
 
 // Version lives in src/shared/analysis.ts (main's background analysis writes
 // the same cache).
@@ -49,7 +50,9 @@ export default function useSongAnalysis(
       ) {
         originalBpmRef.current = cached.bpm
         firstBeatOffsetRef.current = cached.firstBeatOffset
-        beatTimesRef.current = Array.isArray(cached.beatTimes) ? cached.beatTimes : []
+        beatTimesRef.current = Array.isArray(cached.beatTimes)
+          ? smoothBeatGrid(cached.beatTimes)
+          : []
         setBpm(cached.bpm)
         if (typeof cached.detectedDownbeatShift === 'number') {
           onDetectedDownbeat?.(cached.detectedDownbeatShift)
@@ -67,7 +70,7 @@ export default function useSongAnalysis(
           const beatTimes = Array.isArray(result.beatTimes) ? result.beatTimes : []
           originalBpmRef.current = result.bpm
           firstBeatOffsetRef.current = result.firstBeatOffset
-          beatTimesRef.current = beatTimes
+          beatTimesRef.current = smoothBeatGrid(beatTimes)
           setBpm(result.bpm)
           if (typeof result.downbeatShift === 'number') onDetectedDownbeat?.(result.downbeatShift)
           window.api.saveMeta(songDir, {

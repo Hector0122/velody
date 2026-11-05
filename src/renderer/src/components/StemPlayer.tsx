@@ -15,7 +15,7 @@ import useTrim from '../hooks/useTrim'
 import useSongCountIn from '../hooks/useSongCountIn'
 import useDownbeatShift from '../hooks/useDownbeatShift'
 import useSongSpeedPitch from '../hooks/useSongSpeedPitch'
-import { downbeatShiftAt, planCountIn } from '../hooks/downbeat'
+import { downbeatShiftAt, planCountIn, smoothBeatGrid } from '../hooks/downbeat'
 import useLivePresets from '../hooks/useLivePresets'
 import useCountIn, { COUNT_IN_LEAD_IN } from '../hooks/useCountIn'
 import { useExportState } from '../hooks/useExportState'
@@ -427,11 +427,9 @@ function StemPlayer({
       return
     }
     if (!masterPlaying && playbackCountInBars > 0) {
-      // Lay the count-in on the song's own beat grid (planCountIn): it ends
-      // exactly one beat before the song's next beat and always starts on a
-      // "1", so it flows into the song (and the in-song metronome) without a
-      // gap or phase jump — previously it was N bars at the BPM from "now",
-      // unrelated to where the song's beats actually fall.
+      // Lay the count-in on the song's own beat grid (planCountIn): exactly
+      // N×4 clicks ending one beat before the song's next beat, so it flows
+      // into the song (and the in-song metronome) without a gap or phase jump.
       const beatTimes = Array.isArray(beatTimesRef.current) ? beatTimesRef.current : []
       const position = positionRef.current
       const clicks = planCountIn({
@@ -440,8 +438,7 @@ function StemPlayer({
         beatTimes,
         usingGrid: beatTimes.length > 0 && bpm === originalBpmRef.current,
         bpm,
-        firstBeatOffset: firstBeatOffsetRef.current,
-        downbeatShift: downbeatShiftRef.current
+        firstBeatOffset: firstBeatOffsetRef.current
       })
       if (clicks.length === 0) {
         toggleMasterPlay()
@@ -477,8 +474,7 @@ function StemPlayer({
     beatTimesRef,
     positionRef,
     originalBpmRef,
-    firstBeatOffsetRef,
-    downbeatShiftRef
+    firstBeatOffsetRef
   ])
 
   const onAudioTime = useCallback(
@@ -628,7 +624,7 @@ function StemPlayer({
       beatTimes: number[]
       downbeatShift?: number
     }): void => {
-      beatTimesRef.current = correction.beatTimes
+      beatTimesRef.current = smoothBeatGrid(correction.beatTimes)
       firstBeatOffsetRef.current = correction.firstBeatOffset
       originalBpmRef.current = correction.bpm
       lastScheduledBeatRef.current = RESET_SCHEDULED_BEAT

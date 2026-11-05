@@ -400,7 +400,7 @@ function MasterPanel({
               type="range"
               aria-label="Metronome volume"
               min="0"
-              max="1"
+              max="2"
               step="0.01"
               value={metroVolume}
               onChange={(e) => onMetroVolumeChange(parseFloat(e.target.value))}

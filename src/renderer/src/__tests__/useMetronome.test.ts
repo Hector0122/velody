@@ -50,6 +50,17 @@ function stubAudioContext(oscillators: TrackedOsc[]): void {
         gain: { setValueAtTime: vi.fn(), exponentialRampToValueAtTime: vi.fn() }
       }
     }
+    createDynamicsCompressor(): unknown {
+      const param = (): { value: number } => ({ value: 0 })
+      return {
+        threshold: param(),
+        knee: param(),
+        ratio: param(),
+        attack: param(),
+        release: param(),
+        connect: vi.fn()
+      }
+    }
     createStereoPanner(): unknown {
       return { connect: vi.fn(), pan: { value: 0 } }
     }
@@ -347,6 +358,17 @@ describe('useMetronome - metronome pan', () => {
         return {
           connect: vi.fn(),
           gain: { setValueAtTime: vi.fn(), exponentialRampToValueAtTime: vi.fn() }
+        }
+      }
+      createDynamicsCompressor(): unknown {
+        const param = (): { value: number } => ({ value: 0 })
+        return {
+          threshold: param(),
+          knee: param(),
+          ratio: param(),
+          attack: param(),
+          release: param(),
+          connect: vi.fn()
         }
       }
       createStereoPanner(): unknown {

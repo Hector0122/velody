@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useCallback, useLayoutEffect } from 'react'
 import useLocalStoragePreference from './useLocalStoragePreference'
 import { CLICK_PRESETS } from './clickPresets'
-import { isConstantAccent, isGridAccent } from './downbeat'
+import { gridEdgeInterval, isConstantAccent, isGridAccent } from './downbeat'
 
 const LOOKAHEAD = 0.3
 
@@ -172,7 +172,16 @@ export function useMetronome(
       // engine's master gain/pan so it keeps its own volume/pan controls.
       panNodeRef.current = ctx.createStereoPanner()
       panNodeRef.current.pan.value = metroPanRef.current
-      panNodeRef.current.connect(ctx.destination)
+      // Limiter: lets the volume slider go past 100% for a click that cuts
+      // through a loud mix, without the click clipping into distortion.
+      const limiter = ctx.createDynamicsCompressor()
+      limiter.threshold.value = -3
+      limiter.knee.value = 0
+      limiter.ratio.value = 20
+      limiter.attack.value = 0.001
+      limiter.release.value = 0.05
+      panNodeRef.current.connect(limiter)
+      limiter.connect(ctx.destination)
     }
     if (ctx.state === 'suspended') ctx.resume()
     return ctx
@@ -247,7 +256,7 @@ export function useMetronome(
   // seamless — no separate branch, no double-scheduling at the boundary.
   const scheduleFromGrid = useCallback(
     (ctx: AudioContext, t: number, beatTimes: number[], bpmValue: number): void => {
-      const interval = 60 / bpmValue
+      const interval = gridEdgeInterval(beatTimes, 'start', 60 / bpmValue)
       const beatTimeAt = (i: number): number => (i < 0 ? beatTimes[0] + i * interval : beatTimes[i])
 
       let idx =
@@ -275,13 +284,11 @@ export function useMetronome(
         const lastIdx = beatTimes.length - 1
         const lastTime = beatTimes[lastIdx]
         const tAdj = t - lastTime
-        let n = Math.max(
-          Math.floor((tAdj * bpmValue) / 60) + 1,
-          lastScheduledBeatRef.current - lastIdx + 1
-        )
+        const after = gridEdgeInterval(beatTimes, 'end', 60 / bpmValue)
+        let n = Math.max(Math.floor(tAdj / after) + 1, lastScheduledBeatRef.current - lastIdx + 1)
 
-        while ((n * 60) / bpmValue - tAdj < LOOKAHEAD) {
-          const delaySong = (n * 60) / bpmValue - tAdj
+        while (n * after - tAdj < LOOKAHEAD) {
+          const delaySong = n * after - tAdj
           playClick(
             isGridAccent(lastIdx + n, downbeatShiftRef?.current ?? 0),
             ctx.currentTime + Math.max(0, delaySong) / currentRate()
