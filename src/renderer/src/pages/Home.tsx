@@ -248,8 +248,11 @@ function Home(): React.JSX.Element {
   // Load recent songs and active jobs on mount
   useEffect(() => {
     if (!window.api) return
-    window.api.listSongs().then(setRecentSongs)
-    window.api.getCloudStatus?.().then(setCloudStatus)
+    // Status is computed while the library is listed, so ask for it after.
+    window.api.listSongs().then((songs) => {
+      setRecentSongs(songs)
+      window.api.getCloudStatus?.().then(setCloudStatus)
+    })
     window.api.listSeparationJobs().then(setJobQueue)
     window.api.listSetlists().then(setSetlists)
   }, [])
