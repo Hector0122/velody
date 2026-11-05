@@ -68,6 +68,20 @@ describe('scanSongsLibrary', () => {
     expect(result.map((s) => s.name)).toEqual(['song-a'])
   })
 
+  it('skips hidden entries such as in-progress cloud downloads', async () => {
+    readdirMock.mockImplementation(async (path: string) => {
+      if (path === ROOT) return ['song-a', '.velody_dl_123']
+      if (path === dir('song-a')) return ['vocals.mp3']
+      if (path === dir('.velody_dl_123')) return ['vocals.mp3']
+      return []
+    })
+    statMock.mockResolvedValue({ isDirectory: () => true })
+
+    const result = await scanSongsLibrary(ROOT)
+
+    expect(result.map((s) => s.name)).toEqual(['song-a'])
+  })
+
   it('excludes non-directory entries', async () => {
     readdirMock.mockImplementation(async (path: string) => {
       if (path === ROOT) return ['song-a', 'stray-file.txt']

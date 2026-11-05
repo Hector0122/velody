@@ -36,3 +36,6 @@ venv/
 
 
 /canciones
+# Cloudflare Worker local state / secrets
+cloud-worker/.wrangler/
+cloud-worker/.dev.vars

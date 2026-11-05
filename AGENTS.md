@@ -94,8 +94,12 @@ velody/
 │   │   ├── audio-server.ts       ← HTTP streaming server
 │   │   ├── jobs/
 │   │   │   └── JobManager.ts     ← Separation job queue
+│   │   ├── songMeta.ts           ← .velody read/write (updateMeta)
+│   │   ├── cloud/                ← Optional cloud sync (settings, client, sync engine, IPC)
 │   │   └── setup/
 │   │       └── index.ts          ← Auto-setup manager
+│   ├── shared/
+│   │   └── cloud.ts              ← Cloud Worker API contract
 │   ├── preload/
 │   │   ├── index.ts              ← contextBridge APIs
 │   │   └── index.d.ts            ← Window.api types
@@ -133,6 +137,8 @@ velody/
 │   ├── download.py              ← YouTube import (yt-dlp)
 │   ├── requirements.txt
 │   └── utils/
+│
+├── cloud-worker/                ← Cloudflare Worker (R2 + D1) for cloud sync, own package
 │
 ├── scripts/
 │   ├── batch-import.mjs         ← Bulk download + separate
@@ -216,7 +222,8 @@ Allow exporting:
 
 - `.velody` (JSON junto a los stems), versión en `src/shared/analysis.ts` (`ANALYSIS_CACHE_VERSION`, hoy 20)
 - Solo se guardan detecciones **exitosas**; si falla, la próxima vez reintenta
-- Todas las escrituras pasan por `updateMeta()`: serializadas por canción y atómicas (temp + rename)
+- Todas las escrituras pasan por `updateMeta()` (`src/main/songMeta.ts`): serializadas por canción y atómicas (temp + rename); cada escritura pone `updatedAt` (la sincronización con la nube usa "gana el más reciente")
+- Claves solo de este equipo, nunca se suben: `cloudId` (id estable de la canción en la nube) y `fileHashes` (caché de SHA-256 por archivo)
 
 > Las funciones de **tonalidad (Key Detection)** y **Jam Zone / diapasón** se retiraron de la app; ya no existen en el código.
 
@@ -424,17 +431,17 @@ Control de mezcla por stem para ajustar la escucha:
 
 ---
 
-# Optional Future Cloud Features
+# Cloud Sync (opcional)
 
-Cloud should NOT process stems initially.
+Implementado en `openspec/changes/cloud-library-sync`. La nube **no procesa** stems: es una copia sincronizada de la biblioteca, apagada por defecto.
 
-Cloud may later handle:
+- Backend: `cloud-worker/` — Cloudflare Worker + R2 (bucket `velody`) + D1 (índice). Un solo usuario, un token personal. Setup en `cloud-worker/README.md`.
+- Las llaves de R2 solo existen como secretos del Worker; la app recibe URLs firmadas de 1 h. El token se guarda cifrado (`safeStorage`) en `<userData>/cloud.json`. Nada de esto va en el repo ni en el `.deb`.
+- Cada canción: **local**, **solo nube** (0 MB locales, se descarga al abrirla) o **sincronizada**. Acciones: subir, subir todo, descargar, quitar de esta laptop, borrar en todos lados (con confirmación).
+- Sin conexión o con la nube apagada, la app funciona igual que antes.
+- La app móvil (`MOBILE_APP.md`) consumirá la misma API.
 
-- User accounts
-- Sync projects
-- Backup stems
-- Share sessions
-- Collaboration
+Fuera de alcance por ahora: cuentas multiusuario, compartir, colaboración, streaming.
 
 ---
 
@@ -550,10 +557,10 @@ These services exist and can be used when the app needs cloud features:
 | Service                | Account                         | Potential Use                            | Phase    |
 | ---------------------- | ------------------------------- | ---------------------------------------- | -------- |
 | **Supabase**           | Existing user/DBs               | Auth, user DB, project storage           | Phase 3+ |
-| **Cloudflare R2**      | Existing, more buckets possible | Backup/sync stems, share sessions        | Phase 3+ |
+| **Cloudflare R2 + D1 + Workers** | Existing                | Cloud library sync (`cloud-worker/`)     | **In use** |
 | **Firebase (Workers)** | Existing project                | Push notifications, messaging            | Phase 3+ |
 | **Mailgun**            | Experienced user                | Transactional emails (welcome, recovery) | Phase 3+ |
-| **Railway**            | Used for other projects         | Backend API deployment if needed         | Phase 3+ |
+| **Railway**            | Used for other projects         | Not needed (cloud sync runs on Cloudflare) | —      |
 | **GitHub**             | Active account                  | Repository hosting, CI/CD                | Now      |
 
 ---

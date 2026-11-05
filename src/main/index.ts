@@ -11,6 +11,7 @@ import { SetupManager } from './setup'
 import { JobManager } from './jobs/JobManager'
 import { startAudioServer, stopAudioServer, audioUrl } from './audio-server'
 import { initAutoUpdater } from './updater'
+import { setupCloud } from './cloud/ipc'
 
 let mainWindow: BrowserWindow | null = null
 let setupManager: SetupManager | null = null
@@ -89,6 +90,7 @@ app.whenReady().then(async () => {
   })
 
   registerIpcHandlers()
+  setupCloud(() => mainWindow)
   initAutoUpdater()
   createWindow()
 

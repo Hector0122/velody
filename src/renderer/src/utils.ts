@@ -166,3 +166,34 @@ export function findMusicStart(
   if (!Number.isFinite(earliest)) return 0
   return Math.max(0, earliest - AUDIO_START_PREROLL_SECS)
 }
+
+export type SongCloudAction = 'upload' | 'download' | 'delete'
+
+/**
+ * Row actions for a library song by cloud sync state (cloud-library-sync).
+ * `sync` is undefined while cloud sync is off: the plain local delete.
+ * "delete" on a synced/cloud song opens the remove-vs-delete-everywhere dialog.
+ */
+export function songCloudActions(song: { sync?: 'local' | 'cloud' | 'synced' }): SongCloudAction[] {
+  switch (song.sync) {
+    case 'local':
+      return ['upload', 'delete']
+    case 'cloud':
+      return ['download', 'delete']
+    case 'synced':
+    default:
+      return ['delete']
+  }
+}
+
+export function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  const units = ['KB', 'MB', 'GB', 'TB']
+  let v = bytes / 1024
+  let i = 0
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024
+    i++
+  }
+  return `${v >= 10 ? v.toFixed(0) : v.toFixed(1)} ${units[i]}`
+}

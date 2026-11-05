@@ -1,0 +1,23 @@
+# Velody personal cloud backend. Setup: see README.md.
+name = "velody-cloud"
+main = "src/index.ts"
+compatibility_date = "2025-10-01"
+
+[vars]
+R2_BUCKET_NAME = "velody"
+
+[[r2_buckets]]
+binding = "BUCKET"
+bucket_name = "velody"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "velody"
+database_id = "ab005b29-55ee-4a31-9a44-6732f6cffe1c"
+migrations_dir = "migrations"
+
+# Secrets (wrangler secret put <NAME>, or .dev.vars for `wrangler dev`):
+#   API_TOKEN             personal bearer token the desktop/mobile apps send
+#   R2_ACCOUNT_ID         Cloudflare account id (for the S3 endpoint)
+#   R2_ACCESS_KEY_ID      R2 API token (S3 credentials), Object Read & Write on this bucket
+#   R2_SECRET_ACCESS_KEY

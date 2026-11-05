@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { StemBitrate, UpdateStatus } from '../shared/types'
+import type { CloudProgressEvent, CloudSettingsInput } from '../shared/cloud'
 
 export interface SeparationProgressEvent {
   jobId: string
@@ -179,7 +180,26 @@ const api = {
       ipcRenderer.removeListener('update:status', handler)
     }
   },
-  installUpdate: () => ipcRenderer.invoke('update:install') as Promise<void>
+  installUpdate: () => ipcRenderer.invoke('update:install') as Promise<void>,
+
+  getCloudSettings: () => ipcRenderer.invoke('cloud:getSettings'),
+  saveCloudSettings: (input: CloudSettingsInput) => ipcRenderer.invoke('cloud:saveSettings', input),
+  testCloud: (input?: { url?: string; token?: string }) => ipcRenderer.invoke('cloud:test', input),
+  getCloudStatus: () => ipcRenderer.invoke('cloud:status'),
+  cloudUpload: (songName: string) => ipcRenderer.invoke('cloud:upload', songName),
+  cloudUploadAll: () => ipcRenderer.invoke('cloud:uploadAll'),
+  cloudDownload: (songName: string) => ipcRenderer.invoke('cloud:download', songName),
+  cloudRemoveLocal: (songName: string) => ipcRenderer.invoke('cloud:removeLocal', songName),
+  cloudDeleteEverywhere: (songName: string) =>
+    ipcRenderer.invoke('cloud:deleteEverywhere', songName),
+  cloudSyncMetaOnOpen: (songName: string) => ipcRenderer.invoke('cloud:syncMetaOnOpen', songName),
+  onCloudProgress: (callback: (e: CloudProgressEvent) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, e: CloudProgressEvent): void => callback(e)
+    ipcRenderer.on('cloud:progress', handler)
+    return (): void => {
+      ipcRenderer.removeListener('cloud:progress', handler)
+    }
+  }
 }
 
 if (process.contextIsolated) {

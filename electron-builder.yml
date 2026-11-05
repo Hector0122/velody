@@ -19,6 +19,9 @@ files:
   - '!.claude/**'
   - '!.pytest_cache/**'
   - '!openspec/**'
+  # Cloudflare Worker for cloud sync: deployed separately, never shipped
+  # (its node_modules alone — wrangler/workerd — is 100MB+).
+  - '!cloud-worker/**'
   - '!docs/**'
   - '!vitest.config.ts'
   - '!{AGENTS.md,CLAUDE.md,MOBILE_APP.md,OPTIMIZATION_PLAN.md}'

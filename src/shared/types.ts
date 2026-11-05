@@ -1,3 +1,12 @@
+import type {
+  CloudActionResult,
+  CloudProgressEvent,
+  CloudSettingsInput,
+  CloudSettingsView,
+  CloudTestResult,
+  SongSyncState
+} from './cloud'
+
 export interface SetupProgress {
   step: string
   progress: number
@@ -7,7 +16,13 @@ export interface SetupProgress {
 
 export interface SongItem {
   name: string
+  /** Absolute stem paths; empty for a song that is only in the cloud. */
   stems: string[]
+  /** Set only while cloud sync is enabled (see cloud-library-sync). */
+  sync?: SongSyncState
+  cloudId?: string
+  /** Total size of the song's files in the cloud (cloud-only songs). */
+  sizeBytes?: number
 }
 
 // Named, ordered references to library songs by name — never a copy of
@@ -155,4 +170,19 @@ export interface VelodyAPI {
   getUpdateStatus: () => Promise<UpdateStatus>
   onUpdateStatus: (callback: (s: UpdateStatus) => void) => () => void
   installUpdate: () => Promise<void>
+
+  // Cloud library sync (openspec/changes/cloud-library-sync)
+  getCloudSettings: () => Promise<CloudSettingsView>
+  saveCloudSettings: (
+    input: CloudSettingsInput
+  ) => Promise<{ success: boolean; error?: string; settings?: CloudSettingsView }>
+  testCloud: (input?: { url?: string; token?: string }) => Promise<CloudTestResult>
+  getCloudStatus: () => Promise<{ enabled: boolean; offline: boolean; error?: string }>
+  cloudUpload: (songName: string) => Promise<CloudActionResult>
+  cloudUploadAll: () => Promise<CloudActionResult & { uploaded: number; failed: string[] }>
+  cloudDownload: (songName: string) => Promise<CloudActionResult & { songName?: string }>
+  cloudRemoveLocal: (songName: string) => Promise<CloudActionResult>
+  cloudDeleteEverywhere: (songName: string) => Promise<CloudActionResult>
+  cloudSyncMetaOnOpen: (songName: string) => Promise<'pushed' | 'pulled' | 'same' | 'skipped'>
+  onCloudProgress: (callback: (e: CloudProgressEvent) => void) => () => void
 }

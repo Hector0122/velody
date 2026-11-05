@@ -44,7 +44,11 @@ src/main/audio-server.ts   Local HTTP server (127.0.0.1, random port) that strea
 src/main/setup/index.ts    First-run SetupManager: detects Python3, creates a venv at ~/.local/share/velody/venv, pip-installs Demucs/PyTorch, fetches portable FFmpeg
 src/preload/index.ts       contextBridge surface; src/preload/index.d.ts + src/shared/types.ts define the VelodyAPI contract shared by main and renderer
 src/renderer/src/          React UI (see below)
+src/main/songMeta.ts       .velody read/write (updateMeta, re-exported from handlers.ts)
+src/main/cloud/            Optional cloud library sync: settings (safeStorage token), Worker API client, sync engine, cloud:* IPC
+src/shared/cloud.ts        Cloud Worker API contract, shared by main, renderer and cloud-worker/
 python-worker/             Isolated Python scripts invoked as subprocesses — never imported, always spawned and communicated with via stdout JSON lines
+cloud-worker/              Separate package: Cloudflare Worker (R2 + D1) backing cloud sync; own pnpm install/test/deploy, see its README
 ```
 
 ### IPC / subprocess protocol
@@ -57,7 +61,16 @@ Stems are MP3 at a per-song bitrate (128/192/320 kbps) picked in the import scre
 
 BPM detection goes through `detectionQueue` (`src/main/taskQueue.ts`, a `SerialTaskQueue`): only one Python process runs at a time — multiple simultaneous TensorFlow (TempoCNN) processes OOM on low-RAM Windows machines, don't remove that. Requests are deduplicated per `stem|bpmHint` (the old singleflight handed an in-flight result to *any* caller, even for another song), and UI requests (`high`) jump ahead of background work (`low`). `requestLibraryAnalysis()` (10 s after launch and after every separation) walks the library and analyzes songs lacking a current cache (`hasCurrentAnalysis`, version in `src/shared/analysis.ts`), pausing while `jobManager.isBusy()`.
 
-All `.velody` writes go through `updateMeta()` (handlers.ts): serialized per song and written via temp-file + rename, so concurrent writers (UI hooks, background analysis) can't drop each other's keys or expose a half-written file.
+All `.velody` writes go through `updateMeta()` (`src/main/songMeta.ts`, re-exported from handlers.ts): serialized per song and written via temp-file + rename, so concurrent writers (UI hooks, background analysis, cloud sync) can't drop each other's keys or expose a half-written file. Every write stamps `updatedAt` (cloud sync is last-write-wins on it); device-only bookkeeping (`cloudId`, `fileHashes`) passes `{ touch: false }`.
+
+### Cloud library sync (optional, off by default)
+
+The cloud is a **synced copy, never the playback source** — songs are downloaded whole before they open, and with cloud off or unreachable the app behaves exactly as before. Backend: `cloud-worker/` (Cloudflare Worker + R2 bucket `velody` + D1 index), single user, one bearer token. The desktop never holds R2 credentials: the Worker issues 1 h presigned R2 URLs; the token is stored encrypted with Electron `safeStorage` in `<userData>/cloud.json` and never sent to the renderer.
+
+- `CloudSync` (`src/main/cloud/sync.ts`) decorates `songs:list` (via `setLibraryLister`) with `sync: 'local' | 'cloud' | 'synced'`; local↔cloud match is by `cloudId` in `.velody`, or by name for a local song without one (reinstall / lost `.velody` — the id is then saved, so nothing is uploaded twice); a cloud-only song whose name is taken by a different local song is hidden. Cloud-only songs have `stems: []`.
+- Downloads go to `<root>/.velody_dl_<id>/` (dot-prefixed — `scanSongsLibrary` skips dot entries), are size+SHA-256 verified, then renamed into place; stale ones are removed at startup.
+- "Remove from this laptop" re-uploads anything changed first (so nothing exists only locally), then deletes the folder; "Delete everywhere" deletes in the cloud first and only then locally + prunes setlists.
+- Metadata: last-write-wins on `updatedAt`, synced after upload and right before a synced song opens (`cloud:syncMetaOnOpen`, 2 s fail-fast).
 
 Empty stems: `separate.py` drops stems with no real part (`python-worker/stem_activity.py`: audible < 2 s, or < 8 s with p95 < -50 dB — never all of them) and emits `{"type": "skipped"}`; `prune_empty_stems.py <root> [--apply]` applies the same rule to an existing library. Songs can therefore have fewer than 6 stems.
 
@@ -94,5 +107,6 @@ Metadata (BPM, beat grid, markers, trim, count-in, live presets) is cached per s
 - Releases: `pnpm version patch|minor` + `git push --follow-tags` → `.github/workflows/release.yml` builds AppImage + .deb, runs `scripts/verify-asar.mjs` (fails if electron-builder's pnpm collector dropped a runtime dependency from app.asar — v1.1.0 shipped without `ms` and couldn't launch; `ms` is now a direct dependency for that reason), then publishes the GitHub Release that `src/main/updater.ts` reads.
 - Tests run under Node 25+ with `--no-experimental-webstorage` (set in `vitest.config.ts`) so jsdom's `localStorage` isn't shadowed by Node's.
 - `AGENTS.md` at the repo root is the canonical, detailed product/architecture doc (feature specs, full IPC surface, roadmap, performance-optimization changelog). Consult it for anything not covered above, especially before changing BPM detection, the audio engine, or the recording flow.
-- `MOBILE_APP.md` describes a *separate*, not-yet-built React Native companion app (cloud sync via Railway/Postgres/R2) — it is a design doc, not code in this repo.
-- This is a local-first tool by design: no cloud processing, no accounts, no telemetry. Don't introduce network dependencies for core separation/playback/export flows.
+- `MOBILE_APP.md` describes a *separate*, not-yet-built React Native companion app that will consume the same `cloud-worker` API — it is a design doc, not code in this repo.
+- This is a local-first tool by design: no cloud processing, no accounts, no telemetry. Don't introduce network dependencies for core separation/playback/export flows. Cloud sync is an optional add-on that must keep it that way (everything works with it off or offline).
+- `cloud-worker/` is not part of `pnpm test`/`typecheck` at the root: `cd cloud-worker && pnpm install && pnpm test` (plain Node vitest; D1 is faked with `node:sqlite` running the real migration SQL). Deploy with `pnpm run deploy` (bare `pnpm deploy` is a different pnpm command).

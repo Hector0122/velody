@@ -4,12 +4,24 @@ import UrlImporter from '../components/UrlImporter'
 import StemPlayer from '../components/StemPlayer'
 import SetlistPanel from '../components/SetlistPanel'
 import UpdateBanner from '../components/UpdateBanner'
+import CloudSettingsModal from '../components/CloudSettingsModal'
+import DeleteSongDialog, { type DeleteChoice } from '../components/DeleteSongDialog'
 import useLocalStoragePreference from '../hooks/useLocalStoragePreference'
-import { filterSongsByQuery, reorderSetlistSongs, resolveNextSetlistSong } from '../utils'
+import {
+  filterSongsByQuery,
+  formatBytes,
+  reorderSetlistSongs,
+  resolveNextSetlistSong,
+  songCloudActions
+} from '../utils'
+import type { CloudProgressEvent } from '../../../shared/cloud'
 
 interface RecentSong {
   name: string
   stems: string[]
+  sync?: 'local' | 'cloud' | 'synced'
+  cloudId?: string
+  sizeBytes?: number
 }
 
 interface Toast {
@@ -37,6 +49,10 @@ const STEM_BITRATE_OPTIONS: { value: StemBitrate; hint: string }[] = [
 
 const isStemBitrate = (v: unknown): v is StemBitrate => v === 128 || v === 192 || v === 320
 const isBoolean = (v: unknown): v is boolean => typeof v === 'boolean'
+const SIDEBAR_MIN = 208
+const SIDEBAR_MAX = 520
+const isSidebarWidth = (v: unknown): v is number =>
+  typeof v === 'number' && v >= SIDEBAR_MIN && v <= SIDEBAR_MAX
 
 function Home(): React.JSX.Element {
   const [currentSong, setCurrentSong] = useState<{
@@ -64,6 +80,27 @@ function Home(): React.JSX.Element {
     false,
     isBoolean
   )
+  // Sidebar width, dragged from its right edge; long song names need room.
+  const [sidebarWidth, setSidebarWidth] = useLocalStoragePreference<number>(
+    'velody:sidebarWidth',
+    SIDEBAR_MIN,
+    isSidebarWidth
+  )
+  const startSidebarResize = (e: React.MouseEvent): void => {
+    e.preventDefault()
+    const startX = e.clientX
+    const startWidth = sidebarWidth
+    const onMove = (ev: MouseEvent): void =>
+      setSidebarWidth(
+        Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, startWidth + ev.clientX - startX))
+      )
+    const onUp = (): void => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }
   const [setlists, setSetlists] = useState<Setlist[]>([])
   const [activeSetlistId, setActiveSetlistId] = useState<string | null>(null)
   // Setlist actions in the library only apply while live mode is on.
@@ -77,6 +114,24 @@ function Home(): React.JSX.Element {
   } | null>(null)
   const newSongMenuRef = useRef<HTMLDivElement>(null)
   const jobQueueRef = useRef<SeparationJob[]>([])
+  // Cloud sync (cloud-library-sync): per-song transfer progress, offline
+  // state, the song being downloaded to open, and dialogs.
+  const [transfers, setTransfers] = useState<Record<string, CloudProgressEvent>>({})
+  const [cloudStatus, setCloudStatus] = useState<{ enabled: boolean; offline: boolean }>({
+    enabled: false,
+    offline: false
+  })
+  const [openingSong, setOpeningSong] = useState<string | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<RecentSong | null>(null)
+  const [showCloudSettings, setShowCloudSettings] = useState(false)
+
+  const refreshSongs = useCallback(async (): Promise<RecentSong[]> => {
+    if (!window.api) return []
+    const songs = await window.api.listSongs()
+    setRecentSongs(songs)
+    window.api.getCloudStatus?.().then(setCloudStatus)
+    return songs
+  }, [])
 
   useLayoutEffect(() => {
     jobQueueRef.current = jobQueue
@@ -110,7 +165,7 @@ function Home(): React.JSX.Element {
           j.id === e.jobId ? { ...j, status: 'completed', stems: e.stems, progress: 100 } : j
         )
       )
-      window.api.listSongs().then(setRecentSongs)
+      refreshSongs()
       const name = jobQueueRef.current.find((j) => j.id === e.jobId)?.songName ?? e.jobId
       addToast(`\u2714 Ready: ${name}`, 'success')
     })
@@ -161,7 +216,25 @@ function Home(): React.JSX.Element {
       }
     })
 
+    const unsubCloud = window.api.onCloudProgress?.((e) => {
+      setTransfers((prev) => {
+        const next = { ...prev }
+        if (e.status === 'done' || e.status === 'failed') delete next[e.songName]
+        else next[e.songName] = e
+        return next
+      })
+      if (e.status === 'failed' && e.kind === 'upload') {
+        addToast(`Upload failed: ${e.songName} — ${e.error ?? 'unknown error'}`, 'error')
+      }
+      if (e.status === 'done' && e.kind === 'upload') {
+        setRecentSongs((prev) =>
+          prev.map((s) => (s.name === e.songName ? { ...s, sync: 'synced' } : s))
+        )
+      }
+    })
+
     return () => {
+      unsubCloud?.()
       unsubProgress()
       unsubComplete()
       unsubFailed()
@@ -170,12 +243,13 @@ function Home(): React.JSX.Element {
       unsubDlProgress()
       unsubDlFailed()
     }
-  }, [addToast])
+  }, [addToast, refreshSongs])
 
   // Load recent songs and active jobs on mount
   useEffect(() => {
     if (!window.api) return
     window.api.listSongs().then(setRecentSongs)
+    window.api.getCloudStatus?.().then(setCloudStatus)
     window.api.listSeparationJobs().then(setJobQueue)
     window.api.listSetlists().then(setSetlists)
   }, [])
@@ -257,11 +331,40 @@ function Home(): React.JSX.Element {
     addToast(`${files.length} song(s) added to queue`, 'success')
   }
 
-  const handleSelectRecent = useCallback((song: RecentSong): void => {
-    setError(null)
-    setCurrentSong({ stems: song.stems, songName: song.name })
-    setSongSetlistContext(null)
-  }, [])
+  // A cloud-only song is downloaded before it opens (the engine needs whole
+  // files); a synced one gets its metadata brought up to date (fail-fast).
+  const ensureLocal = useCallback(
+    async (song: RecentSong): Promise<RecentSong | null> => {
+      if (song.sync === 'cloud') {
+        setOpeningSong(song.name)
+        try {
+          const r = await window.api.cloudDownload(song.name)
+          if (!r.success) {
+            addToast(`Download failed: ${r.error ?? 'unknown error'}`, 'error')
+            return null
+          }
+          const songs = await refreshSongs()
+          return songs.find((s) => s.name === (r.songName ?? song.name)) ?? null
+        } finally {
+          setOpeningSong(null)
+        }
+      }
+      if (song.sync === 'synced') await window.api.cloudSyncMetaOnOpen(song.name)
+      return song
+    },
+    [addToast, refreshSongs]
+  )
+
+  const handleSelectRecent = useCallback(
+    async (song: RecentSong): Promise<void> => {
+      setError(null)
+      const local = await ensureLocal(song)
+      if (!local) return
+      setCurrentSong({ stems: local.stems, songName: local.name })
+      setSongSetlistContext(null)
+    },
+    [ensureLocal]
+  )
 
   const handleUrlImport = useCallback((url: string, jobId: string, songName: string): void => {
     setJobQueue((prev) => {
@@ -278,7 +381,55 @@ function Home(): React.JSX.Element {
   const handleDeleteSong = async (song: RecentSong, e: React.MouseEvent): Promise<void> => {
     e.stopPropagation()
     if (!window.api) return
+    // Cloud sync off: unchanged behavior. On: confirm, and for songs in the
+    // cloud choose between removing the local copy and deleting everywhere.
+    if (song.sync === undefined) await deleteLocalSong(song)
+    else setDeleteTarget(song)
+  }
 
+  const handleConfirmDelete = async (choice: DeleteChoice): Promise<void> => {
+    const song = deleteTarget
+    setDeleteTarget(null)
+    if (!song) return
+    if (choice === 'local') {
+      await deleteLocalSong(song)
+      return
+    }
+    const r =
+      choice === 'removeLocal'
+        ? await window.api.cloudRemoveLocal(song.name)
+        : await window.api.cloudDeleteEverywhere(song.name)
+    if (!r.success) {
+      addToast(r.error ?? 'Could not delete the song', 'error')
+      return
+    }
+    addToast(
+      choice === 'removeLocal' ? `Removed from this laptop: ${song.name}` : `Deleted: ${song.name}`,
+      'success'
+    )
+    if (currentSong?.songName === song.name) setCurrentSong(null)
+    refreshSongs()
+    if (choice === 'everywhere') window.api.listSetlists().then(setSetlists)
+  }
+
+  const handleUploadSong = (song: RecentSong, e: React.MouseEvent): void => {
+    e.stopPropagation()
+    window.api.cloudUpload(song.name).then((r) => {
+      if (r.success) addToast(`Uploaded: ${song.name}`, 'success')
+      refreshSongs()
+    })
+  }
+
+  const handleDownloadSong = (song: RecentSong, e: React.MouseEvent): void => {
+    e.stopPropagation()
+    window.api.cloudDownload(song.name).then((r) => {
+      if (r.success) addToast(`Downloaded: ${song.name}`, 'success')
+      else addToast(`Download failed: ${r.error ?? 'unknown error'}`, 'error')
+      refreshSongs()
+    })
+  }
+
+  const deleteLocalSong = async (song: RecentSong): Promise<void> => {
     // Cancel running/queued jobs for this song first
     const normalized = song.name.toLowerCase()
     for (const job of jobQueueRef.current) {
@@ -324,12 +475,14 @@ function Home(): React.JSX.Element {
   )
 
   const handleSelectSetlistSong = useCallback(
-    (song: RecentSong, setlistId: string, index: number): void => {
+    async (song: RecentSong, setlistId: string, index: number): Promise<void> => {
       setError(null)
-      setCurrentSong({ stems: song.stems, songName: song.name })
+      const local = await ensureLocal(song)
+      if (!local) return
+      setCurrentSong({ stems: local.stems, songName: local.name })
       setSongSetlistContext({ setlistId, index })
     },
-    []
+    [ensureLocal]
   )
 
   const persistSetlist = useCallback(async (updated: Setlist): Promise<void> => {
@@ -414,7 +567,17 @@ function Home(): React.JSX.Element {
   return (
     <div className="h-screen bg-neutral-950 flex overflow-hidden">
       {/* Sidebar */}
-      <aside className="w-52 shrink-0 border-r border-neutral-800 flex flex-col">
+      <aside
+        className="relative shrink-0 border-r border-neutral-800 flex flex-col"
+        style={{ width: sidebarWidth }}
+      >
+        <div
+          onMouseDown={startSidebarResize}
+          className="absolute top-0 -right-1 w-2 h-full cursor-col-resize z-10 hover:bg-brand-primary/30"
+          title="Drag to resize"
+          role="separator"
+          aria-orientation="vertical"
+        />
         <div className="p-4 border-b border-neutral-800">
           <h1 className="text-xl font-display font-normal bg-gradient-to-r from-brand-primary to-brand-accent bg-clip-text text-transparent">
             Velody
@@ -541,6 +704,14 @@ function Home(): React.JSX.Element {
             <div className="mt-3 mx-3 shrink-0">
               <h3 className="text-[10px] font-semibold text-neutral-500 uppercase tracking-wide mb-1.5">
                 Recent Songs
+                {cloudStatus.enabled && cloudStatus.offline && (
+                  <span
+                    className="ml-1.5 normal-case tracking-normal text-amber-500/80"
+                    title="The cloud can't be reached — local songs still work"
+                  >
+                    · cloud offline
+                  </span>
+                )}
               </h3>
               <div className="relative">
                 <input
@@ -573,43 +744,100 @@ function Home(): React.JSX.Element {
                   {songSearch ? 'No songs found' : 'No songs yet'}
                 </p>
               ) : (
-                filteredSongs.map((song) => (
-                  <div key={song.name} className="relative group">
-                    <button
-                      onClick={() => handleSelectRecent(song)}
-                      className={`w-full text-left pl-3 py-2 rounded-lg text-sm transition-colors ${
-                        libraryActiveSetlistId ? 'pr-14' : 'pr-9'
-                      } ${
-                        currentSong?.songName === song.name
-                          ? 'bg-brand-primary/20 text-brand-primary border border-brand-primary/30'
-                          : 'text-neutral-400 hover:text-white hover:bg-neutral-800'
-                      }`}
-                    >
-                      <span className="truncate block">{song.name}</span>
-                    </button>
-                    <div className="absolute right-1 top-1/2 -translate-y-1/2 flex items-center opacity-0 group-hover:opacity-100 transition-opacity">
-                      {libraryActiveSetlistId && (
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            handleAddSongToActiveSetlist(song)
-                          }}
-                          className="w-6 h-6 rounded flex items-center justify-center text-neutral-600 hover:text-brand-primary hover:bg-brand-primary/10 transition-colors text-xs"
-                          title="Add to active setlist"
-                        >
-                          +
-                        </button>
-                      )}
+                filteredSongs.map((song) => {
+                  const transfer = transfers[song.name]
+                  const actions = songCloudActions(song)
+                  return (
+                    <div key={song.name} className="relative group">
                       <button
-                        onClick={(e) => handleDeleteSong(song, e)}
-                        className="w-6 h-6 rounded flex items-center justify-center text-neutral-600 hover:text-red-400 hover:bg-red-900/30 transition-colors text-xs"
-                        title="Delete song"
+                        onClick={() => handleSelectRecent(song)}
+                        className={`w-full text-left pl-3 py-2 rounded-lg text-sm transition-colors ${
+                          libraryActiveSetlistId
+                            ? 'pr-3 group-hover:pr-20'
+                            : 'pr-3 group-hover:pr-14'
+                        } ${
+                          currentSong?.songName === song.name
+                            ? 'bg-brand-primary/20 text-brand-primary border border-brand-primary/30'
+                            : song.sync === 'cloud'
+                              ? 'text-neutral-500 hover:text-white hover:bg-neutral-800'
+                              : 'text-neutral-400 hover:text-white hover:bg-neutral-800'
+                        }`}
+                        title={
+                          song.sync === 'cloud'
+                            ? `${song.name}\nIn the cloud${song.sizeBytes ? ` (${formatBytes(song.sizeBytes)})` : ''} — downloads when opened`
+                            : song.sync === 'synced'
+                              ? `${song.name}\nOn this laptop and in the cloud`
+                              : song.sync === 'local'
+                                ? `${song.name}\nOnly on this laptop`
+                                : song.name
+                        }
                       >
-                        ✕
+                        <span className="flex items-center gap-1.5 min-w-0">
+                          {song.sync && (
+                            <span
+                              className={`shrink-0 text-[10px] ${
+                                song.sync === 'synced'
+                                  ? 'text-green-500/70'
+                                  : song.sync === 'cloud'
+                                    ? 'text-sky-400/80'
+                                    : 'text-neutral-600'
+                              }`}
+                              aria-label={song.sync}
+                            >
+                              {song.sync === 'synced' ? '✓' : song.sync === 'cloud' ? '☁' : '•'}
+                            </span>
+                          )}
+                          <span className="truncate">{song.name}</span>
+                          {transfer && (
+                            <span className="shrink-0 ml-auto text-[10px] text-brand-primary">
+                              {transfer.kind === 'upload' ? '↑' : '↓'}
+                              {transfer.percent}%
+                            </span>
+                          )}
+                        </span>
                       </button>
+                      <div className="absolute right-1 top-1/2 -translate-y-1/2 flex items-center opacity-0 group-hover:opacity-100 transition-opacity">
+                        {libraryActiveSetlistId && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              handleAddSongToActiveSetlist(song)
+                            }}
+                            className="w-6 h-6 rounded flex items-center justify-center text-neutral-600 hover:text-brand-primary hover:bg-brand-primary/10 transition-colors text-xs"
+                            title="Add to active setlist"
+                          >
+                            +
+                          </button>
+                        )}
+                        {actions.includes('upload') && !transfer && (
+                          <button
+                            onClick={(e) => handleUploadSong(song, e)}
+                            className="w-6 h-6 rounded flex items-center justify-center text-neutral-600 hover:text-sky-400 hover:bg-sky-900/30 transition-colors text-xs"
+                            title="Upload to the cloud"
+                          >
+                            ↑
+                          </button>
+                        )}
+                        {actions.includes('download') && !transfer && (
+                          <button
+                            onClick={(e) => handleDownloadSong(song, e)}
+                            className="w-6 h-6 rounded flex items-center justify-center text-neutral-600 hover:text-sky-400 hover:bg-sky-900/30 transition-colors text-xs"
+                            title="Download to this laptop"
+                          >
+                            ↓
+                          </button>
+                        )}
+                        <button
+                          onClick={(e) => handleDeleteSong(song, e)}
+                          className="w-6 h-6 rounded flex items-center justify-center text-neutral-600 hover:text-red-400 hover:bg-red-900/30 transition-colors text-xs"
+                          title="Delete song"
+                        >
+                          ✕
+                        </button>
+                      </div>
                     </div>
-                  </div>
-                ))
+                  )
+                })
               )}
             </div>
           </>
@@ -628,7 +856,25 @@ function Home(): React.JSX.Element {
           />
         )}
         <UpdateBanner />
-        <label className="mt-auto mx-3 mb-3 pt-3 border-t border-neutral-800 flex items-center justify-between gap-2 text-xs text-neutral-500 cursor-pointer select-none shrink-0">
+        <button
+          onClick={() => setShowCloudSettings(true)}
+          className="mt-auto mx-3 pt-3 border-t border-neutral-800 flex items-center justify-between gap-2 text-xs text-neutral-500 hover:text-neutral-300 transition-colors shrink-0"
+          title="Back up your library to your own cloud"
+        >
+          <span>Cloud sync</span>
+          <span
+            className={
+              cloudStatus.enabled
+                ? cloudStatus.offline
+                  ? 'text-amber-500/80'
+                  : 'text-green-500/80'
+                : 'text-neutral-600'
+            }
+          >
+            {cloudStatus.enabled ? (cloudStatus.offline ? 'offline' : 'on') : 'off'}
+          </span>
+        </button>
+        <label className="mt-2 mx-3 mb-3 pt-3 border-t border-neutral-800 flex items-center justify-between gap-2 text-xs text-neutral-500 cursor-pointer select-none shrink-0">
           <span title="Setlists and Live Presets, for playing with a band">Live mode</span>
           <input
             type="checkbox"
@@ -647,7 +893,20 @@ function Home(): React.JSX.Element {
           </div>
         )}
 
-        {currentSong ? (
+        {openingSong ? (
+          <div className="flex-1 flex items-center justify-center">
+            <div className="text-center w-72">
+              <p className="text-neutral-300 text-sm mb-1 truncate">{openingSong}</p>
+              <p className="text-neutral-500 text-xs mb-3">Downloading from the cloud…</p>
+              <div className="w-full bg-neutral-800 rounded-full h-1.5 overflow-hidden">
+                <div
+                  className="bg-brand-primary h-full rounded-full transition-all duration-300"
+                  style={{ width: `${transfers[openingSong]?.percent ?? 0}%` }}
+                />
+              </div>
+            </div>
+          </div>
+        ) : currentSong ? (
           <StemPlayer
             key={currentSong.songName}
             stems={currentSong.stems}
@@ -722,6 +981,24 @@ function Home(): React.JSX.Element {
           </div>
         )}
       </main>
+
+      {deleteTarget && (
+        <DeleteSongDialog
+          songName={deleteTarget.name}
+          sync={deleteTarget.sync}
+          onConfirm={handleConfirmDelete}
+          onCancel={() => setDeleteTarget(null)}
+        />
+      )}
+
+      {showCloudSettings && (
+        <CloudSettingsModal
+          onClose={() => setShowCloudSettings(false)}
+          onChanged={refreshSongs}
+          onToast={addToast}
+          localOnlyCount={recentSongs.filter((s) => s.sync === 'local').length}
+        />
+      )}
 
       {/* Toast notifications */}
       {toasts.length > 0 && (

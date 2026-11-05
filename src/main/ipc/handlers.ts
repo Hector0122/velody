@@ -10,51 +10,22 @@ import { SetupManager } from '../setup'
 import { JobManager } from '../jobs/JobManager'
 import { getStemsRootDir } from '../paths'
 import { SerialTaskQueue } from '../taskQueue'
+import { readMeta, updateMeta } from '../songMeta'
 import {
   ANALYSIS_CACHE_VERSION,
   hasCurrentAnalysis,
   pickBeatTrackingStem
 } from '../../shared/analysis'
-import type { BpmDetectionResult, StemBitrate } from '../../shared/types'
+import type { BpmDetectionResult, SongItem, StemBitrate } from '../../shared/types'
 
 // One BPM detection at a time (several TensorFlow processes at once OOM
 // low-RAM machines — see CLAUDE.md), deduplicated per stem+hint, and the
 // song the user opens (high priority) jumps ahead of background analysis.
 const detectionQueue = new SerialTaskQueue<BpmDetectionResult | null>()
 
-// Read-modify-write of a song's .velody sidecar, serialized per song so two
-// concurrent writers (UI hooks, background analysis) can't drop each other's keys.
-const metaWrites = new Map<string, Promise<void>>()
-export function updateMeta(songDir: string, patch: Record<string, unknown>): Promise<void> {
-  const metaPath = join(songDir, '.velody')
-  const previous = metaWrites.get(songDir) ?? Promise.resolve()
-  const next = previous.then(async () => {
-    let existing: Record<string, unknown> = {}
-    try {
-      existing = JSON.parse(await readFile(metaPath, 'utf-8'))
-    } catch {
-      /* file doesn't exist or invalid JSON */
-    }
-    // Write-then-rename so a concurrent reader never sees a half-written file.
-    const tmpPath = `${metaPath}.${process.pid}.tmp`
-    await writeFile(tmpPath, JSON.stringify({ ...existing, ...patch }), 'utf-8')
-    await rename(tmpPath, metaPath)
-  })
-  const settled = next.catch(() => {})
-  metaWrites.set(songDir, settled)
-  void settled.then(() => {
-    if (metaWrites.get(songDir) === settled) metaWrites.delete(songDir)
-  })
-  return next
-}
-
-async function readMeta(songDir: string): Promise<unknown> {
-  try {
-    return JSON.parse(await readFile(join(songDir, '.velody'), 'utf-8'))
-  } catch {
-    return null
-  }
-}
+// .velody access lives in ../songMeta (shared with cloud sync); re-exported
+// so existing imports keep working.
+export { updateMeta }
 
 // Set once handlers are registered; see requestLibraryAnalysis.
 let startLibraryAnalysis: (() => void) | null = null
@@ -80,6 +51,20 @@ export function setSetupManager(mgr: SetupManager): void {
 
 export function setJobManager(mgr: JobManager): void {
   jobManager = mgr
+}
+
+let libraryLister: (() => Promise<SongItem[]>) | null = null
+
+/** Lets cloud sync decorate `songs:list` (set from index.ts — avoids an import cycle). */
+export function setLibraryLister(fn: () => Promise<SongItem[]>): void {
+  libraryLister = fn
+}
+
+/** Removes a deleted song from every setlist that referenced it. */
+export async function pruneDeletedSong(songName: string): Promise<void> {
+  const setlistsPath = getSetlistsPath()
+  const { pruned, changed } = pruneSongFromSetlists(await readSetlists(setlistsPath), songName)
+  if (changed) await writeSetlists(setlistsPath, pruned)
 }
 
 // Pure FFmpeg trim-arg builders, extracted for direct unit testing (same
@@ -223,10 +208,7 @@ async function fileExists(path: string): Promise<boolean> {
   }
 }
 
-export interface SongItem {
-  name: string
-  stems: string[]
-}
+export type { SongItem }
 
 // Extracted from the IPC handler so it's directly unit-testable without
 // mocking Electron's ipcMain — the handler below is a thin wrapper over this.
@@ -239,7 +221,9 @@ function validBitrate(v: unknown): StemBitrate | undefined {
 
 export async function scanSongsLibrary(root: string): Promise<SongItem[]> {
   if (!(await fileExists(root))) return []
-  const entries = await readdir(root)
+  // Dot-prefixed entries are never songs (e.g. `.velody_dl_*`, a cloud
+  // download in progress, renamed into place only once complete).
+  const entries = (await readdir(root)).filter((e) => !e.startsWith('.'))
   // Each entry's stat+readdir is independent of every other entry's, so scan
   // them concurrently instead of one at a time — total time is then bounded
   // by the slowest single directory rather than the sum of all of them.
@@ -265,7 +249,9 @@ export function registerIpcHandlers(): void {
   ipcMain.handle('shell:openExternal', (_event, url: string) => shell.openExternal(url))
 
   ipcMain.handle('songs:list', async (): Promise<SongItem[]> => {
-    return scanSongsLibrary(getStemsRootDir())
+    // With cloud sync on, the list also carries cloud-only songs and each
+    // song's sync state (src/main/cloud/sync.ts).
+    return libraryLister ? libraryLister() : scanSongsLibrary(getStemsRootDir())
   })
 
   ipcMain.handle('dialog:openFile', async () => {
@@ -287,9 +273,7 @@ export function registerIpcHandlers(): void {
     // Prune the deleted song from every setlist that referenced it, so
     // deleting a song is atomic from the user's perspective — no dangling
     // reference left for the setlists UI to render awkwardly.
-    const setlistsPath = getSetlistsPath()
-    const { pruned, changed } = pruneSongFromSetlists(await readSetlists(setlistsPath), songName)
-    if (changed) await writeSetlists(setlistsPath, pruned)
+    await pruneDeletedSong(songName)
 
     return { success: true }
   })
