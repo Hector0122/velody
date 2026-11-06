@@ -92,6 +92,7 @@ def _beat_this_grid(audio_file: str):
         'bpm': round(60.0 / float(np.median(np.diff(beats))), 1),
         'firstBeatOffset': round(beats[0], 4),
         'beatTimes': [round(b, 4) for b in beats],
+        'tracker': 'beat_this',
     }
 
 

@@ -31,3 +31,19 @@ export function hasCurrentAnalysis(meta: unknown): boolean {
   const m = meta as { bpm?: unknown; _version?: unknown } | null
   return !!m && typeof m.bpm === 'number' && m.bpm > 0 && m._version === ANALYSIS_CACHE_VERSION
 }
+
+/**
+ * What a fresh (no bpm hint) detection is saved as in `.velody`'s `tracker`:
+ * 'fallback' marks a grid made without Beat This! (not installed yet, model
+ * not downloaded offline), redone once it's available. A tempo-octave
+ * correction saves 'corrected' so it's never redone over the user's choice.
+ */
+export function trackerOf(result: { tracker?: string }): 'beat_this' | 'fallback' {
+  return result.tracker === 'beat_this' ? 'beat_this' : 'fallback'
+}
+
+/** Whether background analysis should (re)analyze this song. */
+export function needsAnalysis(meta: unknown, redoFallbacks: boolean): boolean {
+  if (!hasCurrentAnalysis(meta)) return true
+  return redoFallbacks && (meta as { tracker?: unknown }).tracker === 'fallback'
+}

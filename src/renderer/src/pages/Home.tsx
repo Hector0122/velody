@@ -384,10 +384,9 @@ function Home(): React.JSX.Element {
   const handleDeleteSong = async (song: RecentSong, e: React.MouseEvent): Promise<void> => {
     e.stopPropagation()
     if (!window.api) return
-    // Cloud sync off: unchanged behavior. On: confirm, and for songs in the
-    // cloud choose between removing the local copy and deleting everywhere.
-    if (song.sync === undefined) await deleteLocalSong(song)
-    else setDeleteTarget(song)
+    // Always confirm (stems, markers and recordings can't be undone); for songs
+    // in the cloud the dialog also offers removing only the local copy.
+    setDeleteTarget(song)
   }
 
   const handleConfirmDelete = async (choice: DeleteChoice): Promise<void> => {
@@ -444,7 +443,11 @@ function Home(): React.JSX.Element {
       }
     }
 
-    await window.api.deleteSong(song.name)
+    const result = await window.api.deleteSong(song.name)
+    if (!result.success) {
+      addToast(`Could not delete ${song.name}: ${result.error ?? 'unknown error'}`, 'error')
+      return
+    }
     setRecentSongs((prev) => prev.filter((s) => s.name !== song.name))
     setJobQueue((prev) => prev.filter((j) => j.songName.toLowerCase() !== normalized))
     if (currentSong?.songName === song.name) setCurrentSong(null)

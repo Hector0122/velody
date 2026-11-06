@@ -61,6 +61,22 @@ describe('auth', () => {
 })
 
 describe('upload / commit', () => {
+  it('hides a song while changed files are re-uploaded, until the commit', async () => {
+    await uploadComplete()
+    const changed = [FILES[0], { name: 'vocals.mp3', size: 21, sha256: hash('c') }]
+    await begin(changed)
+    expect(await listSongs()).toEqual([])
+    putObject(h.r2, SONG_ID, 'vocals.mp3', 21)
+    expect((await h.call('POST', `/v1/songs/${SONG_ID}/commit`)).status).toBe(200)
+    expect((await listSongs()).map((s) => s.id)).toEqual([SONG_ID])
+  })
+
+  it('keeps a song listed when a re-upload changes nothing', async () => {
+    await uploadComplete()
+    await begin()
+    expect((await listSongs()).map((s) => s.id)).toEqual([SONG_ID])
+  })
+
   it('returns one presigned URL per file', async () => {
     const r = await begin()
     expect(r.uploads.map((u) => u.name)).toEqual(['drums.mp3', 'vocals.mp3'])
@@ -171,6 +187,19 @@ describe('metadata (last-write-wins)', () => {
 
   beforeEach(async () => {
     await uploadComplete()
+  })
+
+  it('rolls the timestamp back when storing the metadata fails', async () => {
+    expect((await put(1000)).status).toBe(200)
+    const realPut = h.r2.put.bind(h.r2)
+    h.r2.put = async () => {
+      throw new Error('R2 down')
+    }
+    expect((await put(2000)).status).toBe(500)
+    h.r2.put = realPut
+    // Still 1000: the failed write didn't make the old meta look newer.
+    expect((await listSongs())[0].metaUpdatedAt).toBe(1000)
+    expect((await put(2000)).status).toBe(200)
   })
 
   it('stores newer metadata and reports its updatedAt in the list', async () => {

@@ -25,7 +25,11 @@ const VENV_PIP = join(VENV_DIR, isWin ? 'Scripts' : 'bin', isWin ? 'pip.exe' : '
 const FFMPEG_DIR = join(DATA_DIR, 'ffmpeg')
 const FFMPEG_BIN = join(FFMPEG_DIR, 'bin', isWin ? 'ffmpeg.exe' : 'ffmpeg')
 
-const PY_PKGS = ['demucs', 'torch', 'torchaudio', 'tempocnn', 'librosa', 'yt-dlp', 'beat-this']
+const PY_PKGS = ['demucs', 'torch', 'torchaudio', 'tempocnn', 'librosa', 'yt-dlp']
+// Beat This! tracker: installed with the rest, but never required — detection
+// falls back to TempoCNN + librosa without it, so a missing copy (an existing
+// install, offline) must not lock the app behind the setup screen.
+const OPTIONAL_PKG = 'beat-this'
 const STEPS = ['python', 'venv', 'demucs', 'ffmpeg'] as const
 
 const STANDALONE_DIR = join(DATA_DIR, 'python')
@@ -242,23 +246,39 @@ export class SetupManager {
         return this.checkDemucs()
       case 'ffmpeg': {
         const ffmpeg = this.getFfmpegPath()
-        return ffmpeg !== '' && (await this.tryCmd(`${ffmpeg} -version`))
+        return ffmpeg !== '' && (await this.tryCmd(ffmpeg, ['-version']))
       }
       default:
         return false
     }
   }
 
-  private async missingPkgs(): Promise<string[]> {
+  private async missingPkgs(pkgs: string[]): Promise<string[]> {
     const python = this.getPythonPath()
     const results = await Promise.all(
-      PY_PKGS.map((pkg) => this.tryCmd(`${python} -m pip show ${pkg}`))
+      pkgs.map((pkg) => this.tryCmd(python, ['-m', 'pip', 'show', pkg]))
     )
-    return PY_PKGS.filter((_, i) => !results[i])
+    return pkgs.filter((_, i) => !results[i])
+  }
+
+  /**
+   * Makes sure the optional Beat This! package is there, installing it in the
+   * background if not (needs network; failing is fine — retried next launch).
+   * Resolves true once it's available.
+   */
+  async ensureOptionalPackages(): Promise<boolean> {
+    if ((await this.missingPkgs([OPTIONAL_PKG])).length === 0) return true
+    const python = this.getPythonPath()
+    return new Promise((resolve) => {
+      execFile(python, ['-m', 'pip', 'install', OPTIONAL_PKG], { timeout: 900_000 }, (err) => {
+        if (err) console.warn('[setup] optional install failed:', err.message)
+        resolve(!err)
+      })
+    })
   }
 
   private async checkDemucs(): Promise<boolean> {
-    return (await this.missingPkgs()).length === 0
+    return (await this.missingPkgs(PY_PKGS)).length === 0
   }
 
   private isVenvCompatible(): Promise<boolean> {
@@ -320,11 +340,10 @@ export class SetupManager {
     }
   }
 
-  private tryCmd(cmd: string): Promise<boolean> {
+  // Program and arguments stay separate: paths can contain spaces
+  // (C:\Users\Juan Perez\...), so a command string must never be split.
+  private tryCmd(file: string, args: string[]): Promise<boolean> {
     return new Promise((resolve) => {
-      const parts = cmd.trim().split(/\s+/)
-      const file = parts[0].replace(/^["']|["']$/g, '')
-      const args = parts.slice(1)
       execFile(file, args, (err) => {
         resolve(!err)
       })
@@ -356,15 +375,16 @@ export class SetupManager {
   // `nvidia-smi -L` succeeds iff NVIDIA drivers (and thus a usable GPU) are
   // present — it ships with any NVIDIA driver install, no extra dependency.
   private hasNvidiaGpu(): Promise<boolean> {
-    return this.tryCmd('nvidia-smi -L')
+    return this.tryCmd('nvidia-smi', ['-L'])
   }
 
   private async installDemucs(): Promise<boolean> {
     const pip = existsSync(VENV_PIP) ? VENV_PIP : this.getPythonPath()
-    // Only what's missing: an existing install that lacks a newly added package
-    // (beat-this) shouldn't re-download/upgrade torch & co.
-    const missing = await this.missingPkgs()
-    const pkgs = missing.length > 0 ? missing : PY_PKGS
+    // Only what's missing: an install that lacks one package shouldn't
+    // re-download/upgrade torch & co.
+    const all = [...PY_PKGS, OPTIONAL_PKG]
+    const missing = await this.missingPkgs(all)
+    const pkgs = missing.length > 0 ? missing : all
     const args = existsSync(VENV_PIP)
       ? ['install', '--upgrade', ...pkgs]
       : ['-m', 'pip', 'install', '--upgrade', ...pkgs]

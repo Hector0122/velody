@@ -47,4 +47,10 @@ describe('correctTempoOctave', () => {
     expect(result.bpm).toBe(150)
     expect(result.beatTimes).toEqual([1.0])
   })
+
+  it('halving can keep the odd beats (the half that holds the downbeat)', () => {
+    const halved = correctTempoOctave([1, 1.5, 2, 2.5, 3], 120, 1, 'halve', 1)
+    expect(halved.beatTimes).toEqual([1.5, 2.5])
+    expect(halved.firstBeatOffset).toBe(1.5)
+  })
 })

@@ -4,6 +4,7 @@ import {
   STEM_WAVEFORM_HEIGHT,
   MASTER_WAVEFORM_HEIGHT,
   MASTER_MIN_PX_PER_SEC,
+  pickBeatTrackingStem,
   updateTimeDisplays,
   updateCursors
 } from '../utils'
@@ -42,6 +43,11 @@ interface UseWaveSurfersReturn {
   // before the buffer was ready can load its audio.
   handleStemDecoded: (key: string) => void
 }
+
+/** Stem drawn as the master waveform: the drums (or the next most rhythmic
+ * stem), not whichever came first — that could be a stem silent in the intro. */
+const masterKeyOf = (urls: Record<string, string>): string | undefined =>
+  pickBeatTrackingStem(Object.keys(urls))
 
 /** Hand WaveSurfer an already-decoded buffer's channel data so it skips its own
  * fetch + decode (see design.md - Decisions) while still computing its own peaks. */
@@ -151,8 +157,8 @@ export function useWaveSurfers({
   }, [urls])
 
   const masterUrl = useMemo(() => {
-    const firstKey = Object.keys(urls)[0]
-    return firstKey ? urls[firstKey] : null
+    const key = masterKeyOf(urls)
+    return key ? urls[key] : null
   }, [urls])
 
   useEffect(() => {
@@ -178,7 +184,7 @@ export function useWaveSurfers({
       minPxPerSec: MASTER_MIN_PX_PER_SEC
     })
 
-    const masterKey = Object.keys(urls)[0]
+    const masterKey = masterKeyOf(urls)
     const masterBuffer = masterKey ? getDecodedBufferRef.current(masterKey) : undefined
     if (masterBuffer) {
       loadDecodedStem(ws, masterUrl, masterBuffer)
@@ -248,7 +254,7 @@ export function useWaveSurfers({
       }
 
       if (masterPendingRef.current && masterWaveRef.current && masterUrl) {
-        const masterKey = Object.keys(urls)[0]
+        const masterKey = masterKeyOf(urls)
         if (key === masterKey) {
           const buffer = getDecodedBufferRef.current(key)
           if (buffer) {

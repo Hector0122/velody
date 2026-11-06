@@ -96,6 +96,9 @@ export interface BpmDetectionResult {
   // (i - downbeatShift) % 4 === 0. Absent when it couldn't be estimated.
   downbeatShift?: number
   downbeatConfidence?: number
+  // 'beat_this' when the Beat This! tracker produced the grid; absent when
+  // detection fell back to TempoCNN + librosa (or ran with a bpm hint).
+  tracker?: 'beat_this'
 }
 
 export interface VelodyAPI {

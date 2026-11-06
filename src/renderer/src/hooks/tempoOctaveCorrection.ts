@@ -25,7 +25,9 @@ export function correctTempoOctave(
   beatTimes: number[],
   bpm: number,
   firstBeatOffset: number,
-  direction: TempoOctaveDirection
+  direction: TempoOctaveDirection,
+  // Halving: which beats to keep (0 = even indices, 1 = odd).
+  phase = 0
 ): TempoOctaveCorrection {
   let newBeatTimes: number[]
 
@@ -41,10 +43,9 @@ export function correctTempoOctave(
       }
     }
   } else {
-    // Drop every other detected beat — assumes index 0 is a genuine beat
-    // (the usual case: the detector found real transients, just twice as
-    // many of them as the true tempo has).
-    newBeatTimes = beatTimes.filter((_, i) => i % 2 === 0)
+    // Drop every other detected beat — every kept one is still a real,
+    // detected beat; `phase` picks the half that holds the downbeat.
+    newBeatTimes = beatTimes.filter((_, i) => i % 2 === phase)
   }
 
   return {

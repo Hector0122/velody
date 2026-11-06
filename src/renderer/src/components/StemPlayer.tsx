@@ -652,6 +652,7 @@ function StemPlayer({
         firstBeatOffset: correction.firstBeatOffset,
         beatTimes: correction.beatTimes,
         detectedDownbeatShift: correction.downbeatShift,
+        tracker: 'corrected',
         _version: CACHE_VERSION
       })
     },
@@ -667,27 +668,6 @@ function StemPlayer({
     ]
   )
 
-  // Corrects a tempo-octave detection error (detector locked onto half or
-  // double the real tempo) while keeping the metronome locked to a real,
-  // onset-aligned beat grid — unlike just re-typing a doubled/halved BPM
-  // (handleBpmChange above), which would fall out of grid mode into plain
-  // constant-tempo scheduling.
-  //
-  // Re-runs beat detection with the corrected tempo as an explicit prior
-  // (detect_bpm.py's --bpm-hint) rather than arithmetically interpolating/
-  // decimating the already-detected grid client-side: the original
-  // arithmetic-only approach (tempoOctaveCorrection.ts) assumes perfectly
-  // uniform spacing between detected beats, which real recordings (natural
-  // human timing, non-quantized performances) don't actually have —
-  // reported as an audible "se adelanta y se atrasa" (drifts ahead/behind)
-  // alternating pattern on doubling, since every other click (the
-  // arithmetic midpoint) landed slightly off the real transient while the
-  // originally-detected clicks stayed correct. Re-detecting via librosa's
-  // beat tracker at the corrected tempo instead finds genuinely
-  // onset-aligned positions directly from the audio. Falls back to the
-  // arithmetic approach only if redetection itself fails (e.g. the Python
-  // worker errors) — an imperfect grid is still better than none.
-  // See openspec/changes/add-tempo-octave-correction.
   // "This is the 1": make the beat nearest the current playback position the
   // bar's accented downbeat (see downbeat.ts). Works paused too (uses the
   // cursor position).
@@ -704,11 +684,51 @@ function StemPlayer({
     )
   }, [beatTimesRef, bpmRef, originalBpmRef, firstBeatOffsetRef, getLivePosition, setDownbeatShift])
 
+  // Corrects a tempo-octave detection error (detector locked onto half or
+  // double the real tempo) while keeping the metronome locked to a real,
+  // onset-aligned beat grid — unlike just re-typing a doubled/halved BPM
+  // (handleBpmChange above), which would fall out of grid mode into plain
+  // constant-tempo scheduling.
+  //
+  // Doubling re-runs beat detection with the corrected tempo as an explicit prior
+  // (detect_bpm.py's --bpm-hint) rather than arithmetically interpolating/
+  // decimating the already-detected grid client-side: the original
+  // arithmetic-only approach (tempoOctaveCorrection.ts) assumes perfectly
+  // uniform spacing between detected beats, which real recordings (natural
+  // human timing, non-quantized performances) don't actually have —
+  // reported as an audible "se adelanta y se atrasa" (drifts ahead/behind)
+  // alternating pattern on doubling, since every other click (the
+  // arithmetic midpoint) landed slightly off the real transient while the
+  // originally-detected clicks stayed correct. Re-detecting via librosa's
+  // beat tracker at the corrected tempo instead finds genuinely
+  // onset-aligned positions directly from the audio. Falls back to the
+  // arithmetic approach only if redetection itself fails (e.g. the Python
+  // worker errors) — an imperfect grid is still better than none.
+  // See openspec/changes/add-tempo-octave-correction.
   const handleCorrectTempoOctave = useCallback(
     (direction: TempoOctaveDirection): void => {
       if (stems.length === 0 || correctingTempoOctave) return
       const hintBpm =
         direction === 'double' ? originalBpmRef.current * 2 : originalBpmRef.current / 2
+
+      if (direction === 'halve') {
+        // Halving needs no new detection: every other beat of the current
+        // (Beat This!) grid is exact, and re-running the drums-only librosa
+        // tracker would lose what it follows (e.g. a drumless intro). Keep
+        // the half holding the downbeat; old downbeat index s → new s/2.
+        const shift = downbeatShiftRef.current
+        applyTempoOctaveCorrection({
+          ...correctTempoOctave(
+            beatTimesRef.current,
+            originalBpmRef.current,
+            firstBeatOffsetRef.current,
+            'halve',
+            shift % 2
+          ),
+          downbeatShift: Math.floor(shift / 2)
+        })
+        return
+      }
 
       setCorrectingTempoOctave(true)
       ;(async (): Promise<void> => {
@@ -740,6 +760,7 @@ function StemPlayer({
       originalBpmRef,
       beatTimesRef,
       firstBeatOffsetRef,
+      downbeatShiftRef,
       applyTempoOctaveCorrection
     ]
   )

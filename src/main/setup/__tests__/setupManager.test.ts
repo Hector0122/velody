@@ -124,8 +124,24 @@ describe('SetupManager verification concurrency', () => {
 
     void (manager as unknown as { checkDemucs: () => Promise<boolean> }).checkDemucs()
 
-    // demucs, torch, torchaudio, tempocnn, librosa, yt-dlp, beat-this
-    expect(execFileMock).toHaveBeenCalledTimes(7)
+    // demucs, torch, torchaudio, tempocnn, librosa, yt-dlp (beat-this is optional)
+    expect(execFileMock).toHaveBeenCalledTimes(6)
+  })
+
+  it('runs a python path containing spaces as one program, not split at the space', async () => {
+    execFileMock.mockImplementation((_f: string, _a: string[], cb: ExecFileCallback) => cb(null))
+    const manager = new SetupManager(false)
+    const python = 'C:\\Users\\Juan Perez\\venv\\Scripts\\python.exe'
+    ;(manager as unknown as { getPythonPath: () => string }).getPythonPath = () => python
+
+    const ok = await (manager as unknown as { checkDemucs: () => Promise<boolean> }).checkDemucs()
+
+    expect(ok).toBe(true)
+    expect(execFileMock).toHaveBeenCalledWith(
+      python,
+      ['-m', 'pip', 'show', 'demucs'],
+      expect.any(Function)
+    )
   })
 })
 

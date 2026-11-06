@@ -99,6 +99,14 @@ app.whenReady().then(async () => {
   // Pre-analyze songs (BPM, beat grid, downbeat) in the background so they
   // open instantly: shortly after launch, and after every new separation.
   setTimeout(requestLibraryAnalysis, 10_000)
+  // Beat This! is optional (never blocks setup): install it in the background
+  // if missing, then redo songs analyzed without it.
+  // shortcut: while offline its model can't download, so those songs are
+  // retried (and fall back again) once per launch — fine for a personal library.
+  void setupManager
+    .isSetupComplete()
+    .then((ok) => ok && setupManager?.ensureOptionalPackages())
+    .then((ready) => ready && requestLibraryAnalysis(true))
   jobManager.onJobCompleted((stems) => {
     // The stems may replace an older song of the same name: its cached
     // analysis (BPM, beat grid) no longer applies, so have it re-detected.

@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { songDirFromStemPath, pickBeatTrackingStem } from '../utils'
-import { ANALYSIS_CACHE_VERSION } from '../../../shared/analysis'
+import { ANALYSIS_CACHE_VERSION, trackerOf } from '../../../shared/analysis'
 import { smoothBeatGrid } from './downbeat'
 
 // Version lives in src/shared/analysis.ts (main's background analysis writes
@@ -78,6 +78,7 @@ export default function useSongAnalysis(
             firstBeatOffset: result.firstBeatOffset,
             beatTimes,
             detectedDownbeatShift: result.downbeatShift,
+            tracker: trackerOf(result),
             _version: CACHE_VERSION
           })
         }

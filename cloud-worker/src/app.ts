@@ -162,11 +162,16 @@ export function createApp(presign: Presigner): App {
       uploads.push({ name: f.name, url: await presign('PUT', fileKey(id, f.name)) })
     }
 
+    // Re-uploading changed files hides the song (pending) until its commit:
+    // otherwise another device could download the new file list while the
+    // objects are still the old ones and fail every hash check.
+    const filesChanged = uploads.length > 0 || existing.size !== body.files.length
     await env.DB.batch([
       env.DB.prepare(
         `INSERT INTO songs (id, name, status, created_at, updated_at) VALUES (?, ?, 'pending', ?, ?)
-         ON CONFLICT(id) DO UPDATE SET name = excluded.name, updated_at = excluded.updated_at`
-      ).bind(id, body.name.trim(), now, now),
+         ON CONFLICT(id) DO UPDATE SET name = excluded.name, updated_at = excluded.updated_at,
+           status = CASE WHEN ? THEN 'pending' ELSE songs.status END`
+      ).bind(id, body.name.trim(), now, now, filesChanged ? 1 : 0),
       env.DB.prepare('DELETE FROM song_files WHERE song_id = ?').bind(id),
       ...body.files.map((f) =>
         env.DB.prepare(
@@ -233,7 +238,7 @@ export function createApp(presign: Presigner): App {
     if (body.updatedAt > Date.now() + MAX_META_CLOCK_SKEW_MS) {
       fail(400, 'updatedAt is too far in the future')
     }
-    if (!(await getSong(env, id))) fail(404, 'Song not found')
+    const song = (await getSong(env, id)) ?? fail(404, 'Song not found')
 
     // Last-write-wins, decided atomically by the conditional UPDATE.
     const res = await env.DB.prepare(
@@ -247,9 +252,20 @@ export function createApp(presign: Presigner): App {
       return json({ error: 'A newer version is stored', ...stored }, 409)
     }
     const doc: MetaResponse = { meta: body.meta, updatedAt: body.updatedAt }
-    await env.BUCKET.put(fileKey(id, META_FILE), JSON.stringify(doc), {
-      httpMetadata: { contentType: 'application/json' }
-    })
+    try {
+      await env.BUCKET.put(fileKey(id, META_FILE), JSON.stringify(doc), {
+        httpMetadata: { contentType: 'application/json' }
+      })
+    } catch (err) {
+      // Undo the timestamp: left advanced over the old stored meta, clients
+      // would take that old meta as the newer version and overwrite theirs.
+      await env.DB.prepare(
+        'UPDATE songs SET meta_updated_at = ? WHERE id = ? AND meta_updated_at = ?'
+      )
+        .bind(song.meta_updated_at, id, body.updatedAt)
+        .run()
+      throw err
+    }
     return json({ updatedAt: body.updatedAt })
   }
 

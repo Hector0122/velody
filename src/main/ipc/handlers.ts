@@ -13,8 +13,9 @@ import { SerialTaskQueue } from '../taskQueue'
 import { readMeta, updateMeta } from '../songMeta'
 import {
   ANALYSIS_CACHE_VERSION,
-  hasCurrentAnalysis,
+  needsAnalysis,
   pickBeatTrackingStem,
+  trackerOf,
   STEM_NAMES
 } from '../../shared/analysis'
 import type { BpmDetectionResult, SongItem, StemBitrate } from '../../shared/types'
@@ -30,14 +31,18 @@ export { updateMeta }
 
 // Set once handlers are registered; see requestLibraryAnalysis.
 let startLibraryAnalysis: (() => void) | null = null
+// Set once Beat This! is known to be installed: songs analyzed without it are redone.
+let redoFallbacks = false
 
 /**
  * Analyze (BPM, beat grid, downbeat) every library song that doesn't have a
  * current analysis yet, one at a time in the background, so songs open
  * instantly. Pauses while a separation is running; a song the user opens
- * meanwhile jumps the queue.
+ * meanwhile jumps the queue. `beatThisReady` also redoes songs whose grid
+ * was made without Beat This! (see trackerOf).
  */
-export function requestLibraryAnalysis(): void {
+export function requestLibraryAnalysis(beatThisReady = false): void {
+  if (beatThisReady) redoFallbacks = true
   startLibraryAnalysis?.()
 }
 
@@ -343,6 +348,7 @@ export function registerIpcHandlers(): void {
           firstBeatOffset: parsed.firstBeatOffset,
           beatTimes
         }
+        if (parsed.tracker === 'beat_this') result.tracker = 'beat_this'
         if (Number.isInteger(parsed.downbeatShift)) {
           result.downbeatShift = parsed.downbeatShift
           result.downbeatConfidence =
@@ -381,11 +387,11 @@ export function registerIpcHandlers(): void {
         for (const song of await scanSongsLibrary(root)) {
           const songDir = join(root, song.name)
           const stem = pickBeatTrackingStem(song.stems)
-          if (!stem || hasCurrentAnalysis(await readMeta(songDir))) continue
+          if (!stem || !needsAnalysis(await readMeta(songDir), redoFallbacks)) continue
           // Don't compete with Demucs for the GPU/CPU/RAM.
           while (jobManager?.isBusy()) await sleep(5000)
           // Re-check: the user may have opened (and analyzed) it meanwhile.
-          if (hasCurrentAnalysis(await readMeta(songDir))) continue
+          if (!needsAnalysis(await readMeta(songDir), redoFallbacks)) continue
           const result = await detectionQueue
             .run(`${stem}|`, () => runDetectBpm(stem), 'low')
             .catch(() => null)
@@ -396,6 +402,7 @@ export function registerIpcHandlers(): void {
             firstBeatOffset: result.firstBeatOffset,
             beatTimes: result.beatTimes,
             detectedDownbeatShift: result.downbeatShift,
+            tracker: trackerOf(result),
             _version: ANALYSIS_CACHE_VERSION
           })
         }

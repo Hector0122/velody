@@ -46,6 +46,8 @@ describe('useSongAnalysis - cached first-beat offset and beat grid', () => {
       bpm: 128,
       firstBeatOffset: 0.42,
       beatTimes: [0.42, 0.9],
+      // No `tracker` in the result: made without Beat This!, redone once it's installed.
+      tracker: 'fallback',
       _version: CACHE_VERSION
     })
   })
