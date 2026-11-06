@@ -16,12 +16,13 @@ import {
   needsAnalysis,
   pickBeatTrackingStem,
   trackerOf,
+  validChords,
   STEM_NAMES
 } from '../../shared/analysis'
 import type { BpmDetectionResult, SongItem, StemBitrate } from '../../shared/types'
 
-// One BPM detection at a time (several TensorFlow processes at once OOM
-// low-RAM machines — see CLAUDE.md), deduplicated per stem+hint, and the
+// One BPM detection at a time (each one holds PyTorch models and the song's
+// mix in RAM, ~1.4 GB; several at once OOM low-RAM machines — see CLAUDE.md), deduplicated per stem+hint, and the
 // song the user opens (high priority) jumps ahead of background analysis.
 const detectionQueue = new SerialTaskQueue<BpmDetectionResult | null>()
 
@@ -312,7 +313,7 @@ export function registerIpcHandlers(): void {
   // `bpmHint`, when given, is threaded through as --bpm-hint — used by
   // add-tempo-octave-correction to re-run librosa's beat tracker with a
   // known-correct tempo as an explicit prior (finding real onset-aligned
-  // beat positions at that tempo) instead of TempoCNN's own estimate. See
+  // beat positions at that tempo) instead of detecting the tempo. See
   // detect_bpm.py.
   async function runDetectBpm(
     stemPath: string,
@@ -349,6 +350,8 @@ export function registerIpcHandlers(): void {
           beatTimes
         }
         if (parsed.tracker === 'beat_this') result.tracker = 'beat_this'
+        const chords = validChords(parsed.chords)
+        if (chords) result.chords = chords
         if (Number.isInteger(parsed.downbeatShift)) {
           result.downbeatShift = parsed.downbeatShift
           result.downbeatConfidence =
@@ -403,6 +406,7 @@ export function registerIpcHandlers(): void {
             beatTimes: result.beatTimes,
             detectedDownbeatShift: result.downbeatShift,
             tracker: trackerOf(result),
+            chords: result.chords,
             _version: ANALYSIS_CACHE_VERSION
           })
         }

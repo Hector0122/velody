@@ -1,5 +1,4 @@
 import { memo } from 'react'
-import { Grid } from 'react-window'
 import StemCard from './StemCard'
 
 interface StemMeta {
@@ -43,15 +42,9 @@ export interface StemGridCellProps {
 const ROW_HEIGHT = 200
 
 function StemGridCell({
-  columnIndex,
-  rowIndex,
-  style,
+  itemIndex,
   ...cellProps
-}: {
-  columnIndex: number
-  rowIndex: number
-  style: React.CSSProperties
-} & StemGridCellProps): React.JSX.Element | null {
+}: { itemIndex: number } & StemGridCellProps): React.JSX.Element | null {
   const {
     items,
     masterPlaying,
@@ -68,7 +61,6 @@ function StemGridCell({
     onStopRecording
   } = cellProps
 
-  const itemIndex = rowIndex * 2 + columnIndex
   if (itemIndex >= items.length) return null
   const { key, meta, isRecording } = items[itemIndex]
   const cb = stemCallbacks[key]
@@ -79,7 +71,7 @@ function StemGridCell({
   const isRecordingThis = recordingKey === key && recording === 'recording'
 
   return (
-    <div style={{ ...style, padding: '0 8px 16px 8px' }}>
+    <div style={{ height: ROW_HEIGHT, padding: '0 8px 16px 8px' }}>
       <StemCard
         meta={meta}
         isRecording={isRecording}
@@ -118,25 +110,17 @@ function StemGridCell({
   )
 }
 
+// A plain 2-column grid: a song has at most 6 stems plus a few recordings, all
+// on screen at once (react-window's virtualization never skipped anything).
 function StemGrid(props: StemGridCellProps): React.JSX.Element {
-  const rowCount = Math.ceil(props.items.length / 2)
-  const contentHeight = rowCount * ROW_HEIGHT
-
   if (props.items.length === 0) return <div className="min-h-[200px]" />
 
   return (
-    <Grid
-      cellComponent={StemGridCell}
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      cellProps={props as any}
-      className="w-full"
-      columnCount={2}
-      columnWidth="50%"
-      rowCount={rowCount}
-      rowHeight={ROW_HEIGHT}
-      style={{ height: contentHeight }}
-      overscanCount={4}
-    />
+    <div className="grid w-full grid-cols-2">
+      {props.items.map((item, i) => (
+        <StemGridCell key={item.key} itemIndex={i} {...props} />
+      ))}
+    </div>
   )
 }
 

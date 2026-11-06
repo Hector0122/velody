@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   stemNameFromPath,
+  chordIndexAt,
   songDirFromStemPath,
   formatTime,
   filterSongsByQuery,
@@ -285,5 +286,21 @@ describe('findMusicStart', () => {
     expect(findMusicStart([buf([[0.5, 0, 0]])])).toBe(0)
     expect(findMusicStart([buf([silence(100)])])).toBe(0)
     expect(findMusicStart([buf([[...silence(5000), 0.5]])], 0.008, 2)).toBe(0)
+  })
+})
+
+describe('chordIndexAt', () => {
+  const chords = [
+    { time: 1, chord: 'Em' },
+    { time: 3, chord: 'D' },
+    { time: 5, chord: 'G' }
+  ]
+
+  it('finds the chord sounding at a time, including exactly on a change', () => {
+    expect(chordIndexAt(chords, 0.5)).toBe(-1)
+    expect(chordIndexAt(chords, 1)).toBe(0)
+    expect(chordIndexAt(chords, 4.9)).toBe(1)
+    expect(chordIndexAt(chords, 99)).toBe(2)
+    expect(chordIndexAt([], 2)).toBe(-1)
   })
 })

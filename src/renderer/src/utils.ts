@@ -1,3 +1,5 @@
+import type { ChordChange } from '../../shared/types'
+
 export function stemNameFromPath(path: string): string {
   return (
     path
@@ -105,6 +107,8 @@ export const MASTER_MIN_PX_PER_SEC = 20
 export const STEM_WAVEFORM_HEIGHT = 32
 
 let cachedTimeEls: Element[] | null = null
+let liveChords: ChordChange[] = []
+let liveChordIdx = -2
 let cachedCursorEls: HTMLElement[] | null = null
 
 export function invalidateLiveUICache(): void {
@@ -119,6 +123,43 @@ export function updateTimeDisplays(time: number): void {
   const timeStr = formatTime(time)
   for (let i = 0; i < cachedTimeEls.length; i++) {
     cachedTimeEls[i].textContent = timeStr
+  }
+  updateChordDisplay(time)
+}
+
+/** Index of the chord sounding at `time` in a sorted change list (-1 before the first). */
+export function chordIndexAt(chords: ChordChange[], time: number): number {
+  let lo = 0
+  let hi = chords.length - 1
+  let idx = -1
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1
+    if (chords[mid].time <= time) {
+      idx = mid
+      lo = mid + 1
+    } else hi = mid - 1
+  }
+  return idx
+}
+
+/** The song's chords for the live "now → next" display (updated with the time). */
+export function setLiveChords(chords: ChordChange[]): void {
+  liveChords = chords
+  liveChordIdx = -2
+}
+
+const chordLabel = (c: ChordChange | undefined): string => (!c || c.chord === 'N' ? '–' : c.chord)
+
+// Touches the DOM only when the chord changes, not every frame.
+function updateChordDisplay(time: number): void {
+  const idx = chordIndexAt(liveChords, time)
+  if (idx === liveChordIdx) return
+  liveChordIdx = idx
+  for (const el of document.querySelectorAll('[data-live-chord]')) {
+    el.textContent = chordLabel(liveChords[idx])
+  }
+  for (const el of document.querySelectorAll('[data-next-chord]')) {
+    el.textContent = chordLabel(liveChords[idx + 1])
   }
 }
 

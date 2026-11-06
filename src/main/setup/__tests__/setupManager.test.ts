@@ -124,8 +124,8 @@ describe('SetupManager verification concurrency', () => {
 
     void (manager as unknown as { checkDemucs: () => Promise<boolean> }).checkDemucs()
 
-    // demucs, torch, torchaudio, tempocnn, librosa, yt-dlp (beat-this is optional)
-    expect(execFileMock).toHaveBeenCalledTimes(6)
+    // demucs, torch, torchaudio, librosa, yt-dlp (beat-this is optional)
+    expect(execFileMock).toHaveBeenCalledTimes(5)
   })
 
   it('runs a python path containing spaces as one program, not split at the space', async () => {

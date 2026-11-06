@@ -25,9 +25,9 @@ const VENV_PIP = join(VENV_DIR, isWin ? 'Scripts' : 'bin', isWin ? 'pip.exe' : '
 const FFMPEG_DIR = join(DATA_DIR, 'ffmpeg')
 const FFMPEG_BIN = join(FFMPEG_DIR, 'bin', isWin ? 'ffmpeg.exe' : 'ffmpeg')
 
-const PY_PKGS = ['demucs', 'torch', 'torchaudio', 'tempocnn', 'librosa', 'yt-dlp']
+const PY_PKGS = ['demucs', 'torch', 'torchaudio', 'librosa', 'yt-dlp']
 // Beat This! tracker: installed with the rest, but never required — detection
-// falls back to TempoCNN + librosa without it, so a missing copy (an existing
+// falls back to librosa's beat tracker without it, so a missing copy (an existing
 // install, offline) must not lock the app behind the setup screen.
 const OPTIONAL_PKG = 'beat-this'
 const STEPS = ['python', 'venv', 'demucs', 'ffmpeg'] as const
@@ -43,7 +43,7 @@ const HELP: Record<string, string> = isWin
         'Compatible Python (3.9-3.11) not found.\nDownload and install Python from:\nhttps://python.org/downloads/\nMake sure to check "Add Python to PATH" during installation.',
       venv: 'Failed to create virtual environment.',
       demucs:
-        'Failed to install dependencies.\nTry running manually:\n  python -m pip install demucs torch torchaudio tempocnn librosa yt-dlp beat-this',
+        'Failed to install dependencies.\nTry running manually:\n  python -m pip install demucs torch torchaudio librosa yt-dlp beat-this',
       ffmpeg:
         'FFmpeg not found.\nDownload FFmpeg from:\nhttps://ffmpeg.org/download.html\nOr install with winget:\n  winget install ffmpeg'
     }
@@ -51,7 +51,7 @@ const HELP: Record<string, string> = isWin
       python:
         'Compatible Python (3.9-3.11) not found.\nInstall Python 3.11:\n  brew install python@3.11\nor download from:\n  https://www.python.org/downloads/',
       venv: 'Failed to create virtual environment.',
-      demucs: `Failed to install dependencies.\nTry running manually:\n  python3 -m venv ${VENV_DIR}\n  ${VENV_DIR}/bin/pip install demucs torch torchaudio tempocnn librosa yt-dlp beat-this`,
+      demucs: `Failed to install dependencies.\nTry running manually:\n  python3 -m venv ${VENV_DIR}\n  ${VENV_DIR}/bin/pip install demucs torch torchaudio librosa yt-dlp beat-this`,
       ffmpeg: 'FFmpeg not found.\nInstall FFmpeg:\n  brew install ffmpeg'
     }
 

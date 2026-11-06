@@ -1,11 +1,12 @@
 // Shared between the renderer (useSongAnalysis) and main (background library
 // analysis) so both read and write the same .velody analysis cache.
 
+// 22: also caches the detected chords (`chords`).
 // 21: Beat This! on the stem mix (follows tempo changes, e.g. drumless intros).
 // 20: also caches the detected downbeat (`detectedDownbeatShift`).
 // 19: detection runs on the drums stem (pickBeatTrackingStem).
 // 18: caches started storing the detected beat-time grid.
-export const ANALYSIS_CACHE_VERSION = 21
+export const ANALYSIS_CACHE_VERSION = 22
 
 // Every stem Demucs produces, in beat-tracking preference order: drums carry
 // the clearest onsets; the fallbacks are the next most rhythmic stems.
@@ -42,8 +43,22 @@ export function trackerOf(result: { tracker?: string }): 'beat_this' | 'fallback
   return result.tracker === 'beat_this' ? 'beat_this' : 'fallback'
 }
 
-/** Whether background analysis should (re)analyze this song. */
+/**
+ * Whether background analysis should (re)analyze this song. `redoFallbacks`
+ * (set once Beat This! is installed) also redoes grids made without it and
+ * songs whose chords couldn't be detected (e.g. the chord model couldn't be
+ * downloaded offline).
+ */
 export function needsAnalysis(meta: unknown, redoFallbacks: boolean): boolean {
   if (!hasCurrentAnalysis(meta)) return true
-  return redoFallbacks && (meta as { tracker?: unknown }).tracker === 'fallback'
+  const m = meta as { tracker?: unknown; chords?: unknown }
+  return redoFallbacks && (m.tracker === 'fallback' || !Array.isArray(m.chords))
+}
+
+/** Keeps only well-formed chord changes (input from the Python worker or a .velody file). */
+export function validChords(v: unknown): { time: number; chord: string }[] | undefined {
+  if (!Array.isArray(v)) return undefined
+  return v.filter(
+    (c) => c && Number.isFinite(c.time) && typeof c.chord === 'string' && c.chord.length <= 12
+  )
 }

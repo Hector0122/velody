@@ -12,13 +12,6 @@ DETECT_BPM_SCRIPT = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'detect_bpm.py'
 )
 
-HAS_TEMPOCNN = False
-try:
-    from tempocnn.classifier import TempoClassifier  # noqa: F401
-    HAS_TEMPOCNN = True
-except ImportError:
-    pass
-
 HAS_LIBROSA = False
 try:
     import librosa  # noqa: F401
@@ -45,6 +38,21 @@ def _write_wav(path: str, signal: np.ndarray, sr: int = 44100):
         f.write(b'data')
         f.write(struct.pack('<I', len(data)))
         f.write(data)
+
+
+def _click_track_wav(path: str, bpm: float, duration: int = 10, sr: int = 44100):
+    interval = 60.0 / bpm
+    signal = np.zeros(sr * duration, dtype=np.float32)
+    t = 0.0
+    while t < duration:
+        idx = int(t * sr)
+        click_len = int(0.02 * sr)
+        end = min(idx + click_len, len(signal))
+        n = end - idx
+        envelope = np.exp(-np.linspace(0, 20, n)).astype(np.float32)
+        signal[idx:end] += envelope * 0.8
+        t += interval
+    _write_wav(path, signal, sr)
 
 
 class TestScriptInterface:
@@ -86,17 +94,12 @@ class TestScriptInterface:
             assert 'error' in data
 
 
-@pytest.mark.skipif(not HAS_TEMPOCNN, reason='tempocnn not installed')
+@pytest.mark.skipif(not HAS_LIBROSA, reason='librosa not installed')
 class TestDetectBpm:
     def test_returns_bpm_and_offset(self):
-        sr = 44100
-        duration = 10
-        t = np.arange(sr * duration) / sr
-        bpm = 120
-        signal = (np.sin(2 * np.pi * (bpm / 60) * t) * 0.5).astype(np.float32)
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, 'drums.wav')
-            _write_wav(path, signal, sr)
+            _click_track_wav(path, 120)
             result = subprocess.run(
                 [sys.executable, DETECT_BPM_SCRIPT, path],
                 capture_output=True,
@@ -139,27 +142,11 @@ class TestDetectBpm:
 @pytest.mark.skipif(not HAS_LIBROSA, reason='librosa not installed')
 class TestBpmHint:
     # --bpm-hint (used by add-tempo-octave-correction to re-run detection at
-    # a user-corrected tempo) skips TempoCNN entirely — must work even when
-    # tempocnn isn't installed, so these are gated on HAS_LIBROSA only, not
-    # HAS_TEMPOCNN.
-    def _click_track_wav(self, path: str, bpm: float, duration: int = 10, sr: int = 44100):
-        interval = 60.0 / bpm
-        signal = np.zeros(sr * duration, dtype=np.float32)
-        t = 0.0
-        while t < duration:
-            idx = int(t * sr)
-            click_len = int(0.02 * sr)
-            end = min(idx + click_len, len(signal))
-            n = end - idx
-            envelope = np.exp(-np.linspace(0, 20, n)).astype(np.float32)
-            signal[idx:end] += envelope * 0.8
-            t += interval
-        _write_wav(path, signal, sr)
-
+    # a user-corrected tempo) is librosa only.
     def test_bpm_hint_finds_beats_at_the_given_tempo(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, 'click151.wav')
-            self._click_track_wav(path, bpm=151.0)
+            _click_track_wav(path, bpm=151.0)
             result = subprocess.run(
                 [sys.executable, DETECT_BPM_SCRIPT, path, '--bpm-hint', '151'],
                 capture_output=True,
@@ -182,7 +169,7 @@ class TestBpmHint:
         # not something that silently fails on a bad hint.
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, 'click151.wav')
-            self._click_track_wav(path, bpm=151.0)
+            _click_track_wav(path, bpm=151.0)
             result = subprocess.run(
                 [sys.executable, DETECT_BPM_SCRIPT, path, '--bpm-hint', '75.5'],
                 capture_output=True,

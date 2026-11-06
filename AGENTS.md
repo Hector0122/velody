@@ -632,7 +632,7 @@ NOT on:
 
 ## Notas técnicas
 
-- **P3 Virtualización StemGrid**: ✅ Ya implementado con `react-window`
+- **P3 Virtualización StemGrid**: ❌ Retirado — `react-window` no virtualizaba nada (la cuadrícula ocupaba toda su altura) y con ≤ 6 stems + grabaciones no hace falta; ahora es un grid CSS de 2 columnas
 - **Lazy WaveSurfer**: ✅ Implementado — `ensureWaveSurfer()` crea waveforms on-demand al dar play
 - **Per-stem panning**: ✅ Implementado via `StereoPannerNode` en AudioContext engine
 - **Per-stem volume**: ✅ Implementado via `GainNode` en AudioContext engine con rampa `setTargetAtTime`

@@ -1,6 +1,7 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { songDirFromStemPath, pickBeatTrackingStem } from '../utils'
-import { ANALYSIS_CACHE_VERSION, trackerOf } from '../../../shared/analysis'
+import { ANALYSIS_CACHE_VERSION, trackerOf, validChords } from '../../../shared/analysis'
+import type { ChordChange } from '../../../shared/types'
 import { smoothBeatGrid } from './downbeat'
 
 // Version lives in src/shared/analysis.ts (main's background analysis writes
@@ -12,7 +13,7 @@ export { CACHE_VERSION }
 // StemPlayer and threaded into both this hook (which writes them) and
 // useMetronome (which reads them) — avoids a circular dependency between the
 // two hooks (useMetronome needs the detected grid; useSongAnalysis needs
-// useMetronome's setBpm).
+// useMetronome's setBpm). Returns the song's detected chords ([] until known).
 export default function useSongAnalysis(
   urls: Record<string, string>,
   stems: string[],
@@ -22,8 +23,9 @@ export default function useSongAnalysis(
   beatTimesRef: React.MutableRefObject<number[]>,
   // Receives the auto-detected bar phase (see useDownbeatShift).
   onDetectedDownbeat?: (shift: number) => void
-): void {
+): ChordChange[] {
   const detectedRef = useRef(false)
+  const [chords, setChords] = useState<ChordChange[]>([])
 
   useEffect(() => {
     if (detectedRef.current) return
@@ -40,6 +42,7 @@ export default function useSongAnalysis(
         firstBeatOffset?: number
         beatTimes?: number[]
         detectedDownbeatShift?: number
+        chords?: unknown
         _version?: number
       } | null
       if (
@@ -57,6 +60,7 @@ export default function useSongAnalysis(
         if (typeof cached.detectedDownbeatShift === 'number') {
           onDetectedDownbeat?.(cached.detectedDownbeatShift)
         }
+        setChords(validChords(cached.chords) ?? [])
         return
       }
 
@@ -73,12 +77,14 @@ export default function useSongAnalysis(
           beatTimesRef.current = smoothBeatGrid(beatTimes)
           setBpm(result.bpm)
           if (typeof result.downbeatShift === 'number') onDetectedDownbeat?.(result.downbeatShift)
+          setChords(result.chords ?? [])
           window.api.saveMeta(songDir, {
             bpm: result.bpm,
             firstBeatOffset: result.firstBeatOffset,
             beatTimes,
             detectedDownbeatShift: result.downbeatShift,
             tracker: trackerOf(result),
+            chords: result.chords,
             _version: CACHE_VERSION
           })
         }
@@ -87,4 +93,6 @@ export default function useSongAnalysis(
       }
     })()
   }, [urls, stems, setBpm, firstBeatOffsetRef, originalBpmRef, beatTimesRef, onDetectedDownbeat])
+
+  return chords
 }

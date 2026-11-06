@@ -1,8 +1,9 @@
 // Serial task queue: runs one task at a time, deduplicates by key, and lets
 // high-priority tasks jump ahead of queued low-priority ones.
 //
-// Used for BPM detection: only one TempoCNN/TensorFlow process may run at a
-// time (several at once OOM low-RAM machines — see CLAUDE.md), the song the
+// Used for BPM detection: only one detection process may run at a time
+// (each holds ~1.4 GB of models + audio; several at once OOM low-RAM
+// machines — see CLAUDE.md), the song the
 // user just opened must not wait behind background analysis of the whole
 // library, and concurrent requests for the *same* song share one run. (The
 // previous "singleflight" handed whatever detection was in flight to every

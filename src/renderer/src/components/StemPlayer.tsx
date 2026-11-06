@@ -30,7 +30,8 @@ import {
   BPM_MAX,
   updateTimeDisplays,
   updateCursors,
-  invalidateLiveUICache
+  invalidateLiveUICache,
+  setLiveChords
 } from '../utils'
 
 interface StemPlayerProps {
@@ -162,7 +163,7 @@ function StemPlayer({
     downbeatShiftRef
   )
 
-  useSongAnalysis(
+  const chords = useSongAnalysis(
     urls,
     stems,
     setBpm,
@@ -278,6 +279,12 @@ function StemPlayer({
   useEffect(() => {
     invalidateLiveUICache()
   }, [stemItems])
+
+  // Runs after the chord display has rendered, so it starts on the right chord.
+  useEffect(() => {
+    setLiveChords(chords)
+    updateTimeDisplays(positionRef.current)
+  }, [chords, positionRef])
 
   const {
     stemWaves,
@@ -835,6 +842,7 @@ function StemPlayer({
             masterWaveDuration={masterWaveDuration}
             duration={duration}
             masterWaveContainerRef={masterWaveContainer}
+            hasChords={chords.length > 0}
             onSetLoopStart={handleSetLoopStart}
             onSetLoopEnd={handleSetLoopEnd}
             onToggleLoop={handleToggleLoop}

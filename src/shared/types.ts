@@ -88,6 +88,12 @@ export type UpdateStatus =
   | { state: 'downloading'; version: string; percent: number }
   | { state: 'ready'; version: string }
 
+/** A chord starting at `time` (seconds) and lasting until the next one; 'N' = no chord. */
+export interface ChordChange {
+  time: number
+  chord: string
+}
+
 export interface BpmDetectionResult {
   bpm: number
   firstBeatOffset: number
@@ -97,8 +103,11 @@ export interface BpmDetectionResult {
   downbeatShift?: number
   downbeatConfidence?: number
   // 'beat_this' when the Beat This! tracker produced the grid; absent when
-  // detection fell back to TempoCNN + librosa (or ran with a bpm hint).
+  // detection fell back to librosa (or ran with a bpm hint).
   tracker?: 'beat_this'
+  // Chord at each change on the beat grid (python-worker/chords.py); absent
+  // when chord detection failed or didn't run (bpm-hint re-detection).
+  chords?: ChordChange[]
 }
 
 export interface VelodyAPI {
@@ -155,7 +164,7 @@ export interface VelodyAPI {
   detectBpm: (
     stemPath: string,
     // Re-runs beat tracking at a caller-supplied tempo instead of
-    // TempoCNN's own estimate — used to correct a tempo-octave detection
+    // detecting it — used to correct a tempo-octave detection
     // error while keeping the beat grid onset-aligned to the real audio.
     // See add-tempo-octave-correction.
     bpmHint?: number

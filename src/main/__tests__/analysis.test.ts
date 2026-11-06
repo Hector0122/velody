@@ -4,6 +4,7 @@ import { ANALYSIS_CACHE_VERSION, needsAnalysis, trackerOf } from '../../shared/a
 const current = (tracker?: string): Record<string, unknown> => ({
   bpm: 120,
   _version: ANALYSIS_CACHE_VERSION,
+  chords: [{ time: 0.5, chord: 'Em' }],
   ...(tracker ? { tracker } : {})
 })
 
@@ -16,6 +17,13 @@ describe('needsAnalysis', () => {
   it("never redoes a Beat This! grid or the user's tempo correction", () => {
     expect(needsAnalysis(current('beat_this'), true)).toBe(false)
     expect(needsAnalysis(current('corrected'), true)).toBe(false)
+  })
+
+  it('redoes a song whose chords are missing once the models are available', () => {
+    const { chords: _chords, ...noChords } = current('beat_this')
+    void _chords
+    expect(needsAnalysis(noChords, false)).toBe(false)
+    expect(needsAnalysis(noChords, true)).toBe(true)
   })
 
   it('analyzes songs without a current cache', () => {

@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """Beat grid via the Beat This! neural tracker on the song's stem mix; falls
-back to TempoCNN + librosa (drums stem) when it's unavailable.
+back to librosa's beat tracker (drums stem) when it's unavailable.
 
 Usage:
     python detect_bpm.py <audio_file> [--ffmpeg-path <path>]
 
 Output:
     {"bpm": 128.5, "firstBeatOffset": 0.12, "beatTimes": [0.12, 0.59, ...],
-     "downbeatShift": 2, "downbeatConfidence": 0.4}   # downbeat* only when stems are found
+     "downbeatShift": 2, "downbeatConfidence": 0.4,   # downbeat* only when stems are found
+     "chords": [{"time": 0.12, "chord": "Em"}, ...]}  # chords only when detection worked
     or {"error": "..."}
 """
 
@@ -76,12 +77,25 @@ def drop_doubled_beats(beats: list) -> list:
     return kept
 
 
-def _beat_this_grid(audio_file: str):
+def _with_chords(result: dict, audio_file: str, mix=None) -> dict:
+    """Adds `chords` ([{time, chord}] at each change, see chords.py) on the
+    result's beat grid. Best-effort like the downbeat: on any failure (model
+    not downloadable offline, …) they're just left out."""
+    if len(result.get('beatTimes', [])) < 2:
+        return result
+    try:
+        from chords import detect_chords
+        y = mix if mix is not None else _song_mix(audio_file)
+        result['chords'] = detect_chords(y, result['beatTimes'])
+    except Exception as e:
+        print(f'[detect_bpm] chord detection failed: {e}', file=sys.stderr)
+    return result
+
+
+def _beat_this_grid(mix, sr: int = 22050):
     """Follows tempo changes the drums stem can't show (a slower intro before
     the drums enter). Raises ImportError when beat_this isn't installed."""
     from beat_this.inference import Audio2Beats
-    sr = 22050
-    mix = _song_mix(audio_file, sr)
     # The checkpoint (77 MB) is downloaded once to the torch hub cache.
     with contextlib.redirect_stdout(sys.stderr):
         beats, _ = Audio2Beats(checkpoint_path='final0', device='cpu', dbn=False)(mix, sr)
@@ -142,36 +156,28 @@ def detect_bpm(audio_file: str, ffmpeg_path: str = 'ffmpeg', bpm_hint: float = N
             return _no_grid(bpm_hint)
         return _with_downbeat(_beat_track_result(tempo_librosa, beat_frames, sr), audio_file, y)
 
+    mix = None
     try:
-        result = _beat_this_grid(audio_file)
+        mix = _song_mix(audio_file)
+        result = _beat_this_grid(mix)
         if result:
-            return _with_downbeat(result, audio_file, None)
+            return _with_chords(_with_downbeat(result, audio_file, None), audio_file, mix)
     except Exception as e:  # not installed, offline first run, decode error…
-        print(f'[detect_bpm] Beat This unavailable ({e}); using TempoCNN + librosa',
-              file=sys.stderr)
+        print(f'[detect_bpm] Beat This unavailable ({e}); using librosa', file=sys.stderr)
 
-    from tempocnn.classifier import TempoClassifier
-    from tempocnn.feature import read_features
-
-    # Keras prints a progress bar to stdout during predict(); keep stdout for
-    # the JSON result only (the protocol callers parse).
-    with contextlib.redirect_stdout(sys.stderr):
-        classifier = TempoClassifier('cnn')
-        features = read_features(audio_file, frames=256, hop_length=32)
-        tempo = classifier.estimate_tempo(features, interpolate=True)
-
-    try:
-        import librosa
-        y, sr = librosa.load(audio_file, sr=22050, mono=True)
-        tempo_librosa, beat_frames = librosa.beat.beat_track(y=y, sr=sr, bpm=tempo)
-        # No onsets to track (e.g. sustained, beatless audio): librosa reports
-        # tempo 0 — keep TempoCNN's estimate instead of a 0 BPM, just without
-        # a beat grid.
-        if len(beat_frames) == 0:
-            return _no_grid(tempo)
-        return _with_downbeat(_beat_track_result(tempo_librosa, beat_frames, sr), audio_file, y)
-    except ImportError:
-        return _no_grid(tempo)
+    # Fallback: librosa's own tempo estimate + beat tracker on the drums stem.
+    # (TempoCNN used to provide the tempo prior here; it pulled in ~2 GB of
+    # TensorFlow for a path only taken when Beat This! can't run. A tempo-
+    # octave error here is fixable with the x2 / /2 buttons.)
+    import librosa
+    y, sr = librosa.load(audio_file, sr=22050, mono=True)
+    tempo, beat_frames = librosa.beat.beat_track(y=y, sr=sr)
+    # No onsets to track (sustained, beatless audio): no grid, and a 0 BPM,
+    # which the app treats as a failed detection (never cached, retried).
+    if len(beat_frames) == 0:
+        return _no_grid(float(np.atleast_1d(tempo)[0]))
+    result = _with_downbeat(_beat_track_result(tempo, beat_frames, sr), audio_file, y)
+    return _with_chords(result, audio_file, mix)
 
 
 if __name__ == '__main__':
