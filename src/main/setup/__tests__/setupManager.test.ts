@@ -124,8 +124,8 @@ describe('SetupManager verification concurrency', () => {
 
     void (manager as unknown as { checkDemucs: () => Promise<boolean> }).checkDemucs()
 
-    // demucs, torch, torchaudio, tempocnn, librosa, yt-dlp
-    expect(execFileMock).toHaveBeenCalledTimes(6)
+    // demucs, torch, torchaudio, tempocnn, librosa, yt-dlp, beat-this
+    expect(execFileMock).toHaveBeenCalledTimes(7)
   })
 })
 

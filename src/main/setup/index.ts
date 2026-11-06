@@ -25,6 +25,7 @@ const VENV_PIP = join(VENV_DIR, isWin ? 'Scripts' : 'bin', isWin ? 'pip.exe' : '
 const FFMPEG_DIR = join(DATA_DIR, 'ffmpeg')
 const FFMPEG_BIN = join(FFMPEG_DIR, 'bin', isWin ? 'ffmpeg.exe' : 'ffmpeg')
 
+const PY_PKGS = ['demucs', 'torch', 'torchaudio', 'tempocnn', 'librosa', 'yt-dlp', 'beat-this']
 const STEPS = ['python', 'venv', 'demucs', 'ffmpeg'] as const
 
 const STANDALONE_DIR = join(DATA_DIR, 'python')
@@ -38,7 +39,7 @@ const HELP: Record<string, string> = isWin
         'Compatible Python (3.9-3.11) not found.\nDownload and install Python from:\nhttps://python.org/downloads/\nMake sure to check "Add Python to PATH" during installation.',
       venv: 'Failed to create virtual environment.',
       demucs:
-        'Failed to install dependencies.\nTry running manually:\n  python -m pip install demucs torch torchaudio tempocnn librosa yt-dlp',
+        'Failed to install dependencies.\nTry running manually:\n  python -m pip install demucs torch torchaudio tempocnn librosa yt-dlp beat-this',
       ffmpeg:
         'FFmpeg not found.\nDownload FFmpeg from:\nhttps://ffmpeg.org/download.html\nOr install with winget:\n  winget install ffmpeg'
     }
@@ -46,7 +47,7 @@ const HELP: Record<string, string> = isWin
       python:
         'Compatible Python (3.9-3.11) not found.\nInstall Python 3.11:\n  brew install python@3.11\nor download from:\n  https://www.python.org/downloads/',
       venv: 'Failed to create virtual environment.',
-      demucs: `Failed to install dependencies.\nTry running manually:\n  python3 -m venv ${VENV_DIR}\n  ${VENV_DIR}/bin/pip install demucs torch torchaudio tempocnn librosa yt-dlp`,
+      demucs: `Failed to install dependencies.\nTry running manually:\n  python3 -m venv ${VENV_DIR}\n  ${VENV_DIR}/bin/pip install demucs torch torchaudio tempocnn librosa yt-dlp beat-this`,
       ffmpeg: 'FFmpeg not found.\nInstall FFmpeg:\n  brew install ffmpeg'
     }
 
@@ -248,13 +249,16 @@ export class SetupManager {
     }
   }
 
-  private async checkDemucs(): Promise<boolean> {
+  private async missingPkgs(): Promise<string[]> {
     const python = this.getPythonPath()
-    const pkgs = ['demucs', 'torch', 'torchaudio', 'tempocnn', 'librosa', 'yt-dlp']
     const results = await Promise.all(
-      pkgs.map((pkg) => this.tryCmd(`${python} -m pip show ${pkg}`))
+      PY_PKGS.map((pkg) => this.tryCmd(`${python} -m pip show ${pkg}`))
     )
-    return results.every(Boolean)
+    return PY_PKGS.filter((_, i) => !results[i])
+  }
+
+  private async checkDemucs(): Promise<boolean> {
+    return (await this.missingPkgs()).length === 0
   }
 
   private isVenvCompatible(): Promise<boolean> {
@@ -357,7 +361,10 @@ export class SetupManager {
 
   private async installDemucs(): Promise<boolean> {
     const pip = existsSync(VENV_PIP) ? VENV_PIP : this.getPythonPath()
-    const pkgs = ['demucs', 'torch', 'torchaudio', 'tempocnn', 'librosa', 'yt-dlp']
+    // Only what's missing: an existing install that lacks a newly added package
+    // (beat-this) shouldn't re-download/upgrade torch & co.
+    const missing = await this.missingPkgs()
+    const pkgs = missing.length > 0 ? missing : PY_PKGS
     const args = existsSync(VENV_PIP)
       ? ['install', '--upgrade', ...pkgs]
       : ['-m', 'pip', 'install', '--upgrade', ...pkgs]

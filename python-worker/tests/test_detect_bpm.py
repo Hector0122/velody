@@ -195,5 +195,13 @@ class TestBpmHint:
         assert len(data['beatTimes']) > 5
 
 
+def test_drop_doubled_beats_removes_an_extra_beat_between_two_real_ones():
+    from detect_bpm import drop_doubled_beats
+    # Zombie's intro as Beat This returns it: an extra beat at 6.5 s.
+    beats = [4.44, 5.28, 6.08, 6.5, 6.9, 7.72, 8.52, 9.32, 10.14]
+    assert drop_doubled_beats(beats) == [4.44, 5.28, 6.08, 6.9, 7.72, 8.52, 9.32, 10.14]
+    assert drop_doubled_beats([0.0, 0.5, 1.0, 1.5]) == [0.0, 0.5, 1.0, 1.5]
+
+
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])

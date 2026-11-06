@@ -1,5 +1,5 @@
-import { app, shell, BrowserWindow, ipcMain } from 'electron'
-import { join } from 'path'
+import { app, BrowserWindow, ipcMain } from 'electron'
+import { dirname, join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import {
   registerIpcHandlers,
@@ -12,6 +12,8 @@ import { JobManager } from './jobs/JobManager'
 import { startAudioServer, stopAudioServer, audioUrl } from './audio-server'
 import { initAutoUpdater } from './updater'
 import { setupCloud } from './cloud/ipc'
+import { openExternalUrl } from './paths'
+import { updateMeta } from './songMeta'
 
 let mainWindow: BrowserWindow | null = null
 let setupManager: SetupManager | null = null
@@ -40,7 +42,7 @@ function createWindow(): void {
   })
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
-    shell.openExternal(details.url)
+    void openExternalUrl(details.url)
     return { action: 'deny' }
   })
 
@@ -97,7 +99,14 @@ app.whenReady().then(async () => {
   // Pre-analyze songs (BPM, beat grid, downbeat) in the background so they
   // open instantly: shortly after launch, and after every new separation.
   setTimeout(requestLibraryAnalysis, 10_000)
-  jobManager.onJobCompleted(() => requestLibraryAnalysis())
+  jobManager.onJobCompleted((stems) => {
+    // The stems may replace an older song of the same name: its cached
+    // analysis (BPM, beat grid) no longer applies, so have it re-detected.
+    const invalidate = stems[0]
+      ? updateMeta(dirname(stems[0]), { _version: 0 }, { touch: false })
+      : Promise.resolve()
+    invalidate.catch((err) => console.error('[jobCompleted]', err)).finally(requestLibraryAnalysis)
+  })
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()

@@ -1,21 +1,19 @@
 import { useState, useCallback } from 'react'
 import { stemNameFromPath, extForFormat, formatFilter } from '../utils'
-import type { ClickPreset } from './clickPresets'
+import type { ExportResult } from '../../../shared/types'
 
 interface UseExportStateParams {
   allStems: string[]
   songName: string
-  bpm: number
+  /** The live metronome's clicks over the song (metronomeClicks), read at export time. */
+  getClicks: () => { time: number; accent: boolean }[]
   stemMeta: Record<string, { color: string; label: string }>
   // Song's current trim range (see openspec/changes/add-song-trim-points) —
   // applied by default to both single-stem and mix exports, so an exported
   // file matches the trimmed range the user hears live.
   trimStart: number
   trimEnd: number | null
-  // Currently selected metronome click preset (see openspec/changes/
-  // add-metronome-click-sounds) — applied to the exported click track by
-  // default, so it matches what the user hears live.
-  clickPreset: ClickPreset
+  onToast?: (message: string, type?: 'error' | 'success') => void
 }
 
 interface UseExportStateReturn {
@@ -35,17 +33,33 @@ interface UseExportStateReturn {
 export function useExportState({
   allStems,
   songName,
-  bpm,
+  getClicks,
   stemMeta,
   trimStart,
   trimEnd,
-  clickPreset
+  onToast
 }: UseExportStateParams): UseExportStateReturn {
   const [showExportModal, setShowExportModal] = useState(false)
   const [exportSelection, setExportSelection] = useState<Record<string, boolean>>({})
   const [exportFormat, setExportFormat] = useState<'wav' | 'mp3'>('wav')
   const [exportWithMetronome, setExportWithMetronome] = useState(false)
   const [exporting, setExporting] = useState(false)
+
+  // Runs one export, always clears the "Exporting..." state and reports failures.
+  const runExport = useCallback(
+    async (run: () => Promise<ExportResult>): Promise<void> => {
+      setExporting(true)
+      try {
+        const result = await run()
+        if (!result.success) onToast?.(`Export failed: ${result.error ?? 'unknown error'}`, 'error')
+      } catch (err) {
+        onToast?.(`Export failed: ${err instanceof Error ? err.message : String(err)}`, 'error')
+      } finally {
+        setExporting(false)
+      }
+    },
+    [onToast]
+  )
 
   const handleExportSingle = useCallback(
     async (key: string): Promise<void> => {
@@ -58,18 +72,18 @@ export function useExportState({
         [formatFilter(exportFormat)]
       )
       if (!outPath) return
-      setExporting(true)
       const trimOptions: { trimStart?: number; trimEnd?: number } = {}
       if (trimStart > 0) trimOptions.trimStart = trimStart
       if (trimEnd !== null) trimOptions.trimEnd = trimEnd
-      await window.api.exportSingle(
-        stemPath,
-        outPath,
-        Object.keys(trimOptions).length > 0 ? trimOptions : undefined
+      await runExport(() =>
+        window.api.exportSingle(
+          stemPath,
+          outPath,
+          Object.keys(trimOptions).length > 0 ? trimOptions : undefined
+        )
       )
-      setExporting(false)
     },
-    [allStems, songName, exportFormat, stemMeta, trimStart, trimEnd]
+    [allStems, songName, exportFormat, stemMeta, trimStart, trimEnd, runExport]
   )
 
   const handleExportMix = useCallback(async (): Promise<void> => {
@@ -86,35 +100,23 @@ export function useExportState({
       [formatFilter(exportFormat)]
     )
     if (!outPath) return
-    setExporting(true)
-    const options: {
-      bpm?: number
-      trimStart?: number
-      trimEnd?: number
-      clickPreset?: ClickPreset
-    } = {}
-    if (exportWithMetronome) {
-      options.bpm = bpm
-      options.clickPreset = clickPreset
-    }
+    const options: Parameters<typeof window.api.exportMix>[2] = {}
+    if (exportWithMetronome) options.clicks = getClicks()
     if (trimStart > 0) options.trimStart = trimStart
     if (trimEnd !== null) options.trimEnd = trimEnd
-    await window.api.exportMix(
-      paths,
-      outPath,
-      Object.keys(options).length > 0 ? options : undefined
+    await runExport(() =>
+      window.api.exportMix(paths, outPath, Object.keys(options).length > 0 ? options : undefined)
     )
-    setExporting(false)
   }, [
     exportSelection,
     allStems,
     songName,
     exportFormat,
     exportWithMetronome,
-    bpm,
+    getClicks,
     trimStart,
     trimEnd,
-    clickPreset
+    runExport
   ])
 
   const toggleExportSelection = useCallback((key: string): void => {

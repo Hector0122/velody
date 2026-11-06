@@ -25,21 +25,17 @@ export function isConstantAccent(beat: number, shift: number): boolean {
 }
 
 /**
- * Beat spacing of the detected grid at its start or end, used to extrapolate
- * beats before/after it. The song's rounded BPM drifts hundreds of ms over a
- * long intro (e.g. 124 bpm vs a real 487.6 ms grid), putting clicks off-beat.
+ * Beat spacing used to extrapolate beats before/after the detected grid: the
+ * median gap of the whole grid. The song's rounded BPM drifts hundreds of ms
+ * over a long intro (e.g. 124 bpm vs a real 487.6 ms grid), and so does the
+ * grid's edge — beats where the drums enter are often a fill (Zombie: 0.743 s
+ * there vs 0.720 s for the song, half a beat off by the start of the intro).
  */
-export function gridEdgeInterval(
-  beatTimes: number[],
-  edge: 'start' | 'end',
-  fallback: number
-): number {
-  const n = Math.min(8, beatTimes.length - 1)
-  if (n < 1) return fallback
-  const s = edge === 'start' ? beatTimes.slice(0, n + 1) : beatTimes.slice(-n - 1)
-  const gaps = s
+export function medianBeatGap(beatTimes: number[], fallback: number): number {
+  if (beatTimes.length < 2) return fallback
+  const gaps = beatTimes
     .slice(1)
-    .map((t, i) => t - s[i])
+    .map((t, i) => t - beatTimes[i])
     .sort((a, b) => a - b)
   return gaps[gaps.length >> 1]
 }
@@ -94,11 +90,12 @@ export function downbeatShiftAt(
     const first = beatTimes[0]
     const lastIdx = beatTimes.length - 1
     const last = beatTimes[lastIdx]
+    const gap = medianBeatGap(beatTimes, interval)
     let idx: number
     if (t <= first) {
-      idx = Math.round((t - first) / gridEdgeInterval(beatTimes, 'start', interval))
+      idx = Math.round((t - first) / gap)
     } else if (t >= last) {
-      idx = lastIdx + Math.round((t - last) / gridEdgeInterval(beatTimes, 'end', interval))
+      idx = lastIdx + Math.round((t - last) / gap)
     } else {
       let lo = 0
       let hi = lastIdx
@@ -148,14 +145,13 @@ export function planCountIn(opts: {
     const first = beatTimes[0]
     const lastIdx = beatTimes.length - 1
     const last = beatTimes[lastIdx]
-    const before = gridEdgeInterval(beatTimes, 'start', interval)
-    const after = gridEdgeInterval(beatTimes, 'end', interval)
+    const gap = medianBeatGap(beatTimes, interval)
     beatAt = (i) =>
-      i < 0 ? first + i * before : i > lastIdx ? last + (i - lastIdx) * after : beatTimes[i]
+      i < 0 ? first + i * gap : i > lastIdx ? last + (i - lastIdx) * gap : beatTimes[i]
     if (position <= first) {
-      entry = Math.ceil((position - first) / before - 1e-9)
+      entry = Math.ceil((position - first) / gap - 1e-9)
     } else if (position > last) {
-      entry = lastIdx + Math.ceil((position - last) / after - 1e-9)
+      entry = lastIdx + Math.ceil((position - last) / gap - 1e-9)
     } else {
       let lo = 0
       let hi = lastIdx
@@ -175,6 +171,47 @@ export function planCountIn(opts: {
   const clicks: CountInClick[] = []
   for (let j = 0; j < total; j++) {
     clicks.push({ songTime: beatAt(entry - total + j), accent: j % BEATS_PER_BAR === 0 })
+  }
+  return clicks
+}
+
+/**
+ * Every click the live metronome plays over [0, duration] (same grid,
+ * extrapolation and accents as useMetronome), so an exported mix's baked-in
+ * click matches what's heard live.
+ */
+export function metronomeClicks(opts: {
+  beatTimes: number[]
+  usingGrid: boolean
+  bpm: number
+  firstBeatOffset: number
+  shift: number
+  duration: number
+}): { time: number; accent: boolean }[] {
+  const { beatTimes, bpm, duration, shift } = opts
+  const clicks: { time: number; accent: boolean }[] = []
+  if (!(bpm > 0) || !Number.isFinite(duration)) return clicks
+  if (opts.usingGrid && beatTimes.length > 0) {
+    const gap = medianBeatGap(beatTimes, 60 / bpm)
+    const first = beatTimes[0]
+    const lastIdx = beatTimes.length - 1
+    for (let i = -Math.floor(first / gap); ; i++) {
+      const time =
+        i < 0
+          ? first + i * gap
+          : i > lastIdx
+            ? beatTimes[lastIdx] + (i - lastIdx) * gap
+            : beatTimes[i]
+      if (time > duration) break
+      clicks.push({ time, accent: isGridAccent(i, shift) })
+    }
+  } else {
+    // Constant-tempo mode numbers beats from 1, one interval after the offset.
+    for (let b = 1; ; b++) {
+      const time = opts.firstBeatOffset + (b * 60) / bpm
+      if (time > duration) break
+      clicks.push({ time, accent: isConstantAccent(b, shift) })
+    }
   }
   return clicks
 }

@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useCallback, useLayoutEffect } from 'react'
 import useLocalStoragePreference from './useLocalStoragePreference'
 import { CLICK_PRESETS } from './clickPresets'
-import { gridEdgeInterval, isConstantAccent, isGridAccent } from './downbeat'
+import { medianBeatGap, isConstantAccent, isGridAccent } from './downbeat'
 
 const LOOKAHEAD = 0.3
 
@@ -256,7 +256,7 @@ export function useMetronome(
   // seamless — no separate branch, no double-scheduling at the boundary.
   const scheduleFromGrid = useCallback(
     (ctx: AudioContext, t: number, beatTimes: number[], bpmValue: number): void => {
-      const interval = gridEdgeInterval(beatTimes, 'start', 60 / bpmValue)
+      const interval = medianBeatGap(beatTimes, 60 / bpmValue)
       const beatTimeAt = (i: number): number => (i < 0 ? beatTimes[0] + i * interval : beatTimes[i])
 
       let idx =
@@ -284,7 +284,7 @@ export function useMetronome(
         const lastIdx = beatTimes.length - 1
         const lastTime = beatTimes[lastIdx]
         const tAdj = t - lastTime
-        const after = gridEdgeInterval(beatTimes, 'end', 60 / bpmValue)
+        const after = medianBeatGap(beatTimes, 60 / bpmValue)
         let n = Math.max(Math.floor(tAdj / after) + 1, lastScheduledBeatRef.current - lastIdx + 1)
 
         while (n * after - tAdj < LOOKAHEAD) {

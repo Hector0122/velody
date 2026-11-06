@@ -1,20 +1,21 @@
-import { ipcMain, dialog, shell, app, BrowserWindow } from 'electron'
+import { ipcMain, dialog, BrowserWindow } from 'electron'
 import { spawn, execFile } from 'child_process'
+import { createInterface } from 'readline'
 import { join, dirname } from 'path'
 import { tmpdir } from 'os'
-import { createWriteStream } from 'fs'
 import { writeFile, readFile, rm, readdir, stat, mkdtemp, access, rename } from 'fs/promises'
 import { constants } from 'fs'
 import crypto from 'crypto'
 import { SetupManager } from '../setup'
 import { JobManager } from '../jobs/JobManager'
-import { getStemsRootDir } from '../paths'
+import { getPythonWorkerDir, getStemsRootDir, isInsideDir, openExternalUrl } from '../paths'
 import { SerialTaskQueue } from '../taskQueue'
 import { readMeta, updateMeta } from '../songMeta'
 import {
   ANALYSIS_CACHE_VERSION,
   hasCurrentAnalysis,
-  pickBeatTrackingStem
+  pickBeatTrackingStem,
+  STEM_NAMES
 } from '../../shared/analysis'
 import type { BpmDetectionResult, SongItem, StemBitrate } from '../../shared/types'
 
@@ -39,8 +40,6 @@ let startLibraryAnalysis: (() => void) | null = null
 export function requestLibraryAnalysis(): void {
   startLibraryAnalysis?.()
 }
-
-const STEM_NAMES = ['vocals', 'drums', 'bass', 'other', 'piano', 'guitar']
 
 let setupManager: SetupManager | null = null
 let jobManager: JobManager | null = null
@@ -93,22 +92,10 @@ export function trimOutputArgs(trimStart?: number, trimEnd?: number): string[] {
 // independent from the renderer's ClickPreset type rather than shared — the
 // two implementations (Web Audio vs. raw PCM) are unrelated code with no
 // common runtime.
-type ClickTrackPreset = 'woodblock'
 
-// `beatPos` is a *signed* offset from the nearest beat (see the caller:
-// `t - Math.round(t / beatInterval) * beatInterval`), so it's negative for
-// roughly the second half of every beat interval (samples closer to the
-// *next* beat than the previous one). Requires `beatPos >= 0` in addition
-// to the upper bound — omitting the lower bound (a bug present in the
-// original pre-add-metronome-click-sounds math, fixed here rather than
-// preserved) would otherwise trigger the click branch across that entire
-// negative half with an unbounded, clipping `(1 - phase)` envelope for very
-// negative `beatPos`. Tone + noise-burst gain balance matches the
-// renderer's woodblock (see clickPresets.ts's `woodblock`/`playNoiseBurst`
-// — a boosted-gain-only tone still read as too soft/dull to cut through a
-// live mix, so a brief noise transient was added and the budget rebalanced
-// between the two rather than just raising raw gain further) so an
-// exported mix's baked-in click matches what's heard live.
+// `beatPos` is the offset from the click's time; anything outside [0, 30 ms)
+// is silence. Tone + noise-burst gain balance matches the renderer's
+// woodblock (clickPresets.ts) so an exported click sounds like the live one.
 export function clickSampleValue(beatPos: number, accent: boolean): number {
   const decay = 0.03
   let sample = 0
@@ -182,13 +169,6 @@ export function pruneSongFromSetlists(
   return { pruned, changed }
 }
 
-function getPythonWorkerDir(): string {
-  if (app.isPackaged) {
-    return join(process.resourcesPath, 'python-worker')
-  }
-  return join(__dirname, '../../python-worker')
-}
-
 function getFfprobePath(): string {
   const ffmpeg = setupManager?.getFfmpegPath()
   if (ffmpeg && ffmpeg !== 'ffmpeg') {
@@ -246,7 +226,7 @@ export async function scanSongsLibrary(root: string): Promise<SongItem[]> {
 }
 
 export function registerIpcHandlers(): void {
-  ipcMain.handle('shell:openExternal', (_event, url: string) => shell.openExternal(url))
+  ipcMain.handle('shell:openExternal', (_event, url: string) => openExternalUrl(url))
 
   ipcMain.handle('songs:list', async (): Promise<SongItem[]> => {
     // With cloud sync on, the list also carries cloud-only songs and each
@@ -267,7 +247,10 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle('song:delete', async (_event, songName: string) => {
     const dir = join(getStemsRootDir(), songName)
-    if (!(await fileExists(dir))) return { success: false, error: 'Song not found' }
+    // Renderer input: never delete outside the library (or the library itself).
+    if (!isInsideDir(dir, getStemsRootDir()) || !(await fileExists(dir))) {
+      return { success: false, error: 'Song not found' }
+    }
     await rm(dir, { recursive: true, force: true })
 
     // Prune the deleted song from every setlist that referenced it, so
@@ -460,99 +443,79 @@ export function registerIpcHandlers(): void {
     }
   )
 
-  // Async click track generation — yields to event loop between chunks
-  async function generateClickTrackWavAsync(
+  // The metronome as a mono 16-bit WAV: silence with a click at each of the
+  // renderer's click times (metronomeClicks — the same grid as the live one).
+  async function writeClickTrackWav(
     filePath: string,
-    bpm: number,
+    clicks: { time: number; accent: boolean }[],
     durationSec: number,
     sampleRate = 44100
   ): Promise<void> {
     const totalSamples = Math.floor(sampleRate * durationSec)
-    const beatInterval = 60 / bpm
-
-    // Write WAV header
-    const header = Buffer.alloc(44)
-    header.write('RIFF', 0)
-    header.writeUInt32LE(36 + totalSamples * 2, 4)
-    header.write('WAVE', 8)
-    header.write('fmt ', 12)
-    header.writeUInt32LE(16, 16)
-    header.writeUInt16LE(1, 20)
-    header.writeUInt16LE(1, 22)
-    header.writeUInt32LE(sampleRate, 24)
-    header.writeUInt32LE(sampleRate * 2, 28)
-    header.writeUInt16LE(2, 32)
-    header.writeUInt16LE(16, 34)
-    header.write('data', 36)
-    header.writeUInt32LE(totalSamples * 2, 40)
-
-    const writeStream = createWriteStream(filePath)
-    writeStream.write(header)
-
-    const CHUNK = 44100 // 1 second per chunk
-    let offset = 0
-
-    return new Promise<void>((resolve, reject) => {
-      const processChunk = (): void => {
-        const end = Math.min(offset + CHUNK, totalSamples)
-        const len = end - offset
-        const buf = Buffer.alloc(len * 2)
-
-        for (let i = 0; i < len; i++) {
-          const t = (offset + i) / sampleRate
-          const beatNum = Math.round(t / beatInterval)
-          const beatPos = t - beatNum * beatInterval
-          const sample = clickSampleValue(beatPos, beatNum % 4 === 0)
-          const intSample = Math.max(-32768, Math.min(32767, Math.floor(sample * 32767)))
-          buf.writeInt16LE(intSample, i * 2)
-        }
-
-        writeStream.write(buf)
-        offset = end
-
-        if (offset < totalSamples) {
-          setImmediate(processChunk)
-        } else {
-          writeStream.end()
-          resolve()
-        }
+    const clickSamples = Math.ceil(sampleRate * 0.03) // clickSampleValue's 30 ms decay
+    const wav = Buffer.alloc(44 + totalSamples * 2)
+    wav.write('RIFF', 0)
+    wav.writeUInt32LE(36 + totalSamples * 2, 4)
+    wav.write('WAVE', 8)
+    wav.write('fmt ', 12)
+    wav.writeUInt32LE(16, 16)
+    wav.writeUInt16LE(1, 20)
+    wav.writeUInt16LE(1, 22)
+    wav.writeUInt32LE(sampleRate, 24)
+    wav.writeUInt32LE(sampleRate * 2, 28)
+    wav.writeUInt16LE(2, 32)
+    wav.writeUInt16LE(16, 34)
+    wav.write('data', 36)
+    wav.writeUInt32LE(totalSamples * 2, 40)
+    for (const { time, accent } of clicks) {
+      const first = Math.ceil(time * sampleRate)
+      for (let i = Math.max(0, first); i < Math.min(totalSamples, first + clickSamples); i++) {
+        const sample = clickSampleValue(i / sampleRate - time, accent)
+        wav.writeInt16LE(Math.max(-32768, Math.min(32767, Math.floor(sample * 32767))), 44 + i * 2)
       }
-
-      writeStream.on('error', reject)
-      setImmediate(processChunk)
-    })
+    }
+    await writeFile(filePath, wav)
   }
 
   async function getLongestDuration(filePaths: string[]): Promise<number> {
-    let maxDur = 0
-    for (const fp of filePaths) {
-      try {
-        const out = await new Promise<string>((resolve, reject) => {
-          execFile(
-            getFfprobePath(),
-            [
-              '-v',
-              'error',
-              '-show_entries',
-              'format=duration',
-              '-of',
-              'default=noprint_wrappers=1:nokey=1',
-              fp
-            ],
-            { timeout: 5000 },
-            (err, stdout) => {
-              if (err) reject(err)
-              else resolve(stdout)
-            }
-          )
-        })
-        const d = parseFloat(out.trim())
-        if (d > maxDur) maxDur = d
-      } catch (err) {
-        console.error('[song:getDuration]', err)
-      }
-    }
-    return maxDur || 60
+    const durations = await Promise.all(
+      filePaths.map(
+        (fp) =>
+          new Promise<number>((resolve) => {
+            execFile(
+              getFfprobePath(),
+              ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', fp],
+              { timeout: 5000 },
+              (err, stdout) => {
+                if (err) console.error('[song:getDuration]', err)
+                resolve(err ? 0 : parseFloat(stdout.trim()) || 0)
+              }
+            )
+          })
+      )
+    )
+    return Math.max(0, ...durations) || 60
+  }
+
+  // Runs FFmpeg (10 min limit); the error is the end of its stderr, where
+  // FFmpeg puts the actual failure (the start is just its version banner).
+  function runFfmpeg(args: string[]): Promise<{ success: boolean; error?: string }> {
+    return new Promise((resolve) => {
+      const proc = spawn(setupManager?.getFfmpegPath() ?? 'ffmpeg', args)
+      const timeout = setTimeout(() => proc.kill('SIGTERM'), 600_000)
+      let stderr = ''
+      proc.stderr.on('data', (data: Buffer) => {
+        stderr = (stderr + data.toString()).slice(-2000)
+      })
+      proc.on('close', (code) => {
+        clearTimeout(timeout)
+        resolve(code === 0 ? { success: true } : { success: false, error: stderr.slice(-500) })
+      })
+      proc.on('error', (err) => {
+        clearTimeout(timeout)
+        resolve({ success: false, error: err.message })
+      })
+    })
   }
 
   ipcMain.handle(
@@ -562,77 +525,43 @@ export function registerIpcHandlers(): void {
       filePaths: string[],
       outputPath: string,
       options?: {
-        bpm?: number
+        clicks?: { time: number; accent: boolean }[]
         trimStart?: number
         trimEnd?: number
-        clickPreset?: ClickTrackPreset
       }
     ) => {
-      const ffmpeg = setupManager?.getFfmpegPath() ?? 'ffmpeg'
+      if (filePaths.length === 0) return { success: false, error: 'No files to mix' }
       const allPaths = [...filePaths]
+      let tmpDir: string | null = null
+      try {
+        // Renderer input: keep only well-formed click times.
+        const clicks = Array.isArray(options?.clicks)
+          ? options.clicks.filter((c) => Number.isFinite(c?.time) && c.time >= 0)
+          : []
+        if (clicks.length > 0) {
+          const dur = await getLongestDuration(filePaths)
+          tmpDir = await mkdtemp(join(tmpdir(), 'velody-click-'))
+          const clickPath = join(tmpDir, 'click.wav')
+          await writeClickTrackWav(clickPath, clicks, Math.ceil(dur))
+          allPaths.push(clickPath)
+        }
 
-      if (options?.bpm) {
-        const dur = await getLongestDuration(filePaths)
-        const tmpDir = await mkdtemp(join(tmpdir(), 'velody-click-'))
-        const clickPath = join(tmpDir, 'click.wav')
-        // options.clickPreset accepted for forward-compat (there's only one
-        // click sound today — see simplify-metronome-to-woodblock-only) but
-        // not threaded through: generateClickTrackWavAsync/clickSampleValue
-        // have only the one behavior.
-        await generateClickTrackWavAsync(clickPath, options.bpm, Math.ceil(dur))
-        allPaths.push(clickPath)
+        // Every input gets the same -ss so all stems (and the synthesized
+        // click track, if present) stay time-aligned once seeked.
+        const args: string[] = []
+        for (const fp of allPaths) args.push(...trimInputArgs(options?.trimStart), '-i', fp)
+        const inputs = allPaths.map((_, i) => `[${i}:a]`).join('')
+        args.push(
+          '-filter_complex',
+          `${inputs}amix=inputs=${allPaths.length}:duration=longest`,
+          ...trimOutputArgs(options?.trimStart, options?.trimEnd),
+          '-y',
+          outputPath
+        )
+        return await runFfmpeg(args)
+      } finally {
+        if (tmpDir) await rm(tmpDir, { recursive: true, force: true }).catch(() => {})
       }
-
-      const count = allPaths.length
-      if (count === 0) return { success: false, error: 'No files to mix' }
-
-      // Every input gets the same -ss so all stems (and the synthesized
-      // click track, if present) stay time-aligned once seeked.
-      const args: string[] = []
-      for (const fp of allPaths) args.push(...trimInputArgs(options?.trimStart), '-i', fp)
-
-      const inputs = allPaths.map((_, i) => `[${i}:a]`).join('')
-      args.push(
-        '-filter_complex',
-        `${inputs}amix=inputs=${count}:duration=longest`,
-        ...trimOutputArgs(options?.trimStart, options?.trimEnd),
-        '-y',
-        outputPath
-      )
-
-      return new Promise<{ success: boolean; error?: string }>((resolve) => {
-        const proc = spawn(ffmpeg, args)
-        const timeout = setTimeout(() => proc.kill('SIGTERM'), 600_000)
-        let stderr = ''
-        proc.stderr.on('data', (data: Buffer) => {
-          stderr += data.toString()
-        })
-        proc.on('close', async (code) => {
-          clearTimeout(timeout)
-          if (options?.bpm) {
-            const td = join(allPaths[allPaths.length - 1], '..')
-            try {
-              await rm(td, { recursive: true, force: true })
-            } catch {
-              console.warn('[export:mix] temp dir cleanup failed')
-            }
-          }
-          if (code === 0) resolve({ success: true })
-          else resolve({ success: false, error: stderr.slice(0, 500) })
-        })
-        proc.on('error', async (err) => {
-          clearTimeout(timeout)
-          if (options?.bpm) {
-            const td = join(allPaths[allPaths.length - 1], '..')
-            try {
-              await rm(td, { recursive: true, force: true })
-            } catch {
-              console.warn('[export:mix] temp dir cleanup failed')
-            }
-          }
-          resolve({ success: false, error: err.message })
-        })
-      })
     }
   )
 
@@ -641,66 +570,32 @@ export function registerIpcHandlers(): void {
     async (
       _event,
       songDir: string,
-      data: number[],
+      data: Uint8Array,
       name: string,
       format: string,
       offset: number
     ) => {
       const isMp3 = format === 'mp3'
-      const ext = isMp3 ? '.mp3' : '.wav'
-      const fileName = `${name}${ext}`
-      const destPath = join(songDir, fileName)
+      const destPath = join(songDir, `${name}${isMp3 ? '.mp3' : '.wav'}`)
+      // Renderer input: recordings only ever go into a song folder.
+      if (!isInsideDir(destPath, getStemsRootDir())) {
+        return { success: false, error: 'Invalid destination' }
+      }
       const tempPath = join(songDir, `_tmp_rec_${crypto.randomUUID()}.wav`)
-      await writeFile(tempPath, Buffer.from(data))
-
-      const ffmpeg = setupManager?.getFfmpegPath() ?? 'ffmpeg'
-
-      let ffmpegArgs: string[]
-      if (offset > 0) {
-        ffmpegArgs = [
-          '-f',
-          'lavfi',
-          '-i',
-          `anullsrc=r=44100:d=${offset}`,
-          '-i',
-          tempPath,
-          '-filter_complex',
-          '[0:a][1:a]concat=n=2:v=0:a=1',
-          '-y',
-          destPath
-        ]
-      } else {
-        ffmpegArgs = ['-i', tempPath, '-y', destPath]
+      // The take starts `offset` seconds into the song: prepend that much silence.
+      const input =
+        offset > 0
+          ? ['-f', 'lavfi', '-i', `anullsrc=r=44100:d=${offset}`, '-i', tempPath]
+          : ['-i', tempPath]
+      const filter = offset > 0 ? ['-filter_complex', '[0:a][1:a]concat=n=2:v=0:a=1'] : []
+      const codec = isMp3 ? ['-c:a', 'libmp3lame'] : []
+      try {
+        await writeFile(tempPath, data)
+        const result = await runFfmpeg([...input, ...filter, ...codec, '-y', destPath])
+        return result.success ? { success: true, path: destPath } : result
+      } finally {
+        await rm(tempPath, { force: true }).catch(() => {})
       }
-
-      if (isMp3) {
-        ffmpegArgs = [...ffmpegArgs.slice(0, -2), '-c:a', 'libmp3lame', ...ffmpegArgs.slice(-2)]
-      }
-
-      return new Promise<{ success: boolean; path?: string; error?: string }>((resolve) => {
-        const proc = spawn(ffmpeg, ffmpegArgs)
-        const timeout = setTimeout(() => proc.kill('SIGTERM'), 600_000)
-        proc.stderr.on('data', () => {})
-        proc.on('close', async (code) => {
-          clearTimeout(timeout)
-          try {
-            await rm(tempPath, { force: true })
-          } catch {
-            console.warn('[record:save] temp file cleanup failed')
-          }
-          if (code === 0) resolve({ success: true, path: destPath })
-          else resolve({ success: false, error: 'Conversion failed' })
-        })
-        proc.on('error', async (err) => {
-          clearTimeout(timeout)
-          try {
-            await rm(tempPath, { force: true })
-          } catch {
-            console.warn('[record:save] temp file cleanup failed')
-          }
-          resolve({ success: false, error: err.message })
-        })
-      })
     }
   )
 
@@ -711,38 +606,19 @@ export function registerIpcHandlers(): void {
       filePath: string,
       outputPath: string,
       options?: { trimStart?: number; trimEnd?: number }
-    ) => {
-      const ffmpeg = setupManager?.getFfmpegPath() ?? 'ffmpeg'
-      const args = [
+    ) =>
+      runFfmpeg([
         ...trimInputArgs(options?.trimStart),
         '-i',
         filePath,
         ...trimOutputArgs(options?.trimStart, options?.trimEnd),
         '-y',
         outputPath
-      ]
-      return new Promise<{ success: boolean; error?: string }>((resolve) => {
-        const proc = spawn(ffmpeg, args)
-        const timeout = setTimeout(() => proc.kill('SIGTERM'), 600_000)
-        let stderr = ''
-        proc.stderr.on('data', (data: Buffer) => {
-          stderr += data.toString()
-        })
-        proc.on('close', (code) => {
-          clearTimeout(timeout)
-          if (code === 0) resolve({ success: true })
-          else resolve({ success: false, error: stderr.slice(0, 500) })
-        })
-        proc.on('error', (err) => {
-          clearTimeout(timeout)
-          resolve({ success: false, error: err.message })
-        })
-      })
-    }
+      ])
   )
 
   ipcMain.handle('file:delete', async (_event, filePath: string) => {
-    if (await fileExists(filePath)) {
+    if (isInsideDir(filePath, getStemsRootDir()) && (await fileExists(filePath))) {
       await rm(filePath)
       return { success: true }
     }
@@ -807,37 +683,35 @@ export function registerIpcHandlers(): void {
           }
         }, 600_000)
 
-        proc.stdout.on('data', (data: Buffer) => {
-          const lines = data.toString().trim().split('\n')
-          for (const line of lines) {
-            if (!line) continue
-            try {
-              const parsed = JSON.parse(line)
-              if (parsed.type === 'metadata') {
-                title = parsed.title || title
-              } else if (parsed.type === 'progress') {
-                for (const win of BrowserWindow.getAllWindows()) {
-                  if (!win.isDestroyed()) {
-                    win.webContents.send('url:download-progress', {
-                      jobId,
-                      percent: parsed.percent,
-                      title
-                    })
-                  }
+        // Line by line: a JSON message can arrive split across two stdout chunks.
+        createInterface({ input: proc.stdout }).on('line', (line) => {
+          if (!line.trim()) return
+          try {
+            const parsed = JSON.parse(line)
+            if (parsed.type === 'metadata') {
+              title = parsed.title || title
+            } else if (parsed.type === 'progress') {
+              for (const win of BrowserWindow.getAllWindows()) {
+                if (!win.isDestroyed()) {
+                  win.webContents.send('url:download-progress', {
+                    jobId,
+                    percent: parsed.percent,
+                    title
+                  })
                 }
-              } else if (parsed.type === 'complete' && !settled) {
-                settled = true
-                clearTimeout(timeout)
-                resolve({ path: parsed.path, title: parsed.title || title })
-              } else if (parsed.type === 'error' && !settled) {
-                settled = true
-                clearTimeout(timeout)
-                broadcastFailed(parsed.message)
-                reject(new Error(parsed.message))
               }
-            } catch {
-              // non-JSON output, ignore
+            } else if (parsed.type === 'complete' && !settled) {
+              settled = true
+              clearTimeout(timeout)
+              resolve({ path: parsed.path, title: parsed.title || title })
+            } else if (parsed.type === 'error' && !settled) {
+              settled = true
+              clearTimeout(timeout)
+              broadcastFailed(parsed.message)
+              reject(new Error(parsed.message))
             }
+          } catch {
+            // non-JSON output, ignore
           }
         })
 
@@ -849,11 +723,11 @@ export function registerIpcHandlers(): void {
           if (!settled) {
             settled = true
             clearTimeout(timeout)
-            if (code !== 0) {
-              const msg = `Download process failed (code ${code}): ${stderr.slice(0, 300)}`
-              broadcastFailed(msg)
-              reject(new Error(msg))
-            }
+            // Exiting without a complete/error message is a failure too (even
+            // with code 0) — otherwise the import would wait forever.
+            const msg = `Download process failed (code ${code}): ${stderr.slice(0, 300)}`
+            broadcastFailed(msg)
+            reject(new Error(msg))
           }
         })
 

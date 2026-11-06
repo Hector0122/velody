@@ -5,8 +5,9 @@ import {
   downbeatShiftAt,
   normalizeDownbeatShift,
   planCountIn,
-  gridEdgeInterval,
+  medianBeatGap,
   smoothBeatGrid,
+  metronomeClicks,
   TAP_REACTION_SEC
 } from '../hooks/downbeat'
 
@@ -157,15 +158,19 @@ describe('planCountIn', () => {
   })
 })
 
-describe('gridEdgeInterval', () => {
-  it('uses the median gap at each edge, ignoring one odd beat', () => {
+describe('medianBeatGap', () => {
+  it('uses the median gap of the whole grid, ignoring one odd beat', () => {
     const grid = [0, 0.5, 1.0, 1.7, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5]
-    expect(gridEdgeInterval(grid, 'start', 0.6)).toBe(0.5)
-    expect(gridEdgeInterval([0, 1, 2, 2.4, 2.8, 3.2], 'end', 0.6)).toBeCloseTo(0.4, 9)
+    expect(medianBeatGap(grid, 0.6)).toBe(0.5)
+  })
+
+  it('ignores a slower fill where the grid starts (drum entry)', () => {
+    const grid = [0, 0.75, 1.5, 2.25, 2.97, 3.69, 4.41, 5.13, 5.85, 6.57, 7.29, 8.01]
+    expect(medianBeatGap(grid, 0.6)).toBeCloseTo(0.72, 9)
   })
 
   it('falls back to the BPM interval when there is no grid to measure', () => {
-    expect(gridEdgeInterval([5], 'start', 0.6)).toBe(0.6)
+    expect(medianBeatGap([5], 0.6)).toBe(0.6)
   })
 })
 
@@ -198,5 +203,34 @@ describe('smoothBeatGrid', () => {
 
   it('leaves tiny grids alone', () => {
     expect(smoothBeatGrid([1, 1.5])).toEqual([1, 1.5])
+  })
+})
+
+describe('metronomeClicks', () => {
+  it('follows the grid, extrapolates before/after it and accents like the live metronome', () => {
+    const clicks = metronomeClicks({
+      beatTimes: [1.0, 1.5, 2.0, 2.5],
+      usingGrid: true,
+      bpm: 100, // ignored on the grid: spacing comes from the grid itself
+      firstBeatOffset: 0,
+      shift: 1,
+      duration: 3.2
+    })
+    expect(clicks.map((c) => c.time)).toEqual([0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0])
+    // Indices -2..4; shift 1 accents indices ≡ 1 (mod 4): -3, 1, 5 → only 1.5 s here.
+    expect(clicks.filter((c) => c.accent).map((c) => c.time)).toEqual([1.5])
+  })
+
+  it('uses constant tempo from the offset when not on the grid', () => {
+    const clicks = metronomeClicks({
+      beatTimes: [],
+      usingGrid: false,
+      bpm: 60,
+      firstBeatOffset: 0.25,
+      shift: 0,
+      duration: 4.5
+    })
+    expect(clicks.map((c) => c.time)).toEqual([1.25, 2.25, 3.25, 4.25])
+    expect(clicks.map((c) => c.accent)).toEqual([true, false, false, false])
   })
 })

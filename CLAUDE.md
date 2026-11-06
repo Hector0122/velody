@@ -95,7 +95,7 @@ Metadata (BPM, beat grid, markers, trim, count-in, live presets) is cached per s
 
 ### BPM detection (python-worker/)
 
-- `detect_bpm.py`: TempoCNN (TensorFlow) for a base tempo estimate, refined by `librosa.beat.beat_track()` (gives `firstBeatOffset` and the full `beatTimes` grid); `--bpm-hint` re-runs beat tracking at a user-corrected tempo (half/double-time fix). Falls back to TempoCNN-only if librosa is unavailable. There is no key detection.
+- `detect_bpm.py`: Beat This! (PyTorch, `beat-this` pip package; checkpoint downloaded once to the torch hub cache) on the sum of the song's stems gives the `beatTimes` grid and BPM (median gap), so tempo changes like a drumless intro are followed; extra beats closer than 0.65× the median gap are dropped. If it fails it falls back to TempoCNN (TensorFlow) for a base tempo estimate, refined by `librosa.beat.beat_track()` (gives `firstBeatOffset` and the full `beatTimes` grid); `--bpm-hint` re-runs beat tracking at a user-corrected tempo (half/double-time fix). Falls back to TempoCNN-only if librosa is unavailable. There is no key detection.
 
 ### Security-relevant details
 

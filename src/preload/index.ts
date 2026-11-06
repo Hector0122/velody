@@ -120,10 +120,9 @@ const api = {
     filePaths: string[],
     outputPath: string,
     options?: {
-      bpm?: number
+      clicks?: { time: number; accent: boolean }[]
       trimStart?: number
       trimEnd?: number
-      clickPreset?: 'woodblock'
     }
   ) => ipcRenderer.invoke('export:mix', filePaths, outputPath, options),
   exportSingle: (
@@ -131,8 +130,13 @@ const api = {
     outputPath: string,
     options?: { trimStart?: number; trimEnd?: number }
   ) => ipcRenderer.invoke('export:single', filePath, outputPath, options),
-  saveRecording: (songDir: string, data: number[], name: string, format: string, offset: number) =>
-    ipcRenderer.invoke('record:save', songDir, data, name, format, offset),
+  saveRecording: (
+    songDir: string,
+    data: Uint8Array,
+    name: string,
+    format: string,
+    offset: number
+  ) => ipcRenderer.invoke('record:save', songDir, data, name, format, offset),
   onSetupProgress: (callback: (progress: unknown) => void) => {
     ipcRenderer.on('setup:progress', (_event, progress) => callback(progress))
   },

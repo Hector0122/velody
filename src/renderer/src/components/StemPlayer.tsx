@@ -15,7 +15,7 @@ import useTrim from '../hooks/useTrim'
 import useSongCountIn from '../hooks/useSongCountIn'
 import useDownbeatShift from '../hooks/useDownbeatShift'
 import useSongSpeedPitch from '../hooks/useSongSpeedPitch'
-import { downbeatShiftAt, planCountIn, smoothBeatGrid } from '../hooks/downbeat'
+import { downbeatShiftAt, metronomeClicks, planCountIn, smoothBeatGrid } from '../hooks/downbeat'
 import useLivePresets from '../hooks/useLivePresets'
 import useCountIn, { COUNT_IN_LEAD_IN } from '../hooks/useCountIn'
 import { useExportState } from '../hooks/useExportState'
@@ -240,11 +240,21 @@ function StemPlayer({
   } = useExportState({
     allStems,
     songName,
-    bpm,
+    getClicks: () => {
+      const beatTimes = Array.isArray(beatTimesRef.current) ? beatTimesRef.current : []
+      return metronomeClicks({
+        beatTimes,
+        usingGrid: beatTimes.length > 0 && bpm === originalBpmRef.current,
+        bpm,
+        firstBeatOffset: firstBeatOffsetRef.current,
+        shift: downbeatShiftRef.current,
+        duration: durationRef.current
+      })
+    },
     stemMeta: STEM_META,
     trimStart,
     trimEnd,
-    clickPreset: 'woodblock'
+    onToast
   })
 
   const stemItems = useMemo(() => {

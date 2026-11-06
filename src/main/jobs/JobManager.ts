@@ -1,10 +1,11 @@
 import { spawn, ChildProcess } from 'child_process'
+import { createInterface } from 'readline'
 import { join } from 'path'
 import { rm } from 'fs/promises'
-import { BrowserWindow, app } from 'electron'
+import { BrowserWindow } from 'electron'
 import { randomUUID } from 'crypto'
 import type { SetupManager } from '../setup'
-import { getStemsRootDir } from '../paths'
+import { getPythonWorkerDir, getStemsRootDir } from '../paths'
 
 export interface SeparationJob {
   id: string
@@ -28,13 +29,6 @@ function songNameFromPath(path: string): string {
       .pop()
       ?.replace(/\.[^.]+$/, '') || 'untitled'
   )
-}
-
-function getPythonWorkerDir(): string {
-  if (app.isPackaged) {
-    return join(process.resourcesPath, 'python-worker')
-  }
-  return join(__dirname, '../../python-worker')
 }
 
 export class JobManager {
@@ -79,6 +73,8 @@ export class JobManager {
       job.process.kill('SIGTERM')
       job.status = 'cancelled'
       job.process = null
+      // runJob's own cleanup never runs for a cancelled job (its promise stays pending).
+      this.cleanupTempDir(job)
       this.running = false
       this.emit('separation:jobs-changed', this.getQueue())
       this.emit('separation:cancelled', { jobId })
@@ -184,37 +180,35 @@ export class JobManager {
 
       let lastEmittedBucket = -1
 
-      proc.stdout.on('data', (data: Buffer) => {
-        const lines = data.toString().trim().split('\n')
-        for (const line of lines) {
-          if (!line) continue
-          try {
-            const parsed = JSON.parse(line) as {
-              type: string
-              percent?: number
-              stems?: string[]
-              message?: string
-            }
-            if (parsed.type === 'progress' && typeof parsed.percent === 'number') {
-              job.progress = parsed.percent
-              this.emit('separation:progress', { jobId: job.id, percent: parsed.percent })
-              const bucket = Math.floor(parsed.percent / 10)
-              if (bucket !== lastEmittedBucket) {
-                lastEmittedBucket = bucket
-                this.emit('separation:jobs-changed', this.getQueue())
-              }
-            } else if (parsed.type === 'complete' && Array.isArray(parsed.stems)) {
-              job.stems = parsed.stems
-            } else if (parsed.type === 'error') {
-              if (!settled) {
-                settled = true
-                clearTimeout(timeout)
-                reject(new Error(parsed.message))
-              }
-            }
-          } catch {
-            // non-JSON output, ignore (Demucs logging)
+      // Line by line: a JSON message can arrive split across two stdout chunks.
+      createInterface({ input: proc.stdout }).on('line', (line) => {
+        if (!line.trim()) return
+        try {
+          const parsed = JSON.parse(line) as {
+            type: string
+            percent?: number
+            stems?: string[]
+            message?: string
           }
+          if (parsed.type === 'progress' && typeof parsed.percent === 'number') {
+            job.progress = parsed.percent
+            this.emit('separation:progress', { jobId: job.id, percent: parsed.percent })
+            const bucket = Math.floor(parsed.percent / 10)
+            if (bucket !== lastEmittedBucket) {
+              lastEmittedBucket = bucket
+              this.emit('separation:jobs-changed', this.getQueue())
+            }
+          } else if (parsed.type === 'complete' && Array.isArray(parsed.stems)) {
+            job.stems = parsed.stems
+          } else if (parsed.type === 'error') {
+            if (!settled) {
+              settled = true
+              clearTimeout(timeout)
+              reject(new Error(parsed.message))
+            }
+          }
+        } catch {
+          // non-JSON output, ignore (Demucs logging)
         }
       })
 

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""BPM detection via TempoCNN + beat alignment via librosa.
+"""Beat grid via the Beat This! neural tracker on the song's stem mix; falls
+back to TempoCNN + librosa (drums stem) when it's unavailable.
 
 Usage:
     python detect_bpm.py <audio_file> [--ffmpeg-path <path>]
@@ -14,6 +15,11 @@ import contextlib
 import sys
 import json
 import os
+
+import numpy as np
+
+# Separated stems only — user recordings live in the same folder.
+STEM_NAMES = ('drums', 'bass', 'other', 'guitar', 'piano', 'vocals')
 
 
 def _with_downbeat(result: dict, audio_file: str, y) -> dict:
@@ -36,6 +42,57 @@ def _with_downbeat(result: dict, audio_file: str, y) -> dict:
     except Exception:
         pass
     return result
+
+
+def _song_mix(audio_file: str, sr: int = 22050):
+    """The song's stems summed back into a mix: an intro without drums only has
+    a pulse in the other instruments (Zombie's guitar intro). Falls back to the
+    given file alone when it isn't in a song folder."""
+    import librosa
+    d = os.path.dirname(os.path.abspath(audio_file))
+    mix = None
+    for f in sorted(os.listdir(d)):
+        name, ext = os.path.splitext(f)
+        if name.lower() not in STEM_NAMES or ext.lower() not in ('.mp3', '.wav', '.flac'):
+            continue
+        y, _ = librosa.load(os.path.join(d, f), sr=sr, mono=True)
+        mix = y if mix is None else mix[:len(y)] + y[:len(mix)]
+    if mix is None:
+        mix, _ = librosa.load(audio_file, sr=sr, mono=True)
+    return mix
+
+
+def drop_doubled_beats(beats: list) -> list:
+    """Beat This now and then fires an extra beat between two real ones
+    (Zombie at 6.5 s: gaps 0.80, 0.42, 0.40, 0.82) — a double click. Drops any
+    beat closer than 0.65x the median gap to the previous kept beat."""
+    if len(beats) < 3:
+        return beats
+    min_gap = 0.65 * float(np.median(np.diff(beats)))
+    kept = [beats[0]]
+    for b in beats[1:]:
+        if b - kept[-1] >= min_gap:
+            kept.append(b)
+    return kept
+
+
+def _beat_this_grid(audio_file: str):
+    """Follows tempo changes the drums stem can't show (a slower intro before
+    the drums enter). Raises ImportError when beat_this isn't installed."""
+    from beat_this.inference import Audio2Beats
+    sr = 22050
+    mix = _song_mix(audio_file, sr)
+    # The checkpoint (77 MB) is downloaded once to the torch hub cache.
+    with contextlib.redirect_stdout(sys.stderr):
+        beats, _ = Audio2Beats(checkpoint_path='final0', device='cpu', dbn=False)(mix, sr)
+    beats = drop_doubled_beats([float(b) for b in beats])
+    if len(beats) < 2:
+        return None
+    return {
+        'bpm': round(60.0 / float(np.median(np.diff(beats))), 1),
+        'firstBeatOffset': round(beats[0], 4),
+        'beatTimes': [round(b, 4) for b in beats],
+    }
 
 
 def _no_grid(tempo: float) -> dict:
@@ -83,6 +140,14 @@ def detect_bpm(audio_file: str, ffmpeg_path: str = 'ffmpeg', bpm_hint: float = N
         if len(beat_frames) == 0:
             return _no_grid(bpm_hint)
         return _with_downbeat(_beat_track_result(tempo_librosa, beat_frames, sr), audio_file, y)
+
+    try:
+        result = _beat_this_grid(audio_file)
+        if result:
+            return _with_downbeat(result, audio_file, None)
+    except Exception as e:  # not installed, offline first run, decode error…
+        print(f'[detect_bpm] Beat This unavailable ({e}); using TempoCNN + librosa',
+              file=sys.stderr)
 
     from tempocnn.classifier import TempoClassifier
     from tempocnn.feature import read_features

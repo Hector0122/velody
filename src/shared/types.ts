@@ -129,10 +129,9 @@ export interface VelodyAPI {
     filePaths: string[],
     outputPath: string,
     options?: {
-      bpm?: number
+      clicks?: { time: number; accent: boolean }[]
       trimStart?: number
       trimEnd?: number
-      clickPreset?: 'woodblock'
     }
   ) => Promise<ExportResult>
   exportSingle: (
@@ -142,7 +141,7 @@ export interface VelodyAPI {
   ) => Promise<ExportResult>
   saveRecording: (
     songDir: string,
-    data: number[],
+    data: Uint8Array,
     name: string,
     format: string,
     offset: number

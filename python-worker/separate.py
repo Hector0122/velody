@@ -123,6 +123,11 @@ def _run_demucs(
     except Exception:
         empty = set()
 
+    # Re-importing a song with the same name: drop the old run's stems first,
+    # or one that's empty this time would linger from the previous separation.
+    for stem in stems:
+        (song_output / f"{stem}.mp3").unlink(missing_ok=True)
+
     stem_paths = []
     for src in sources:
         if str(src) in empty:

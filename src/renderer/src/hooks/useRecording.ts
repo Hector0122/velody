@@ -212,7 +212,7 @@ export function useRecording({
 
     const result = await window.api.saveRecording(
       songDir,
-      Array.from(new Uint8Array(arrayBuf)),
+      new Uint8Array(arrayBuf),
       name,
       recordingFormat,
       recordingOffsetRef.current
