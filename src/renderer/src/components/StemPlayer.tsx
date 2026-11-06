@@ -821,6 +821,20 @@ function StemPlayer({
                 </button>
               )}
             </div>
+            {chords.length > 0 && (
+              // Filled in live by updateTimeDisplays (no re-render per chord).
+              <div className="flex items-baseline gap-4 font-mono-brand" title="Detected chords">
+                <span
+                  data-live-chord
+                  className="min-w-[3ch] text-5xl font-bold leading-none text-white"
+                >
+                  –
+                </span>
+                <span className="text-2xl text-neutral-500">
+                  → <span data-next-chord>–</span>
+                </span>
+              </div>
+            )}
             {liveMode && (
               <LivePresetBar
                 presets={livePresets}
@@ -842,7 +856,6 @@ function StemPlayer({
             masterWaveDuration={masterWaveDuration}
             duration={duration}
             masterWaveContainerRef={masterWaveContainer}
-            hasChords={chords.length > 0}
             onSetLoopStart={handleSetLoopStart}
             onSetLoopEnd={handleSetLoopEnd}
             onToggleLoop={handleToggleLoop}

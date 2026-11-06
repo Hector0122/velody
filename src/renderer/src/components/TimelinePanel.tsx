@@ -17,8 +17,6 @@ interface TimelinePanelProps {
   masterWaveDuration: number
   duration: number
   masterWaveContainerRef: React.RefObject<HTMLDivElement | null>
-  /** Shows the live "chord now → next" readout (filled in by updateTimeDisplays). */
-  hasChords: boolean
   onSetLoopStart: (time: number | null) => void
   onSetLoopEnd: (time: number | null) => void
   onToggleLoop: () => void
@@ -39,7 +37,6 @@ function TimelinePanel({
   masterWaveDuration,
   duration,
   masterWaveContainerRef,
-  hasChords,
   onSetLoopStart,
   onSetLoopEnd,
   onToggleLoop,
@@ -60,19 +57,6 @@ function TimelinePanel({
           <span className="text-[10px] font-mono-brand text-neutral-500">
             <span data-live-time>0:00</span> / {formatTime(masterWaveDuration || duration)}
           </span>
-          {hasChords && (
-            <span
-              className="flex items-baseline gap-1.5 font-mono-brand"
-              title="Chord now → next (detected)"
-            >
-              <span data-live-chord className="text-base font-semibold text-white">
-                –
-              </span>
-              <span className="text-[10px] text-neutral-500">
-                → <span data-next-chord>–</span>
-              </span>
-            </span>
-          )}
         </div>
         <div className="flex items-center gap-2">
           {markers.length > 0 && (
