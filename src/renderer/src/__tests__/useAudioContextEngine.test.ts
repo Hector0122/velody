@@ -165,6 +165,22 @@ describe('useAudioContextEngine - decode + notify', () => {
     expect(result.current.getDecodedBuffer('drums')).toBeDefined()
   })
 
+  it("creates its AudioContext with latencyHint 'playback' (Bluetooth headphones stutter otherwise)", () => {
+    const ctor = vi.fn()
+    vi.stubGlobal(
+      'AudioContext',
+      class extends FakeAudioContext {
+        constructor(opts?: AudioContextOptions) {
+          super()
+          ctor(opts)
+        }
+      }
+    )
+    const { result } = renderHook(() => useAudioContextEngine(buildParams()))
+    result.current.ensureAudioCtx()
+    expect(ctor).toHaveBeenCalledWith({ latencyHint: 'playback' })
+  })
+
   it('still notifies for a stem whose decode fails, without a buffer', async () => {
     vi.stubGlobal(
       'fetch',

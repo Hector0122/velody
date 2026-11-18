@@ -281,7 +281,8 @@ export function useAudioContextEngine(params: UseAudioContextEngineParams): {
 
   const ensureCtx = useCallback((): AudioContext => {
     if (!audioCtxRef.current) {
-      audioCtxRef.current = new AudioContext()
+      // 'playback' = bigger output buffer; the default 'interactive' one underruns on Bluetooth headphones (audible stutter).
+      audioCtxRef.current = new AudioContext({ latencyHint: 'playback' })
       masterGainRef.current = audioCtxRef.current.createGain()
       masterPanNodeRef.current = audioCtxRef.current.createStereoPanner()
       masterPanNodeRef.current.pan.value = masterPanRef.current
